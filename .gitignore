@@ -2,7 +2,10 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+.claude
+data
+outputs
+.wandb
 # C extensions
 *.so
 

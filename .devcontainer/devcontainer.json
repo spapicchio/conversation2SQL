@@ -1,0 +1,52 @@
+{
+  "name": "VeRL Dev Environment",
+  "image": "verlai/verl:vllm016.dev", 
+  "runArgs": [
+    "--gpus=all",
+    "--shm-size=128g",
+    "--cap-add=SYS_ADMIN",
+    "--net=host",
+    "--runtime=nvidia"
+  ],
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true
+    },
+    // Installs the latest version of uv
+    "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "charliermarsh.ruff",
+        "tamasfe.even-better-toml",
+        "meta.pyrefly"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/opt/venv/bin/python3"
+      }
+    }
+  },
+
+  "mounts": [
+    "source=/home/papicchi/.cache/huggingface,target=/hf_cache,type=bind",
+    "source=/home/papicchi/data,target=/workspaces/${containerWorkspaceFolder}/data,type=bind"
+  ],
+  "postCreateCommand": {
+    // This ensures gpustat is installed globally/to the tool path on every build
+    "gpustat":    "uv pip install --system gpustat",
+    
+    // This installs the verl package in editable mode, so that changes to the code are reflected without needing to reinstall. It is installed at system level so that it is available in the PATH and can be used as a command line tool.
+    "verl_install_if_not_present": "if [ ! -d verl ]; then git clone https://github.com/volcengine/verl; fi",
+    "verl_install": "cd verl && uv pip install --system --no-deps -e .",
+    
+    // These are the flashinfer packages, which are needed to optimize inference.
+    //  They are installed at system level so that they are available in the PATH.
+    // Cubin provides pre-compiled CUDA binaries (cubins) 
+    // and (Just-In-Time Cache) jit-cache is used to cache the optimized kernels on disk.
+    // run `flashinfer show-config` to match the same 0.6.3 version for both.
+    "flashinfer": "uv pip install --system flashinfer-cubin==0.6.3 flashinfer-jit-cache==0.6.3  --extra-index-url https://flashinfer.ai/whl/cu129"
+  }
+}

@@ -1,0 +1,15 @@
+[project]
+name = "conversation2sql"
+version = "0.1.0"
+authors = [
+    { name = "Simone Papicchio", email = "simone.papicchio@polito.it" },
+]
+description = "TODO"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "transformers<5.0"
+]
+
+
+[tool.pyrefly]
