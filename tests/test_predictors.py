@@ -51,8 +51,8 @@ SAMPLE_TOOLS: list[dict[str, Any]] = [
 # ---------------------------------------------------------------------------
 
 
-class _DummyPredictor:
-    """Minimal predictor that satisfies the Protocol."""
+class _MockPredictor:
+    """Minimal predictor that satisfies the Protocol for testing."""
 
     async def generate(
         self,
@@ -68,7 +68,7 @@ class _DummyPredictor:
 
 def test_protocol_conformance() -> None:
     """A class with the right signature must be recognized as a ToolCallingPredictor."""
-    predictor = _DummyPredictor()
+    predictor = _MockPredictor()
     assert isinstance(predictor, ToolCallingPredictor)
 
 
@@ -208,38 +208,38 @@ async def test_vllm_predictor_text_fallback() -> None:
 
 def test_parse_tool_call_malformed_json() -> None:
     """Malformed JSON falls back to text."""
-    from src.predictors.vllm_predictor import _parse_tool_call
+    from src.predictors.parsing import parse_tool_call
 
-    result = _parse_tool_call("{not valid json}")
+    result = parse_tool_call("{not valid json}")
     assert result["type"] == "text"
 
 
 def test_parse_tool_call_no_braces() -> None:
     """Plain text without braces falls back to text."""
-    from src.predictors.vllm_predictor import _parse_tool_call
+    from src.predictors.parsing import parse_tool_call
 
-    result = _parse_tool_call("just plain text")
+    result = parse_tool_call("just plain text")
     assert result["type"] == "text"
     assert result["content"] == "just plain text"
 
 
 def test_parse_tool_call_json_without_tool_name() -> None:
     """JSON without a tool name falls back to text."""
-    from src.predictors.vllm_predictor import _parse_tool_call
+    from src.predictors.parsing import parse_tool_call
 
-    result = _parse_tool_call('{"arguments": {"x": 1}}')
+    result = parse_tool_call('{"arguments": {"x": 1}}')
     assert result["type"] == "text"
 
 
 def test_parse_tool_call_string_arguments() -> None:
     """String arguments are JSON-parsed when possible."""
-    from src.predictors.vllm_predictor import _parse_tool_call
+    from src.predictors.parsing import parse_tool_call
 
     text = json.dumps({
         "name": "my_tool",
         "arguments": json.dumps({"key": "val"}),
     })
-    result = _parse_tool_call(text)
+    result = parse_tool_call(text)
     assert result["type"] == "tool_call"
     assert result["arguments"] == {"key": "val"}
 
@@ -259,7 +259,7 @@ async def test_inspect_solver_and_scorer() -> None:
     expected = {"tool_name": "get_weather", "arguments": {"location": "Tokyo"}}
 
     # Build a mock predictor
-    mock_predictor = _DummyPredictor()
+    mock_predictor = _MockPredictor()
 
     # Build a solver
     from src.inspect_task.solver import predictor_solver
