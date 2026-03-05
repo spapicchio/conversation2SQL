@@ -1,0 +1,10 @@
+{% if schema is defined and schema %}
+### Database Schema
+{{ schema }}
+
+{% endif %}
+{% include "partials/few_shot.jinja" %}
+
+### Task
+{{ prompt }}
+
