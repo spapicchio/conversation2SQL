@@ -15,6 +15,10 @@ dependencies = [
     "loguru>=0.7.3",
     "datasets>=4.6.1",
     "hf-transfer>=0.1.9",
+    "langchain>=1.2.10",
+    "langgraph>=1.0.10",
+    "pyyaml>=6.0",
+    "pyrefly>=0.55.0",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +31,7 @@ test = [
 asyncio_mode = "auto"
 
 [tool.pyrefly]
+search_paths = ["."]
 
 [build-system]
 requires = ["hatchling"]

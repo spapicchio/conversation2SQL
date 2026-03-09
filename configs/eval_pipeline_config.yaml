@@ -1,0 +1,29 @@
+# eval_pipeline_config.yaml
+# Configuration for the conversation2SQL evaluation pipeline.
+# Pass this file to EvalPipelineFactory.from_yaml("eval_pipeline_config.yaml").
+
+# ── Reader ────────────────────────────────────────────────────────────────────
+# Built-in types:
+#   "PlaceholderReader" — returns a canned AIMessage (no API key needed)
+reader:
+  reader_name: "PlaceholderReader"
+  dataset_name: "spider"
+  dataset_revision: "master"
+
+# ── Predictor ─────────────────────────────────────────────────────────────────
+# Calls an LLM and returns the full message list including tool calls.
+# Built-in types:
+#   "PlaceholderPredictor" — returns a canned AIMessage (no API key needed)
+predictor:
+  predictor_name: "PlaceholderPredictor"
+  model_name: 'placeholder-model'
+  model_revision: 'master'
+  run_pred_in_parallel: false
+
+# ── Scorer ────────────────────────────────────────────────────────────────────
+# Evaluates predictions against gold-standard answers.
+# Built-in types:
+#   "PlaceholderScorer" — exact string match
+scorer:
+  scorer_name: "PlaceholderScorer"
+  run_score_in_parallel: false

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
+from jinja2 import meta as jinja2_meta
 from pydantic import BaseModel
 
 from conversation2sql.logger import get_logger
@@ -48,9 +49,7 @@ class PromptFactory:
     def __init__(self, prompt_dir: str | Path | None = None) -> None:
         self._prompt_dir = Path(prompt_dir) if prompt_dir else _DEFAULT_PROMPT_DIR
         if not self._prompt_dir.is_dir():
-            raise FileNotFoundError(
-                f"Prompt directory not found: {self._prompt_dir}"
-            )
+            raise FileNotFoundError(f"Prompt directory not found: {self._prompt_dir}")
         self._env = Environment(
             loader=FileSystemLoader(str(self._prompt_dir)),
             undefined=StrictUndefined,  # fail fast on missing vars
@@ -65,7 +64,7 @@ class PromptFactory:
     # Core API
     # ------------------------------------------------------------------
 
-    def render(self, template_name: str, **kwargs: Any) -> str:
+    def render_template(self, template_name: str, **kwargs: Any) -> str:
         """Render a template by relative path (e.g. ``"eval/user.jinja"``)."""
         try:
             template = self._env.get_template(template_name)
@@ -79,11 +78,11 @@ class PromptFactory:
 
     def get_system_prompt(self, task: str, **kwargs: Any) -> str:
         """Render ``<task>/system.jinja``."""
-        return self.render(f"{task}/system.jinja", **kwargs)
+        return self.render_template(f"{task}/system.jinja", **kwargs)
 
     def get_user_prompt(self, task: str, **kwargs: Any) -> str:
         """Render ``<task>/user.jinja``."""
-        return self.render(f"{task}/user.jinja", **kwargs)
+        return self.render_template(f"{task}/user.jinja", **kwargs)
 
     # ------------------------------------------------------------------
     # Optional: validated rendering via Pydantic
@@ -108,15 +107,46 @@ class PromptFactory:
             raise TypeError(
                 f"params must be a pydantic BaseModel, got {type(params).__name__}"
             )
-        return self.render(template_name, **params.model_dump())
+        return self.render_template(template_name, **params.model_dump())
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
+    def get_template_variables(self, template_name: str) -> set[str]:
+        """Return all undeclared variables required to render a template.
+
+        Recursively follows ``{% extends %}`` and ``{% include %}`` directives
+        so variables from parent/partial templates are included.
+
+        Parameters
+        ----------
+        template_name : str
+            Relative path to the Jinja template (e.g. ``"eval/user.jinja"``).
+        """
+        visited: set[str] = set()
+        variables: set[str] = set()
+
+        def _collect(name: str) -> None:
+            if name in visited:
+                return
+            visited.add(name)
+            try:
+                source = self._env.loader.get_source(self._env, name)[0]  # pyrefly: ignore
+            except TemplateNotFound:
+                return
+            ast = self._env.parse(source)
+            variables.update(jinja2_meta.find_undeclared_variables(ast))
+            for ref in jinja2_meta.find_referenced_templates(ast):
+                if ref is not None:
+                    _collect(ref)
+
+        _collect(template_name)
+        return variables
+
     def list_templates(self) -> list[str]:
         """Return a sorted list of all available template paths."""
-        return sorted(self._env.loader.list_templates())
+        return sorted(self._env.loader.list_templates())  # pyrefly: ignore
 
     @property
     def prompt_dir(self) -> Path:

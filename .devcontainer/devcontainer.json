@@ -23,10 +23,10 @@
         "charliermarsh.ruff",
         "tamasfe.even-better-toml",
         "meta.pyrefly"
-      ],
-      "settings": {
-        "python.defaultInterpreterPath": "/opt/venv/bin/python3"
-      }
+      ]
+      // "settings": {
+      //   "python.defaultInterpreterPath": "/opt/venv/bin/python3"
+      // }
     }
   },
 
