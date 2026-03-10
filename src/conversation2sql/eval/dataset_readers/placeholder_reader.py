@@ -1,9 +1,9 @@
-from conversation2sql.eval import Sample
+from conversation2sql.eval import Sample, BaseReader
 from conversation2sql.eval.registry import reader_registry
 
 
 @reader_registry.register
-class PlaceholderReader:
+class PlaceholderReader(BaseReader):
     """Returns two hard-coded samples — no file I/O required."""
 
     def read(self) -> list[Sample]:
@@ -17,12 +17,12 @@ class PlaceholderReader:
         return [
             Sample(
                 sample_id="sample-1",
-                conversation=messages,
+                predictor_input=messages,
                 target="SELECT * FROM employees;",
             ),
             Sample(
                 sample_id="sample-2",
-                conversation=messages,
+                predictor_input=messages,
                 target="SELECT COUNT(*) FROM orders;",
             ),
         ]

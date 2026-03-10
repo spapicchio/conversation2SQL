@@ -1,7 +1,7 @@
 from conversation2sql.cli_parser import PydanticParser
 from conversation2sql.config_input import ConfigReader, ConfigPredictor, ConfigScorer
-from conversation2sql.eval.workflow import EvalPipelineInput
 from conversation2sql.eval import workflow_evaluation_pipeline
+from conversation2sql.eval.workflow import EvalPipelineInput
 
 
 def main_launch_eval():
@@ -12,10 +12,7 @@ def main_launch_eval():
         config_predictor=config_pred,
         config_scorer=config_scorer
     )
-    data_output: EvalPipelineInput = workflow_evaluation_pipeline.invoke(  # pyrefly: ignore
-        input=data_input,
-        config={"configurable": {"thread_id": "eval-run"}},
-    )
+    data_output: EvalPipelineInput = workflow_evaluation_pipeline(data_input)
     print(data_output.dataset[0])
 
 

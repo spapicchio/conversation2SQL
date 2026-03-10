@@ -40,8 +40,6 @@ successful checkpoint, so completed stages are not repeated.
 
 from __future__ import annotations
 
-from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.func import entrypoint, task
 from pydantic import BaseModel, Field
 
 # Trigger registration of all built-in components.
@@ -77,23 +75,12 @@ class EvalPipelineInput(BaseModel):
     dataset_with_score: list[SampleWithPredScore] = Field(default_factory=list)
 
 
-@task
-def _run_pred(data_input: EvalPipelineInput, predictor: BasePredictor) -> list[SampleWithPred]:
-    return predictor.predict(data_input.dataset)
-
-
-@task
-def _run_score(data_input: EvalPipelineInput, scorer: BaseScorer) -> list[SampleWithPredScore]:
-    return scorer.score(data_input.dataset_with_pred)
-
-
-@entrypoint(checkpointer=InMemorySaver())
 def workflow_evaluation_pipeline(
         data_input: EvalPipelineInput,
-        # The input (e.g., passed via `invoke`) must be JSON serializable to be checkpointed.
 ) -> EvalPipelineInput:
     # Step 1: instantiate Reader, Predictor, and Scorer.
-    reader: BaseReader = reader_registry.build(data_input.config_reader.reader_name)
+    reader: BaseReader = reader_registry.build(data_input.config_reader.reader_name,
+                                               config_reader=data_input.config_reader)
     predictor: BasePredictor = predictor_registry.build(data_input.config_predictor.predictor_name)
     scorer: BaseScorer = scorer_registry.build(data_input.config_scorer.scorer_name)
 
@@ -101,9 +88,9 @@ def workflow_evaluation_pipeline(
     data_input.dataset = reader.read()
 
     # step 3: run the prediction
-    data_input.dataset_with_pred = _run_pred(data_input, predictor).result()
+    data_input.dataset_with_pred = predictor.predict(data_input.dataset)
 
     # Step 4: run score
-    data_input.dataset_with_score = _run_score(data_input, scorer).result()
+    data_input.dataset_with_score = scorer.score(data_input.dataset_with_pred)
 
     return data_input

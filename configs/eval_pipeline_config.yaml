@@ -5,10 +5,20 @@
 # ── Reader ────────────────────────────────────────────────────────────────────
 # Built-in types:
 #   "PlaceholderReader" — returns a canned AIMessage (no API key needed)
+#   "BirdInteractReader" - reads from the BirdInteract dataset (requires `gt_path_jsonl` in `dataset_kwargs`)
 reader:
-  reader_name: "PlaceholderReader"
-  dataset_name: "spider"
-  dataset_revision: "master"
+  reader_name: "BirdInteractReader"
+  dataset_name: 'birdsql/bird-interact-lite'
+  database_engine: 'sqlite'
+  dataset_kwargs:
+    gt_path_jsonl: "data/bird_interact/bird_interact_lite_gt_kg_testcases_1008.jsonl"
+
+  # Prompt related fields
+  prompt_dir: "prompts"
+  system_prompt: null
+  user_prompt: 'bird_interact_a_agent/user.jinja'
+  is_chat_template: false
+
 
 # ── Predictor ─────────────────────────────────────────────────────────────────
 # Calls an LLM and returns the full message list including tool calls.

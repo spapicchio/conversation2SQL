@@ -9,10 +9,12 @@ Implement these Protocols to swap readers, predictors, and scorers:
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable, Literal
+from abc import ABC
+from abc import abstractmethod
+from typing import Any, Literal
 from typing import TypedDict
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # ---------------------------------------------------------------------------
@@ -26,9 +28,13 @@ class BaseMessage(TypedDict):
 
 class Sample(BaseModel):
     """A single evaluation example from the dataset."""
+    model_config = ConfigDict(extra='ignore')  # extra data is ignored but it is stored
+
     sample_id: str
-    conversation: list[BaseMessage]  # conversation history fed to the LLM
-    target: str  # gold-standard answer (e.g. a SQL query)
+    # The input may be a chat message list or a single string (e.g. a question)
+    # For chat template only Chat models are used, instead for string template only next token prediction models are used.
+    predictor_input: list[BaseMessage] | str
+    target: str  # gold-standard answer (e .g. a SQL query)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -48,17 +54,20 @@ class SampleWithPredScore(SampleWithPred):
 # Protocols — implement these to plug in custom components
 # ---------------------------------------------------------------------------
 
-@runtime_checkable
-class BaseReader(Protocol):
+class BaseReader(ABC):
     """Reads evaluation samples from any source (file, HuggingFace, DB, …)."""
 
+    def __init__(self, *args, **kwargs):
+        """Initialize the reader with any necessary parameters (e.g. file path)."""
+        pass
+
+    @abstractmethod
     def read(self) -> list[Sample]:
         """Return the full list of samples for this evaluation run."""
         ...
 
 
-@runtime_checkable
-class BasePredictor(Protocol):
+class BasePredictor(ABC):
     """Interfaces with an LLM to produce a response for a message list.
 
     Implementations must handle the standard LangChain tool-calling cycle:
@@ -68,15 +77,24 @@ class BasePredictor(Protocol):
     contains the answer and whose ``.tool_calls`` list is empty.
     """
 
+    def __init__(self, *args, **kwargs):
+        """Initialize the predictor with any necessary parameters (e.g. model name)."""
+        pass
+
+    @abstractmethod
     def predict(self, samples: list[Sample]) -> list[SampleWithPred]:
         """Call the LLM and return the complete updated message list."""
         ...
 
 
-@runtime_checkable
-class BaseScorer(Protocol):
+class BaseScorer(ABC):
     """Evaluates a Prediction against its corresponding EvalSample."""
 
+    def __init__(self, *args, **kwargs):
+        """Initialize the scorer with any necessary parameters (e.g. evaluation criteria)."""
+        pass
+
+    @abstractmethod
     def score(self, predictions: list[SampleWithPred]) -> list[SampleWithPredScore]:
         """Return a ScoreResult indicating correctness."""
         ...

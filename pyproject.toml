@@ -16,9 +16,9 @@ dependencies = [
     "datasets>=4.6.1",
     "hf-transfer>=0.1.9",
     "langchain>=1.2.10",
-    "langgraph>=1.0.10",
     "pyyaml>=6.0",
     "pyrefly>=0.55.0",
+    "langchain-openai>=1.1.11",
 ]
 
 [project.optional-dependencies]
