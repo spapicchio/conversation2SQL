@@ -1,7 +1,11 @@
+from dotenv import load_dotenv
+
 from conversation2sql.cli_parser import PydanticParser
 from conversation2sql.config_input import ConfigReader, ConfigPredictor, ConfigScorer
 from conversation2sql.eval import workflow_evaluation_pipeline
 from conversation2sql.eval.workflow import EvalPipelineInput
+
+load_dotenv('.env')
 
 
 def main_launch_eval():
@@ -13,8 +17,8 @@ def main_launch_eval():
         config_scorer=config_scorer
     )
     data_output: EvalPipelineInput = workflow_evaluation_pipeline(data_input)
-    print(data_output.dataset[0])
-
+    print(data_output.dataset_with_pred[0])
 
 if __name__ == "__main__":
     main_launch_eval()
+

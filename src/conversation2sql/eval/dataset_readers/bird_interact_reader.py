@@ -68,14 +68,14 @@ class BirdInteractReader(BaseReader):
         features["test_cases"] = Sequence(Sequence(Value("string")))
         dataset = dataset.cast(features)
 
-        dataset = dataset.map(self._process_line, num_proc=16, load_from_cache_file=False)
+        dataset = dataset.map(self._process_line, num_proc=16, load_from_cache_file=True)
 
         if isinstance(dataset, datasets.DatasetDict):
             dataset = dataset['dev']
         return [
             Sample(
                 sample_id=sample['instance_id'],
-                predictor_input=sample['messages'],
+                messages=sample['messages_'],
                 target=sample['sol_sql'],
                 metadata={
                     'selected_database': sample['selected_database'],
@@ -96,7 +96,7 @@ class BirdInteractReader(BaseReader):
         line['sol_sql'] = self.instance2sol[line['instance_id']]['sol_sql']
         line['external_knowledge'] = self.instance2sol[line['instance_id']].get('external_knowledge', [])
         line['test_cases'] = self.instance2sol[line['instance_id']].get('test_cases', [])
-        line['messages'] = self._build_predictor_input(line)
+        line['messages_'] = self._build_predictor_input(line)
         return line
 
     def _build_predictor_input(self, line: dict) -> list[BaseMessage] | str:
@@ -104,8 +104,7 @@ class BirdInteractReader(BaseReader):
         template_params = {
             'database_engine': self.config_reader.database_engine,
             'user_query': line['amb_user_query'],
-            'total_budget': 10,  # TODO understand how to setup in config_input.py
-            'interaction_history': ''
+            'total_budget': 10,  # TODO to setup in config_input.py
         }
 
         if not self.set_needed_params.issubset(set(template_params.keys())):

@@ -74,6 +74,8 @@ class EvalPipelineInput(BaseModel):
     dataset_with_pred: list[SampleWithPred] = Field(default_factory=list)
     dataset_with_score: list[SampleWithPredScore] = Field(default_factory=list)
 
+    debug: bool = True
+
 
 def workflow_evaluation_pipeline(
         data_input: EvalPipelineInput,
@@ -81,11 +83,16 @@ def workflow_evaluation_pipeline(
     # Step 1: instantiate Reader, Predictor, and Scorer.
     reader: BaseReader = reader_registry.build(data_input.config_reader.reader_name,
                                                config_reader=data_input.config_reader)
-    predictor: BasePredictor = predictor_registry.build(data_input.config_predictor.predictor_name)
-    scorer: BaseScorer = scorer_registry.build(data_input.config_scorer.scorer_name)
+
+    predictor: BasePredictor = predictor_registry.build(data_input.config_predictor.predictor_name,
+                                                        config_predictor=data_input.config_predictor)
+    scorer: BaseScorer = scorer_registry.build(data_input.config_scorer.scorer_name,
+                                               config_scorer=data_input.config_scorer)
 
     # step 2: read the dataset using the Reader.
     data_input.dataset = reader.read()
+    if data_input.debug:
+        data_input.dataset = data_input.dataset[:5]
 
     # step 3: run the prediction
     data_input.dataset_with_pred = predictor.predict(data_input.dataset)

@@ -33,14 +33,13 @@ class Sample(BaseModel):
     sample_id: str
     # The input may be a chat message list or a single string (e.g. a question)
     # For chat template only Chat models are used, instead for string template only next token prediction models are used.
-    predictor_input: list[BaseMessage] | str
+    messages: list[BaseMessage]
     target: str  # gold-standard answer (e .g. a SQL query)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SampleWithPred(Sample):
     """The LLM's response for a single EvalSample."""
-    prediction: str  # extracted final text answer
     metadata_pred: dict[str, Any] = Field(default_factory=dict)
 
 

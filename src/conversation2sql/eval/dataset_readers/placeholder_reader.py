@@ -17,12 +17,12 @@ class PlaceholderReader(BaseReader):
         return [
             Sample(
                 sample_id="sample-1",
-                predictor_input=messages,
+                messages=messages,
                 target="SELECT * FROM employees;",
             ),
             Sample(
                 sample_id="sample-2",
-                predictor_input=messages,
+                messages=messages,
                 target="SELECT COUNT(*) FROM orders;",
             ),
         ]

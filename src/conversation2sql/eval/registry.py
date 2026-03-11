@@ -37,25 +37,38 @@ class Registry:
     # Decorator
     # ------------------------------------------------------------------
 
-    def register(self, cls: type[T]) -> type[T]:
-        """Class decorator — validate protocol compliance then register.
+    def register(self, cls: type[T] | None = None, name: str | None = None):
+        """Class/function decorator — validate protocol compliance then register.
+
+        Supports two calling styles:
+          - ``@registry.register``           — uses ``cls.__name__`` as key
+          - ``@registry.register(name='x')`` — uses the given name as key
 
         Raises
         ------
         TypeError
             If ``cls`` is missing any of the required protocol methods.
         """
-        missing = [
-            m for m in self._required_methods
-            if not callable(getattr(cls, m, None))
-        ]
-        if missing:
-            raise TypeError(
-                f"Cannot register '{cls.__name__}' in the '{self._name}' registry: "
-                f"missing required method(s): {missing}"
-            )
-        self._registry[cls.__name__] = cls
-        return cls
+        def _do_register(obj, key):
+            missing = [
+                m for m in self._required_methods
+                if not callable(getattr(obj, m, None))
+            ]
+            if missing:
+                raise TypeError(
+                    f"Cannot register '{getattr(obj, '__name__', obj)}' in the "
+                    f"'{self._name}' registry: missing required method(s): {missing}"
+                )
+            self._registry[key or getattr(obj, '__name__', str(obj))] = obj
+            return obj
+
+        if cls is not None:
+            # Called as @registry.register (no parentheses)
+            return _do_register(cls, name)
+        # Called as @registry.register(name='x') — return a decorator
+        def decorator(obj):
+            return _do_register(obj, name)
+        return decorator
 
     # ------------------------------------------------------------------
     # Lookup / instantiation
@@ -94,3 +107,4 @@ class Registry:
 reader_registry = Registry("readers", required_methods=["read"])
 predictor_registry = Registry("predictors", required_methods=["predict"])
 scorer_registry = Registry("scorers", required_methods=["score"])
+tool_registry = Registry("tools", required_methods=[])

@@ -15,20 +15,28 @@ reader:
 
   # Prompt related fields
   prompt_dir: "prompts"
-  system_prompt: null
+  system_prompt: 'bird_interact_a_agent/system.jinja'
   user_prompt: 'bird_interact_a_agent/user.jinja'
-  is_chat_template: false
+  is_chat_template: true
 
 
 # ── Predictor ─────────────────────────────────────────────────────────────────
 # Calls an LLM and returns the full message list including tool calls.
 # Built-in types:
 #   "PlaceholderPredictor" — returns a canned AIMessage (no API key needed)
+#   "LangChainPredictor" — uses LangChain to call an LLM (requires `model_name` and `model_provider`)
 predictor:
-  predictor_name: "PlaceholderPredictor"
-  model_name: 'placeholder-model'
-  model_revision: 'master'
-  run_pred_in_parallel: false
+  predictor_name: "LangChainPredictor"
+  model_name: 'o4-mini'
+  model_provider: 'openai'
+  tool_names:
+    - "sql_query_tool"
+    - "db_query_tool"
+  temperature: 1.0
+  top_k: -1
+  top_p: 1.0
+  max_new_tokens: 2048
+
 
 # ── Scorer ────────────────────────────────────────────────────────────────────
 # Evaluates predictions against gold-standard answers.

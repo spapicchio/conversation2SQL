@@ -24,10 +24,14 @@ class ConfigReader(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ConfigPredictor(BaseModel):
-    predictor_name: str
-    model_name: str
-    model_revision: str | None = None
-    run_pred_in_parallel: bool = False
+    predictor_name: str  # The class name of the predictor to be used, e.g., 'LLMPredictor', 'EmbeddingPredictor', etc.
+    model_name: str  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
+    model_provider: str  # The model provider, e.g., 'openai', 'huggingface', etc.
+    tool_names: list[str] = Field(default_factory=list)  # List of tool names to be used by the predictor, e.g., ['calculator', 'search'], etc.
+    temperature: float
+    top_k: int
+    top_p: float
+    max_new_tokens: int
 
 
 # ---------------------------------------------------------------------------
