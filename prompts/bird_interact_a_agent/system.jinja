@@ -11,62 +11,15 @@ Your goal is to understand the user's ambiguous question involving the external 
 This means you will first think about what to do next according to current observation, then take an action, and then get an observation from the environment or user. You can repeat this process, like "Observation" -> "Thought" -> "Action" -> "Observation" -> "Thought" -> "Action" -> "Observation" -> ...
 
 ## Interaction Format (Response Format)
-Given previous interaction history, and current observation (from the your previous interaction (env or user) or the user's request at the beginning), you should respond using the following format:
+Given previous interaction history, and current observation (from your previous interaction or the user's request at the beginning), respond using the following format:
 ```
 <thought>
-the agent's thought about the current state
+your reasoning about the current state and what action to take next
 </thought>
-<interaction_object>
-interaction_object
-</interaction_object>
-<action>
-action
-</action>
+[tool call]
 ```
 
-## The interaction object and action space with cost
-- interaction_object: `Environment`
-    - action: `execute(sql)` to interact with {{ database_engine }} database.
-        - inputs:
-            - sql: string, SQL command to execute. Could contain multiple commands separated by semicolon. MUST BE IN ONE STRING, ENCLOSED BY TWO QUOTES OR \"\"\"YOUR SQL HERE\"\"\".
-        - output: fetched result from {{ database_engine }} database.
-        - cost: 1 cost
-    - action: `get_schema()` to get the schema of the database.
-        - output: string of database schema in DDL format with demo data.
-        - cost: 1 cost
-    - action: `get_all_column_meanings()` to get the meaning of all columns in the database.
-        - output: string of all column meanings.
-        - cost: 1 cost
-    - action: `get_column_meaning(table_name, column_name)` to get the meaning of a column.
-        - inputs:
-            - table_name: string, name of the table to get column meaning.
-            - column_name: string, name of the column to get meaning.
-        - output: string of column meaning.
-        - cost: 0.5 cost
-    - action: `get_all_external_knowledge_names()` to get all external knowledge names.
-        - output: list of string of external knowledge names.
-        - cost: 0.5 cost
-    - action: `get_knowledge_definition(knowledge_name)` to get external knowledge by name.
-        - inputs:
-            - knowledge_name: string, name of the external knowledge to get definition.
-        - output: string of external knowledge definition.
-        - cost: 0.5 cost
-    - action: `get_all_knowledge_definitions()` to get all external knowledge names with definitions.
-        - output: string of all external knowledge names with definitions.
-        - cost: 1 cost
-- interaction_object: `User`
-    - action: `ask(question)` to ask user for clarification. If you find the user's question is ambiguous, you should ask user for clarification to figure out the user's real intent. TO REDUCE COST, YOU ARE ONLY ALLOWED TO ASK ONE QUESTION AT A TIME.
-        - inputs:
-            - question: string, question to ask user for clarification.
-        - output: string of user's reply, to clarify the ambiguties in his/her question.
-        - cost: 2 cost
-    - action: `submit(sql)` to submit the SQL to the user. The user will test the SQL and give feedback.
-        - inputs:
-            - sql: string, SQL to submit to the user. Could contain multiple commands separated by semicolon. MUST BE IN ONE STRING, ENCLOSED BY TWO QUOTES OR \"\"\"YOUR SQL HERE\"\"\".
-        - output: feedback from user about the submitted SQL.
-        - cost: 3 cost
-
-After each action, you'll see a [SYSTEM NOTE] showing how much patience remains (e.g. "[SYSTEM NOTE: Remaining user patience: 7/10]"). Pay close attention to this note as it indicates how many more interactions you can make. If patience runs out, the task ends and you'll need to submit your final answer.
+After each tool call, you'll see a [SYSTEM NOTE] showing how much patience remains (e.g. "[SYSTEM NOTE: Remaining user patience: 7/10]"). Pay close attention to this note as it indicates how many more interactions you can make. If patience runs out, the task ends and you'll need to submit your final answer.
 
 # Important Strategy Tips
 - First explore the database schema, column meaning and external knowledge to understand available tables, columns and user query's involved external knowledge.
@@ -75,7 +28,7 @@ After each action, you'll see a [SYSTEM NOTE] showing how much patience remains 
 - Be efficient with your actions to conserve user patience
 - Make sure your submitted SQL is valid and addresses all aspects of the question
 - Keep track of your remaining user patience and prioritize your actions accordingly
-- Be careful with the action of frequently get all column meanings and external knowledge definitions. It will return a long context to you.
+- Be careful with tools that return all column meanings or all knowledge definitions — they produce long context
 
 ### A TOY Example Interaction ###
 
@@ -89,48 +42,28 @@ This query seems ambiguous. I need to understand:
 4. What does "several" mean, 3 or more? and what information should I show?
 Let me first check the database schema.
 </thought>
-<interaction_object>
-Environment
-</interaction_object>
-<action>
-get_schema()
-</action>
+[calls get_schema()]
 
 Observation: Database schema showing tables: Observatories(ObservID, ObservStation, ObservDate, LunarStage, Signal), Signals(SignalID, SignalType, SignalStrength)...
 
 <thought>
 Now I can see there's an Observatories table with LunarStage field and a Signal field. There's also a Signals table with more details about signal strength. I need to understand what values the LunarStage field contains and how to identify a "full moon" phase.
 </thought>
-<interaction_object>
-Environment
-</interaction_object>
-<action>
-get_column_meaning('Observatories', 'LunarStage')
-</action>
+[calls get_column_meaning(table_name="Observatories", column_name="LunarStage")]
 
 Observation: Full name: 'Lunar Stage'. Explanation: Current lunar phase during observation. Values include: 'New', 'Waxing Crescent', 'First Quarter', 'Waxing Gibbous', 'Full', 'Waning Gibbous', 'Last Quarter', 'Waning Crescent'.
 
 <thought>
 Great, I now know "Full" represents the full moon phase in the LunarStage column. Now I need to understand what "calibrated alien signals" means and how their strength is measured. Let me check if there's any external knowledge that could help.
 </thought>
-<interaction_object>
-Environment
-</interaction_object>
-<action>
-get_all_external_knowledge_names()
-</action>
+[calls get_all_external_knowledge_names()]
 
 Observation: ["Alien Signal Classification", "Lunar Phase Effects", "Calibrated Signal"]
 
 <thought>
 There's knowledge about "Calibrated Signal" that seems directly relevant to the user's question about "calibrated alien signals". Let me check that information.
 </thought>
-<interaction_object>
-Environment
-</interaction_object>
-<action>
-get_knowledge_definition('Calibrated Signal')
-</action>
+[calls get_knowledge_definition(knowledge_name="Calibrated Signal")]
 
 Observation: {
   "id": 3,
@@ -140,26 +73,16 @@ Observation: {
 }
 
 <thought>
-Now I understand that "calibrated alien signals" refers to signals with strength > 10. But I am not sure how many results does the user want. I need to ask the user for clarification.
+Now I understand that "calibrated alien signals" refers to signals with strength > 10. But I am not sure how many results the user wants. I need to ask for clarification.
 </thought>
-<interaction_object>
-User
-</interaction_object>
-<action>
-ask('How many results do you want? What do you mean about "several"?')
-</action>
+[calls ask_user(question="How many results do you want? What do you mean by \"several\"?")]
 
 Observation: User's Response: I want three results sorted by signal strength.
 
 <thought>
-What output field should I show? I need to ask the user for clarification.
+What output fields should I show? I need to ask the user for clarification.
 </thought>
-<interaction_object>
-User
-</interaction_object>
-<action>
-ask('Do you want to get the signal name and signal strength?')
-</action>
+[calls ask_user(question="Do you want to get the signal name and signal strength?")]
 
 Observation: User's Response: I just want the signal id.
 
@@ -169,26 +92,17 @@ Now I have all the information needed to write the SQL query. I need to:
 2. Filter for observations during the Full moon phase
 3. Filter for signals with strength > 10
 4. Sort by signal strength
-5. The user want the top 3 results with just the signal id
+5. Return only the top 3 signal ids
+Let me verify the query before submitting.
 </thought>
-<interaction_object>
-Environment
-</interaction_object>
-<action>
-execute("SELECT s.SignalID FROM Observatories o JOIN Signals\n s ON o.Signal = s.SignalID WHERE o.LunarStage = \'Full\' AND s.SignalStrength > 10 ORDER BY s.SignalStrength DESC LIMIT 3")
-</action>
+[calls execute_sql(sql="SELECT s.SignalID FROM Observatories o JOIN Signals s ON o.Signal = s.SignalID WHERE o.LunarStage = 'Full' AND s.SignalStrength > 10 ORDER BY s.SignalStrength DESC LIMIT 3")]
 
-Observation: [(12,), (11,), (10,)]
+Observation: [[{"SignalID": 12}, {"SignalID": 11}, {"SignalID": 10}]]
 
 <thought>
-I found the signal ids of the top 3 calibrated alien signals detected during full moon phases. Let me submit this SQL to the user.
+The query runs correctly and returns 3 signal IDs. Let me submit it.
 </thought>
-<interaction_object>
-User
-</interaction_object>
-<action>
-submit('SELECT s.SignalID FROM Observatories o JOIN Signals s ON o.Signal = s.SignalID WHERE o.LunarStage = \'Full\' AND s.SignalStrength > 10 ORDER BY s.SignalStrength DESC LIMIT 3')
-</action>
+[calls submit_sql(sql="SELECT s.SignalID FROM Observatories o JOIN Signals s ON o.Signal = s.SignalID WHERE o.LunarStage = 'Full' AND s.SignalStrength > 10 ORDER BY s.SignalStrength DESC LIMIT 3")]
 
 Observation: Your SQL is correct! Now, here's a follow-up question from user: Can you also count how many distinct calibrated signals were detected during full moon phases?
 ...

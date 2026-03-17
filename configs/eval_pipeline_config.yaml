@@ -9,15 +9,19 @@
 reader:
   reader_name: "BirdInteractReader"
   dataset_name: 'birdsql/bird-interact-lite'
-  database_engine: 'sqlite'
+  database_engine: 'postgresql'
+  db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}'
   dataset_kwargs:
-    gt_path_jsonl: "data/bird_interact/bird_interact_lite_gt_kg_testcases_1008.jsonl"
+    gt_path_jsonl: "data/bird_interact/bird-interact-lite/bird_interact_lite_gt_kg_testcases_1008.jsonl"
 
   # Prompt related fields
   prompt_dir: "prompts"
   system_prompt: 'bird_interact_a_agent/system.jinja'
   user_prompt: 'bird_interact_a_agent/user.jinja'
   is_chat_template: true
+
+  # Simulator related fields
+  user_simulator_prompt_folder: 'prompts/bird_interact_user_simulator'
 
 
 # ── Predictor ─────────────────────────────────────────────────────────────────
@@ -32,10 +36,13 @@ predictor:
   tool_names:
     - "sql_query_tool"
     - "db_query_tool"
+    - "ask_user"
   temperature: 1.0
   top_k: -1
   top_p: 1.0
   max_new_tokens: 2048
+
+  user_patience_budget: 10
 
 
 # ── Scorer ────────────────────────────────────────────────────────────────────
