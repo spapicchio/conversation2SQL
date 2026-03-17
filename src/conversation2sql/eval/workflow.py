@@ -82,6 +82,7 @@ def workflow_evaluation_pipeline(
 ) -> EvalPipelineInput:
     # Step 1: instantiate Reader, Predictor, and Scorer.
     reader: BaseReader = reader_registry.build(data_input.config_reader.reader_name,
+                                               user_patience=data_input.config_predictor.user_patience_budget,
                                                config_reader=data_input.config_reader)
 
     predictor: BasePredictor = predictor_registry.build(data_input.config_predictor.predictor_name,

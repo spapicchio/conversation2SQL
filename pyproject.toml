@@ -24,6 +24,9 @@ dependencies = [
     "langchain-community>=0.4.1",
     "langgraph>=1.0.10",
     "dotenv>=0.9.9",
+    "langsmith>=0.7.14",
+    "frozendict>=2.4.7",
+    "psycopg2-binary>=2.9.11",
 ]
 
 [project.optional-dependencies]
