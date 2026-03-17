@@ -22,8 +22,27 @@ from pydantic import BaseModel, Field, ConfigDict
 # ---------------------------------------------------------------------------
 
 class BaseMessage(TypedDict):
-    role: Literal["system", "user", "assistant"]
+    role: Literal["system", "user", "assistant", "tool", "function"]
     content: str
+
+
+class UserContext(BaseModel):
+    """Used to define the LLM as a user. Must be specified if tool 'ask_user' is used."""
+    # User simulator config
+    template_params: dict
+    user_simulator_prompt_folder: str
+    user_simulator_system_prompt: str | None = None
+    user_simulator_user_prompt: str
+
+    # Database connection for Bird-Interact environment tools
+    db_dsn: str | None = None  # PostgreSQL DSN, e.g. "postgresql://root:123123@localhost:5432/mydb"
+    database_engine: str = "postgresql"
+
+    # External knowledge and column meanings loaded from the dataset
+    # List of dicts: {knowledge, description, definition}
+    external_knowledge: list[dict] = Field(default_factory=list)
+    # Nested dict: {table_name: {column_name: meaning}}
+    column_meanings: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class Sample(BaseModel):
@@ -35,6 +54,7 @@ class Sample(BaseModel):
     # For chat template only Chat models are used, instead for string template only next token prediction models are used.
     messages: list[BaseMessage]
     target: str  # gold-standard answer (e .g. a SQL query)
+    user_context: UserContext | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

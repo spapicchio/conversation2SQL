@@ -10,9 +10,11 @@ Usage:
 
 from __future__ import annotations
 
+from functools import cache
 from pathlib import Path
 from typing import Any
 
+from frozendict import frozendict
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
 from jinja2 import meta as jinja2_meta
 from pydantic import BaseModel
@@ -64,7 +66,8 @@ class PromptFactory:
     # Core API
     # ------------------------------------------------------------------
 
-    def render_template(self, template_name: str, **kwargs: Any) -> str:
+    @cache
+    def render_template(self, template_name: str, **template_params: frozendict) -> str:
         """Render a template by relative path (e.g. ``"eval/user.jinja"``)."""
         try:
             template = self._env.get_template(template_name)
@@ -72,17 +75,17 @@ class PromptFactory:
             raise FileNotFoundError(
                 f"Template '{template_name}' not found in {self._prompt_dir}"
             )
-        rendered = template.render(**kwargs)
+        rendered = template.render(**template_params)
         logger.debug(f"Rendered template '{template_name}' ({len(rendered)} chars)")
         return rendered
 
     def get_system_prompt(self, task: str, **kwargs: Any) -> str:
         """Render ``<task>/system.jinja``."""
-        return self.render_template(f"{task}/system.jinja", **kwargs)
+        return self.render_template(f"{task}/system.jinja", frozendict(**kwargs))
 
     def get_user_prompt(self, task: str, **kwargs: Any) -> str:
         """Render ``<task>/user.jinja``."""
-        return self.render_template(f"{task}/user.jinja", **kwargs)
+        return self.render_template(f"{task}/user.jinja", frozendict(**kwargs))
 
     # ------------------------------------------------------------------
     # Optional: validated rendering via Pydantic
@@ -107,7 +110,7 @@ class PromptFactory:
             raise TypeError(
                 f"params must be a pydantic BaseModel, got {type(params).__name__}"
             )
-        return self.render_template(template_name, **params.model_dump())
+        return self.render_template(template_name, frozendict(**params.model_dump()))
 
     # ------------------------------------------------------------------
     # Helpers
@@ -154,3 +157,8 @@ class PromptFactory:
 
     def __repr__(self) -> str:
         return f"PromptFactory(prompt_dir={self._prompt_dir!r})"
+
+
+@cache
+def get_cached_prompt_factory(folder: str | Path | None = None) -> PromptFactory:
+    return PromptFactory(folder)

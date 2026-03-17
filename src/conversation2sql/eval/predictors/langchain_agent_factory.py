@@ -1,3 +1,6 @@
+from functools import cache
+
+from langchain.agents import AgentState as LangChainAgentState
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitMiddleware
 from langchain.chat_models import init_chat_model  # pyrefly: ignore
@@ -6,6 +9,12 @@ from langgraph.graph.state import CompiledStateGraph
 
 from conversation2sql.config_input import ConfigPredictor
 from conversation2sql.eval.registry import tool_registry
+
+
+# This TypedDict is used for the short memory into a conversation with tools
+# The budget is the number tool interaction the model can do based on the user patience
+class AgentState(LangChainAgentState):
+    user_patience: float = 10
 
 
 class LangChainAgentFactory:
@@ -19,12 +28,17 @@ class LangChainAgentFactory:
         agent = create_agent(
             model=model,
             tools=tools,
-            middleware=[
-                ModelCallLimitMiddleware(run_limit=3),
+            state_schema=AgentState,
+            middleware=[  # pyrefly: ignore
+                ModelCallLimitMiddleware(run_limit=self.config_predictor.user_patience_budget + 5),
                 ToolCallLimitMiddleware(
-                    run_limit=1,
-                    # Max 1 tool call per conversation round. If the assistant calls more than 1 tool, only the first one will be executed.
-                    thread_limit=1  # Max 10 tool calls across all conversation
+                    # Maximum tool calls per single invocation (one user message → response cycle).
+                    # Resets with each new user message.
+                    run_limit=self.config_predictor.user_patience_budget,
+                    # Maximum tool calls across all runs in a thread (conversation).
+                    # Persists across multiple invocations with the same thread ID.
+                    # Requires a checkpointer to maintain state. None means no thread limit.
+                    thread_limit=self.config_predictor.user_patience_budget * 3,
                 ),
             ]
         )
@@ -38,3 +52,13 @@ class LangChainAgentFactory:
                                top_p=self.config_predictor.top_p,
                                # top_k=self.config_predictor.top_k
                                )
+
+
+@cache
+def get_cached_model(model_name, model_provider, temperature, max_tokens, top_p, top_k):
+    return init_chat_model(model=model_name,
+                           model_provider=model_provider,
+                           temperature=temperature,
+                           max_tokens=max_tokens,
+                           top_p=top_p,
+                           top_k=top_k)

@@ -9,7 +9,8 @@ class ConfigReader(BaseModel):
     reader_name: str
     dataset_name: str
     dataset_kwargs: dict = Field(default_factory=dict)
-    database_engine: str = 'sqlite'  # Default to SQLite, can be overridden to use other databases like PostgreSQL, MySQL, etc.
+    database_engine: str = 'postgresql'  # Database engine label surfaced in prompt templates (e.g. 'postgresql')
+    db_dsn_template: str = 'postgresql://root:123123@localhost:5432/{database}'  # DSN template; {database} is replaced with the per-sample database name
 
     # Prompt related fields
     prompt_dir: str = 'prompts'  # Directory where Jinja prompt templates are stored
@@ -18,6 +19,10 @@ class ConfigReader(BaseModel):
     # For non-chat templates, the system prompt and the user prompt are concatenated together to form the final prompt template.
     is_chat_template: bool = False  # Flag to indicate if the prompt template is for chat models
 
+    # USER simulator's params
+    user_simulator_prompt_folder: str = 'prompts/bird_interact_user_simulator'
+    user_simulator_system_prompt: str | None = None
+    user_simulator_user_prompt: str = 'simulator_base.jinja'
 
 # ---------------------------------------------------------------------------
 # Input Data for Predictor
@@ -32,6 +37,7 @@ class ConfigPredictor(BaseModel):
     top_k: int
     top_p: float
     max_new_tokens: int
+    user_patience_budget: int = 10
 
 
 # ---------------------------------------------------------------------------
