@@ -8,13 +8,13 @@ Usage inside any tool function:
 
 from langgraph.prebuilt import ToolRuntime
 
-from conversation2sql.eval.interfaces import UserContext
-from conversation2sql.eval.predictors.langchain_agent_factory import AgentState
+from conversation2sql.eval.interfaces import ToolUserContext
+from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState
 
 PATIENCE_TOTAL: int = 10
 
 
-def deduct_and_note(runtime: ToolRuntime[UserContext, AgentState], cost: float) -> str:
+def deduct_and_note(runtime: ToolRuntime[ToolUserContext, CustomAgentState], cost: float) -> str:
     """Subtract *cost* from ``runtime.state['user_patience']`` and return the
     ``[SYSTEM NOTE: …]`` string that must be appended to every tool response."""
     runtime.state["user_patience"] = max(0.0, runtime.state["user_patience"] - cost)

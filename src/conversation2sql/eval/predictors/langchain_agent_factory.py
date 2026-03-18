@@ -13,8 +13,8 @@ from conversation2sql.eval.registry import tool_registry
 
 # This TypedDict is used for the short memory into a conversation with tools
 # The budget is the number tool interaction the model can do based on the user patience
-class AgentState(LangChainAgentState):
-    user_patience: float = 10
+class CustomAgentState(LangChainAgentState):
+    user_patience: float
 
 
 class LangChainAgentFactory:
@@ -28,7 +28,7 @@ class LangChainAgentFactory:
         agent = create_agent(
             model=model,
             tools=tools,
-            state_schema=AgentState,
+            state_schema=CustomAgentState,
             middleware=[  # pyrefly: ignore
                 ModelCallLimitMiddleware(run_limit=self.config_predictor.user_patience_budget + 5),
                 ToolCallLimitMiddleware(

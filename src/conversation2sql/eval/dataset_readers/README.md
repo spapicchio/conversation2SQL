@@ -50,7 +50,7 @@ class BaseReader(ABC):
 | `sample_id` | `str` | Unique identifier for this example |
 | `messages` | `list[BaseMessage]` | Chat message list (system/user/assistant turns) or a single string prompt |
 | `target` | `str` | Gold-standard answer (e.g. the correct SQL query) |
-| `user_context` | `UserContext \| None` | Parameters for the user-simulator LLM (used by interactive agents) |
+| `user_context` | `ToolUserContext \| None` | Parameters for the user-simulator LLM (used by interactive agents) |
 | `metadata` | `dict[str, Any]` | Arbitrary per-sample data carried through the pipeline (DB name, test cases, …) |
 
 `BaseMessage` is a `TypedDict` with `role` and `content` fields.

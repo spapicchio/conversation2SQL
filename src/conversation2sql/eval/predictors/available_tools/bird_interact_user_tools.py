@@ -19,9 +19,9 @@ from frozendict import frozendict
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from conversation2sql.eval.interfaces import UserContext
+from conversation2sql.eval.interfaces import ToolUserContext
 from conversation2sql.eval.predictors.available_tools._patience_utils import deduct_and_note
-from conversation2sql.eval.predictors.langchain_agent_factory import AgentState, get_cached_model
+from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState, get_cached_model
 from conversation2sql.eval.registry import tool_registry
 from conversation2sql.prompt_factory import get_cached_prompt_factory
 
@@ -38,7 +38,7 @@ from conversation2sql.prompt_factory import get_cached_prompt_factory
         "Cost: 2 patience."
     )
 )
-def ask_user(question: str, runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def ask_user(question: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Invoke the user-simulator LLM with a clarification question (cost: 2 patience)."""
     note = deduct_and_note(runtime, cost=2)
 
@@ -89,7 +89,7 @@ def ask_user(question: str, runtime: ToolRuntime[UserContext, AgentState]) -> st
         "Cost: 3 patience."
     )
 )
-def submit_sql(sql: str, runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def submit_sql(sql: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Submit the final SQL to the user-simulator for evaluation (cost: 3 patience).
 
     The submitted SQL is stored in ``template_params['submitted_sql']`` so the

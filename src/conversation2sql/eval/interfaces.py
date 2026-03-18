@@ -21,12 +21,23 @@ from pydantic import BaseModel, Field, ConfigDict
 # Data models
 # ---------------------------------------------------------------------------
 
+
 class BaseMessage(TypedDict):
     role: Literal["system", "user", "assistant", "tool", "function"]
     content: str
 
 
-class UserContext(BaseModel):
+class ExternalKnowledgeEntry(BaseModel):
+    # Refer to dataset_readers/bird_interact.md for full description of these fields.
+    id: int  # id: the integer id of the kb entry, which is the same as the id in the database kb jsonl file.
+    knowledge: str  # a short name associated with the knowledge entry.
+    description: str  # the description of the knowledge entry.
+    definition: str  # the definition of the knowledge entry based on Mathematical formula or decision rule.
+    type: str  # the type of the knowledge entry, which can be one of "calculation_knowledge", "domain_knowledge", "value_illustration".
+    children_knowledge: list[int]  # list of IDs this entry depends on, or -1 if none
+
+
+class ToolUserContext(BaseModel):
     """Used to define the LLM as a user. Must be specified if tool 'ask_user' is used."""
     # User simulator config
     template_params: dict
@@ -34,37 +45,44 @@ class UserContext(BaseModel):
     user_simulator_system_prompt: str | None = None
     user_simulator_user_prompt: str
 
-    # Database connection for Bird-Interact environment tools
-    db_dsn: str | None = None  # PostgreSQL DSN, e.g. "postgresql://root:123123@localhost:5432/mydb"
-    database_engine: str = "postgresql"
-
-    # External knowledge and column meanings loaded from the dataset
-    # List of dicts: {knowledge, description, definition}
-    external_knowledge: list[dict] = Field(default_factory=list)
-    # Nested dict: {table_name: {column_name: meaning}}
-    column_meanings: dict[str, dict[str, str]] = Field(default_factory=dict)
+    sample: Sample | None = None  # the current sample being evaluated, for use in the user simulator prompts
 
 
 class Sample(BaseModel):
     """A single evaluation example from the dataset."""
-    model_config = ConfigDict(extra='ignore')  # extra data is ignored but it is stored
+
+    model_config = ConfigDict(extra="ignore")  # extra data is ignored but it is stored
 
     sample_id: str
     # The input may be a chat message list or a single string (e.g. a question)
     # For chat template only Chat models are used, instead for string template only next token prediction models are used.
     messages: list[BaseMessage]
     target: str  # gold-standard answer (e .g. a SQL query)
-    user_context: UserContext | None = None
+    user_context: ToolUserContext | None = None
+
+    user_patience: int
+    db_dsn: str | None = None  # PostgreSQL DSN, e.g. "postgresql://root:123123@localhost:5432/mydb"
+    database_engine: str = "postgresql"
+    ddl_database_schema: str
+    # External knowledge and column meanings loaded from the dataset
+    # List of dicts: {knowledge, description, definition}
+    external_knowledge: list[ExternalKnowledgeEntry] = Field(default_factory=list)
+    # Nested dict: {table_name: {column_name: meaning | field_meaning}}
+    column_meanings: dict[str, dict[str, str | dict]] = Field(default_factory=dict)
+
+    test_cases: list[str] # possible string representing the python code to run as a unit test
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class SampleWithPred(Sample):
     """The LLM's response for a single EvalSample."""
+
     metadata_pred: dict[str, Any] = Field(default_factory=dict)
 
 
 class SampleWithPredScore(SampleWithPred):
     """Evaluation outcome for a single Prediction."""
+
     score: float  # 0.0 (wrong) – 1.0 (correct), or a continuous value
     metadata_score: dict[str, Any] = Field(default_factory=dict)
 
@@ -72,6 +90,7 @@ class SampleWithPredScore(SampleWithPred):
 # ---------------------------------------------------------------------------
 # Protocols — implement these to plug in custom components
 # ---------------------------------------------------------------------------
+
 
 class BaseReader(ABC):
     """Reads evaluation samples from any source (file, HuggingFace, DB, …)."""

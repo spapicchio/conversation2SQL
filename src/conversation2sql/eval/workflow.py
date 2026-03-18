@@ -40,13 +40,13 @@ successful checkpoint, so completed stages are not repeated.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 # Trigger registration of all built-in components.
 import conversation2sql.eval.dataset_readers  # noqa: F401
 import conversation2sql.eval.predictors  # noqa: F401
 import conversation2sql.eval.scorers  # noqa: F401
-from conversation2sql.config_input import ConfigReader, ConfigPredictor, ConfigScorer
+from conversation2sql.config_input import ConfigReader, ConfigPredictor, ConfigScorer, ConfigPipeline
 from conversation2sql.eval import (
     reader_registry,
     predictor_registry,
@@ -65,7 +65,7 @@ from conversation2sql.eval import (
 # ---------------------------------------------------------------------------
 
 
-class EvalPipelineInput(BaseModel):
+class EvalPipelineInput(ConfigPipeline):
     config_reader: ConfigReader
     config_predictor: ConfigPredictor
     config_scorer: ConfigScorer
@@ -73,8 +73,6 @@ class EvalPipelineInput(BaseModel):
     dataset: list[Sample] = Field(default_factory=list)
     dataset_with_pred: list[SampleWithPred] = Field(default_factory=list)
     dataset_with_score: list[SampleWithPredScore] = Field(default_factory=list)
-
-    debug: bool = True
 
 
 def workflow_evaluation_pipeline(

@@ -29,9 +29,9 @@ import psycopg2.extras
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from conversation2sql.eval.interfaces import UserContext
+from conversation2sql.eval.interfaces import ToolUserContext
 from conversation2sql.eval.predictors.available_tools._patience_utils import deduct_and_note
-from conversation2sql.eval.predictors.langchain_agent_factory import AgentState
+from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState
 from conversation2sql.eval.registry import tool_registry
 
 
@@ -45,7 +45,7 @@ def _connect(db_dsn: str) -> psycopg2.extensions.connection:
     return conn
 
 
-def _require_db(context: UserContext) -> str:
+def _require_db(context: ToolUserContext) -> str:
     if not context.db_dsn:
         raise ValueError("UserContext.db_dsn is not set — cannot execute database tools.")
     return context.db_dsn
@@ -63,7 +63,7 @@ def _require_db(context: UserContext) -> str:
         "Cost: 1 patience."
     )
 )
-def execute_sql(sql: str, runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def execute_sql(sql: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Execute SQL and return results (cost: 1 patience)."""
     note = deduct_and_note(runtime, cost=1)
     db_dsn = _require_db(runtime.context)
@@ -95,7 +95,7 @@ def execute_sql(sql: str, runtime: ToolRuntime[UserContext, AgentState]) -> str:
         "Cost: 1 patience."
     )
 )
-def get_schema(runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def get_schema(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return the DDL schema with sample rows (cost: 1 patience)."""
     note = deduct_and_note(runtime, cost=1)
     db_dsn = _require_db(runtime.context)
@@ -158,7 +158,7 @@ def get_schema(runtime: ToolRuntime[UserContext, AgentState]) -> str:
         "Cost: 1 patience."
     )
 )
-def get_all_column_meanings(runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def get_all_column_meanings(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return all column meanings from the dataset metadata (cost: 1 patience)."""
     note = deduct_and_note(runtime, cost=1)
     column_meanings = runtime.context.column_meanings
@@ -176,7 +176,7 @@ def get_all_column_meanings(runtime: ToolRuntime[UserContext, AgentState]) -> st
         "Cost: 0.5 patience."
     )
 )
-def get_column_meaning(table_name: str, column_name: str, runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def get_column_meaning(table_name: str, column_name: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return the meaning for one column (cost: 0.5 patience)."""
     note = deduct_and_note(runtime, cost=0.5)
     table = runtime.context.column_meanings.get(table_name)
@@ -200,7 +200,7 @@ def get_column_meaning(table_name: str, column_name: str, runtime: ToolRuntime[U
         "Cost: 0.5 patience."
     )
 )
-def get_all_external_knowledge_names(runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def get_all_external_knowledge_names(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return a list of all external knowledge names (cost: 0.5 patience)."""
     note = deduct_and_note(runtime, cost=0.5)
     names = [entry.get("knowledge", "") for entry in runtime.context.external_knowledge]
@@ -215,7 +215,7 @@ def get_all_external_knowledge_names(runtime: ToolRuntime[UserContext, AgentStat
         "Cost: 0.5 patience."
     )
 )
-def get_knowledge_definition(knowledge_name: str, runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def get_knowledge_definition(knowledge_name: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return a single knowledge definition (cost: 0.5 patience)."""
     note = deduct_and_note(runtime, cost=0.5)
     for entry in runtime.context.external_knowledge:
@@ -233,7 +233,7 @@ def get_knowledge_definition(knowledge_name: str, runtime: ToolRuntime[UserConte
         "Cost: 1 patience."
     )
 )
-def get_all_knowledge_definitions(runtime: ToolRuntime[UserContext, AgentState]) -> str:
+def get_all_knowledge_definitions(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return all external knowledge with definitions (cost: 1 patience)."""
     note = deduct_and_note(runtime, cost=1)
     if not runtime.context.external_knowledge:

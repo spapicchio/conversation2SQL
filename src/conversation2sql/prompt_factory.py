@@ -67,7 +67,7 @@ class PromptFactory:
     # ------------------------------------------------------------------
 
     @cache
-    def render_template(self, template_name: str, **template_params: frozendict) -> str:
+    def render_template(self, template_name: str, template_params: frozendict) -> str:
         """Render a template by relative path (e.g. ``"eval/user.jinja"``)."""
         try:
             template = self._env.get_template(template_name)

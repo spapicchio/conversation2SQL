@@ -2,19 +2,32 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
+# Input Data for Pipeline
+# ---------------------------------------------------------------------------
+class ConfigPipeline(BaseModel):
+    debug: bool = True
+
+
+# ---------------------------------------------------------------------------
 # Input Data for DatasetReader
 # ---------------------------------------------------------------------------
 
 class ConfigReader(BaseModel):
-    reader_name: str
-    dataset_name: str
-    dataset_kwargs: dict = Field(default_factory=dict)
+    reader_name: str = 'BirdInteractReader'
+    dataset_name: str = 'birdsql/bird-interact-lite'
+    dataset_path: str = 'data/bird_interact/bird-interact-lite'  # Path where
+
+    dataset_kwargs: dict = Field(
+        default_factory=lambda: {
+            "gt_path_jsonl": "data/bird_interact/bird-interact-lite/bird_interact_lite_gt_kg_testcases_1008.jsonl"
+        }
+    )
     database_engine: str = 'postgresql'  # Database engine label surfaced in prompt templates (e.g. 'postgresql')
     db_dsn_template: str = 'postgresql://root:123123@localhost:5432/{database}'  # DSN template; {database} is replaced with the per-sample database name
 
     # Prompt related fields
-    prompt_dir: str = 'prompts'  # Directory where Jinja prompt templates are stored
-    system_prompt: str | None = None  # System prompt for chat models
+    prompt_dir: str = 'prompts/bird_interact_a_agent'  # Directory where Jinja prompt templates are stored
+    system_prompt: str | None = 'system.jinja'  # System prompt for chat models
     user_prompt: str = 'user.jinja'  # User prompt for chat models.
     # For non-chat templates, the system prompt and the user prompt are concatenated together to form the final prompt template.
     is_chat_template: bool = False  # Flag to indicate if the prompt template is for chat models
@@ -24,6 +37,7 @@ class ConfigReader(BaseModel):
     user_simulator_system_prompt: str | None = None
     user_simulator_user_prompt: str = 'simulator_base.jinja'
 
+
 # ---------------------------------------------------------------------------
 # Input Data for Predictor
 # ---------------------------------------------------------------------------
@@ -32,7 +46,8 @@ class ConfigPredictor(BaseModel):
     predictor_name: str  # The class name of the predictor to be used, e.g., 'LLMPredictor', 'EmbeddingPredictor', etc.
     model_name: str  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
     model_provider: str  # The model provider, e.g., 'openai', 'huggingface', etc.
-    tool_names: list[str] = Field(default_factory=list)  # List of tool names to be used by the predictor, e.g., ['calculator', 'search'], etc.
+    tool_names: list[str] = Field(
+        default_factory=list)  # List of tool names to be used by the predictor, e.g., ['calculator', 'search'], etc.
     temperature: float
     top_k: int
     top_p: float
