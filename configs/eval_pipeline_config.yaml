@@ -6,9 +6,14 @@
 # Built-in types:
 #   "PlaceholderReader" — returns a canned AIMessage (no API key needed)
 #   "BirdInteractReader" - reads from the BirdInteract dataset (requires `gt_path_jsonl` in `dataset_kwargs`)
+pipeline:
+  debug: true
+
 reader:
   reader_name: "BirdInteractReader"
-  dataset_name: 'birdsql/bird-interact-lite'
+  dataset_name: 'birdsql/bird-interact-lite'. # HF name
+  dataset_path: 'data/bird_interact/bird-interact-lite'
+
   database_engine: 'postgresql'
   db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}'
   dataset_kwargs:
