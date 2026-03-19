@@ -9,7 +9,8 @@ from frozendict import frozendict
 
 from conversation2sql.config_input import ConfigReader
 from conversation2sql.eval import reader_registry, Sample
-from conversation2sql.eval.interfaces import BaseMessage, BaseReader, ToolUserContext
+from conversation2sql.eval.interfaces import BaseMessage, BaseReader
+from conversation2sql.eval.predictors.langchain_agent_factory import ToolUserContext
 from conversation2sql.logger import get_logger
 from conversation2sql.prompt_factory import PromptFactory
 

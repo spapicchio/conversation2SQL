@@ -96,6 +96,27 @@ Key design points:
 
 ---
 
+> **Important: `CustomAgentState` vs `ToolUserContext`**
+>
+> Every tool receives a `ToolRuntime[ToolUserContext, CustomAgentState]` injected by LangGraph. The two objects it carries serve fundamentally different purposes and must be treated accordingly:
+>
+> | | `CustomAgentState` | `ToolUserContext` |
+> |---|---|---|
+> | **Type** | `TypedDict` (extends `LangChainAgentState`) | Pydantic `BaseModel` |
+> | **Accessed via** | `runtime.state` | `runtime.context` |
+> | **Mutability** | **Mutable** — intended to be written by tools | **Immutable by design** — read-only context injected at `invoke()` time |
+> | **Scope** | Per-conversation; LangGraph checkpoints and persists it across tool calls | Per-invocation; set once when calling `agent.invoke(..., context=...)` and not checkpointed |
+> | **Purpose** | Tracks evolving agent state during a trajectory (e.g. `user_patience` counter) | Carries static context that tools need to operate (e.g. DB DSN, prompt config, the current `Sample`) |
+> | **Who manages it** | LangGraph state machine — merged and persisted via the configured checkpointer | Caller — passed as the `context` kwarg to `agent.invoke()` in `LangChainPredictor` |
+>
+> **Rules for tool authors:**
+>
+> - **Read/write `runtime.state`** to track anything that changes over the course of a conversation. Always use dict-style access (`runtime.state["key"] = value`), since it is a `TypedDict`. Example: `deduct_and_note` debits `runtime.state["user_patience"]` after every tool call.
+> - **Only read `runtime.context`** inside tool implementations. Even though the Pydantic model does not enforce immutability on its inner dict fields (e.g. `template_params`), mutations to `runtime.context` are **not** checkpointed by LangGraph and their effect across invocations is undefined. The sole accepted exception is writing to `template_params` within a single `invoke()` call (as `ask_user` and `submit_sql` do), where the caller owns the object and the mutation is intentional.
+> - **Never add new dynamic fields to `ToolUserContext`** to track mutable agent state — put those in `CustomAgentState` instead so LangGraph can checkpoint and restore them correctly.
+
+---
+
 ## Agent Factory (`langchain_agent_factory.py`)
 
 `LangChainAgentFactory` is a helper (not a registered component) used internally by `LangChainPredictor`:

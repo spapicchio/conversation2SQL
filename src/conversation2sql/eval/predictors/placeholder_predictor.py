@@ -7,4 +7,4 @@ class PlaceholderPredictor(BasePredictor):
     """Returns a canned AIMessage for every input — no LLM call required."""
 
     def predict(self, samples: list[Sample]) -> list[SampleWithPred]:
-        return [SampleWithPred(prediction='placeholder', **sample.model_dump()) for sample in samples]
+        return [SampleWithPred(**sample.model_dump()) for sample in samples]

@@ -19,9 +19,8 @@ from frozendict import frozendict
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from conversation2sql.eval.interfaces import ToolUserContext
 from conversation2sql.eval.predictors.available_tools._patience_utils import deduct_and_note
-from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState, get_cached_model
+from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState, get_cached_model, ToolUserContext
 from conversation2sql.eval.registry import tool_registry
 from conversation2sql.prompt_factory import get_cached_prompt_factory
 

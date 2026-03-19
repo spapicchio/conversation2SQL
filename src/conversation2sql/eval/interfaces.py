@@ -16,6 +16,8 @@ from typing import TypedDict
 
 from pydantic import BaseModel, Field, ConfigDict
 
+from conversation2sql.eval.predictors.langchain_agent_factory import ToolUserContext
+
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -35,17 +37,6 @@ class ExternalKnowledgeEntry(BaseModel):
     definition: str  # the definition of the knowledge entry based on Mathematical formula or decision rule.
     type: str  # the type of the knowledge entry, which can be one of "calculation_knowledge", "domain_knowledge", "value_illustration".
     children_knowledge: list[int]  # list of IDs this entry depends on, or -1 if none
-
-
-class ToolUserContext(BaseModel):
-    """Used to define the LLM as a user. Must be specified if tool 'ask_user' is used."""
-    # User simulator config
-    template_params: dict
-    user_simulator_prompt_folder: str
-    user_simulator_system_prompt: str | None = None
-    user_simulator_user_prompt: str
-
-    sample: Sample | None = None  # the current sample being evaluated, for use in the user simulator prompts
 
 
 class Sample(BaseModel):
@@ -76,7 +67,7 @@ class Sample(BaseModel):
 
 class SampleWithPred(Sample):
     """The LLM's response for a single EvalSample."""
-
+    # Update the messages directly, no new field
     metadata_pred: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -8,8 +8,7 @@ Usage inside any tool function:
 
 from langgraph.prebuilt import ToolRuntime
 
-from conversation2sql.eval.interfaces import ToolUserContext
-from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState
+from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState, ToolUserContext
 
 PATIENCE_TOTAL: int = 10
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from functools import cache
 
 from langchain.agents import AgentState as LangChainAgentState
@@ -6,15 +8,30 @@ from langchain.agents.middleware import ModelCallLimitMiddleware, ToolCallLimitM
 from langchain.chat_models import init_chat_model  # pyrefly: ignore
 from langchain_core.language_models import BaseChatModel  # pyrefly: ignore
 from langgraph.graph.state import CompiledStateGraph
+from pydantic import BaseModel
 
 from conversation2sql.config_input import ConfigPredictor
+from conversation2sql.eval import Sample
 from conversation2sql.eval.registry import tool_registry
 
 
 # This TypedDict is used for the short memory into a conversation with tools
 # The budget is the number tool interaction the model can do based on the user patience
+# This is used to keep a state that can be modified in the conversation
 class CustomAgentState(LangChainAgentState):
-    user_patience: float
+    user_patience: float  # must be set with invoke
+
+
+# This is used to give context to the tool and cannot be modified
+class ToolUserContext(BaseModel):
+    """Used to define the LLM as a user. Must be specified if tool 'ask_user' is used."""
+    # User simulator config
+    template_params: dict
+    user_simulator_prompt_folder: str
+    user_simulator_system_prompt: str | None = None
+    user_simulator_user_prompt: str
+
+    sample: Sample | None = None  # the current sample being evaluated, for use in the user simulator prompts
 
 
 class LangChainAgentFactory:
@@ -29,6 +46,7 @@ class LangChainAgentFactory:
             model=model,
             tools=tools,
             state_schema=CustomAgentState,
+            context_schema=ToolUserContext,  # immutable, cannot be changed in the
             middleware=[  # pyrefly: ignore
                 ModelCallLimitMiddleware(run_limit=self.config_predictor.user_patience_budget + 5),
                 ToolCallLimitMiddleware(
