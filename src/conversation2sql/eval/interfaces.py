@@ -14,14 +14,33 @@ from abc import abstractmethod
 from typing import Any, Literal
 from typing import TypedDict
 
+from frozendict import frozendict
+from langchain.agents import AgentState as LangChainAgentState
 from pydantic import BaseModel, Field, ConfigDict
 
-from conversation2sql.eval.predictors.langchain_agent_factory import ToolUserContext
+from conversation2sql.eval.prompt_params import PromptParams
 
 
 # ---------------------------------------------------------------------------
 # Data models
 # ---------------------------------------------------------------------------
+# This TypedDict is used for the short memory into a conversation with tools
+# The budget is the number tool interaction the model can do based on the user patience
+# This is used to keep a state that can be modified in the conversation
+class CustomAgentState(LangChainAgentState):
+    user_patience: float  # must be set with invoke
+
+# This is used to give context to the tool and cannot be modified
+class ToolUserContext(BaseModel):
+    """Used to define the LLM as a user. Must be specified if tool 'ask_user' is used."""
+    # User simulator config
+    template_params: PromptParams  # typed params for the user-simulator templates
+    user_simulator_prompt_folder: str
+    user_simulator_system_prompt: str | None = None
+    user_simulator_user_prompt: str
+
+    sample: Sample | None = None  # the current sample being evaluated, for use in the user simulator prompts
+
 
 
 class BaseMessage(TypedDict):
@@ -42,7 +61,7 @@ class ExternalKnowledgeEntry(BaseModel):
 class Sample(BaseModel):
     """A single evaluation example from the dataset."""
 
-    model_config = ConfigDict(extra="ignore")  # extra data is ignored but it is stored
+    model_config = ConfigDict(extra="allow")  # extra data is ignored but it is stored
 
     sample_id: str
     # The input may be a chat message list or a single string (e.g. a question)
@@ -127,3 +146,4 @@ class BaseScorer(ABC):
     def score(self, predictions: list[SampleWithPred]) -> list[SampleWithPredScore]:
         """Return a ScoreResult indicating correctness."""
         ...
+

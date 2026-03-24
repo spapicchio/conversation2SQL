@@ -29,8 +29,8 @@ import psycopg2.extras
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
+from conversation2sql.eval.interfaces import CustomAgentState, ToolUserContext
 from conversation2sql.eval.predictors.available_tools._patience_utils import deduct_and_note
-from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState, ToolUserContext
 from conversation2sql.eval.registry import tool_registry
 
 
@@ -57,9 +57,9 @@ def _require_db(context: ToolUserContext) -> str:
 @tool_registry.register(name="execute_sql")
 @tool(
     description=(
-        "Execute one or more SQL commands against the database and return the fetched rows. "
-        "Multiple statements may be separated by semicolons. "
-        "Cost: 1 patience."
+            "Execute one or more SQL commands against the database and return the fetched rows. "
+            "Multiple statements may be separated by semicolons. "
+            "Cost: 1 patience."
     )
 )
 def execute_sql(sql: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
@@ -88,60 +88,17 @@ def execute_sql(sql: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState
 @tool_registry.register(name="get_schema")
 @tool(
     description=(
-        "Return the database schema in DDL format (CREATE TABLE statements) "
-        "together with a few sample rows per table so the agent can understand "
-        "available tables and columns at a glance. "
-        "Cost: 1 patience."
+            "Return the database schema in DDL format (CREATE TABLE statements) "
+            "together with a few sample rows per table so the agent can understand "
+            "available tables and columns at a glance. "
+            "Cost: 1 patience."
     )
 )
 def get_schema(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return the DDL schema with sample rows (cost: 1 patience)."""
     note = deduct_and_note(runtime, cost=1)
-    db_dsn = _require_db(runtime.context)
-    try:
-        conn = _connect(db_dsn)
-        cursor = conn.cursor()
-        # Fetch all user tables in the public schema
-        cursor.execute("""
-            SELECT table_name, table_type
-            FROM information_schema.tables
-            WHERE table_schema = 'public'
-              AND table_type IN ('BASE TABLE', 'VIEW')
-            ORDER BY table_name
-        """)
-        tables = cursor.fetchall()
-        parts: list[str] = []
-        for row in tables:
-            table_name: str = row["table_name"]
-            table_type: str = row["table_type"]
-            # Build a CREATE TABLE / VIEW DDL from column metadata
-            cursor.execute("""
-                SELECT column_name, data_type, is_nullable, column_default
-                FROM information_schema.columns
-                WHERE table_schema = 'public' AND table_name = %s
-                ORDER BY ordinal_position
-            """, (table_name,))
-            columns = cursor.fetchall()
-            col_defs = []
-            for col in columns:
-                nullable = "" if col["is_nullable"] == "YES" else " NOT NULL"
-                default = f" DEFAULT {col['column_default']}" if col["column_default"] else ""
-                col_defs.append(f"    {col['column_name']} {col['data_type']}{nullable}{default}")
-            create_kw = "VIEW" if table_type == "VIEW" else "TABLE"
-            ddl = f"CREATE {create_kw} {table_name} (\n" + ",\n".join(col_defs) + "\n);"
-            parts.append(ddl)
-            try:
-                cursor.execute(f"SELECT * FROM {table_name} LIMIT 3")  # noqa: S608
-                sample_rows = [dict(r) for r in cursor.fetchall()]
-                parts.append(f"-- Sample data: {json.dumps(sample_rows, ensure_ascii=False, default=str)}")
-            except psycopg2.Error:
-                pass
-            parts.append("")
-        conn.close()
-        output = "\n".join(parts).strip() or "(no tables found)"
-    except psycopg2.Error as exc:
-        output = f"[SCHEMA ERROR] {exc}"
-    return output + note
+    schema = runtime.context.sample.ddl_database_schema
+    return schema + note
 
 
 # ---------------------------------------------------------------------------
@@ -151,16 +108,16 @@ def get_schema(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
 @tool_registry.register(name="get_all_column_meanings")
 @tool(
     description=(
-        "Return the meaning / description of every column in every table of the database. "
-        "This can produce a long response — prefer get_column_meaning when you only need "
-        "a single column. "
-        "Cost: 1 patience."
+            "Return the meaning / description of every column in every table of the database. "
+            "This can produce a long response — prefer get_column_meaning when you only need "
+            "a single column. "
+            "Cost: 1 patience."
     )
 )
 def get_all_column_meanings(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return all column meanings from the dataset metadata (cost: 1 patience)."""
     note = deduct_and_note(runtime, cost=1)
-    column_meanings = runtime.context.column_meanings
+    column_meanings = runtime.context.sample.column_meanings
     if not column_meanings:
         output = "(no column meanings available)"
     else:
@@ -171,14 +128,15 @@ def get_all_column_meanings(runtime: ToolRuntime[ToolUserContext, CustomAgentSta
 @tool_registry.register(name="get_column_meaning")
 @tool(
     description=(
-        "Return the meaning / description of a single column in the specified table. "
-        "Cost: 0.5 patience."
+            "Return the meaning / description of a single column in the specified table. "
+            "Cost: 0.5 patience."
     )
 )
-def get_column_meaning(table_name: str, column_name: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
+def get_column_meaning(table_name: str, column_name: str,
+                       runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return the meaning for one column (cost: 0.5 patience)."""
     note = deduct_and_note(runtime, cost=0.5)
-    table = runtime.context.column_meanings.get(table_name)
+    table = runtime.context.sample.column_meanings.get(table_name)
     if table is None:
         return f"(no column meanings found for table '{table_name}')" + note
     meaning = table.get(column_name)
@@ -194,24 +152,24 @@ def get_column_meaning(table_name: str, column_name: str, runtime: ToolRuntime[T
 @tool_registry.register(name="get_all_external_knowledge_names")
 @tool(
     description=(
-        "Return the names of all pieces of external knowledge available for this question. "
-        "Use get_knowledge_definition to retrieve the full definition of a specific item. "
-        "Cost: 0.5 patience."
+            "Return the names of all pieces of external knowledge available for this question. "
+            "Use get_knowledge_definition to retrieve the full definition of a specific item. "
+            "Cost: 0.5 patience."
     )
 )
 def get_all_external_knowledge_names(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
     """Return a list of all external knowledge names (cost: 0.5 patience)."""
     note = deduct_and_note(runtime, cost=0.5)
-    names = [entry.get("knowledge", "") for entry in runtime.context.external_knowledge]
-    output = json.dumps(names, ensure_ascii=False) if names else "(no external knowledge available)"
+    names = runtime.context.sample.external_knowledge
+    output = "\n".join([name.model_dump_json(indent=2) for name in names]) if names else "(no external knowledge available)"
     return output + note
 
 
 @tool_registry.register(name="get_knowledge_definition")
 @tool(
     description=(
-        "Return the full definition of a specific piece of external knowledge by its name. "
-        "Cost: 0.5 patience."
+            "Return the full definition of a specific piece of external knowledge by its name. "
+            "Cost: 0.5 patience."
     )
 )
 def get_knowledge_definition(knowledge_name: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
@@ -226,10 +184,10 @@ def get_knowledge_definition(knowledge_name: str, runtime: ToolRuntime[ToolUserC
 @tool_registry.register(name="get_all_knowledge_definitions")
 @tool(
     description=(
-        "Return all external knowledge names together with their full definitions. "
-        "This can produce a long response — prefer get_knowledge_definition when you only "
-        "need one item. "
-        "Cost: 1 patience."
+            "Return all external knowledge names together with their full definitions. "
+            "This can produce a long response — prefer get_knowledge_definition when you only "
+            "need one item. "
+            "Cost: 1 patience."
     )
 )
 def get_all_knowledge_definitions(runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:

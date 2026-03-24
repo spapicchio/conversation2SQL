@@ -2,15 +2,15 @@ import json
 from functools import cache
 from pathlib import Path
 
-import datasets
-import tqdm
-from datasets import Sequence, Value
-from frozendict import frozendict
+import datasets  # pyrefly: ignore
+import tqdm  # pyrefly: ignore
+from datasets import Sequence, Value  # pyrefly: ignore
 
 from conversation2sql.config_input import ConfigReader
 from conversation2sql.eval import reader_registry, Sample
-from conversation2sql.eval.interfaces import BaseMessage, BaseReader
-from conversation2sql.eval.predictors.langchain_agent_factory import ToolUserContext
+from conversation2sql.eval.interfaces import BaseReader, ToolUserContext
+from conversation2sql.eval.message_builder import build_agent_messages
+from conversation2sql.eval.prompt_params import BirdInteractAgentParams, BirdInteractUserSimulatorParams
 from conversation2sql.logger import get_logger
 from conversation2sql.prompt_factory import PromptFactory
 
@@ -52,16 +52,6 @@ class BirdInteractReader(BaseReader):
         self.hf_dataset_name = config_reader.dataset_name
         self.config_reader = config_reader
         self.prompt_factory = PromptFactory(prompt_dir=config_reader.prompt_dir)
-        self.set_needed_params = set()
-        if config_reader.system_prompt:
-            self.set_needed_params.update(
-                self.prompt_factory.get_template_variables(config_reader.system_prompt)
-            )
-        if config_reader.reader_name:
-            self.set_needed_params.update(
-                self.prompt_factory.get_template_variables(config_reader.user_prompt)
-            )
-
         self.instance2sol = dict()
         with open(self.gt_file, "r") as f:
             for line in f:
@@ -81,6 +71,10 @@ class BirdInteractReader(BaseReader):
                 "The GT file does not match the specified HF dataset (lite vs full)."
             )
 
+        # Validate at init time that the agent prompt templates match the params
+        # we will provide, so mismatches are caught early rather than per-sample.
+        self._validate_agent_template_vars()
+
     def read(self) -> list[Sample]:
         """
         Note that Bird-Interact contains also follow-up questions but we are only interested in the initial questions for evaluation,
@@ -93,6 +87,11 @@ class BirdInteractReader(BaseReader):
         features = dataset.features.copy()
         features["test_cases"] = Sequence(Sequence(Value("string")))
         dataset = dataset.cast(features)
+
+        # filter out category of the dataset
+        if self.config_reader.filter_query_category:
+            dataset = dataset.filter(lambda x: x["category"] == "Query")
+
         samples = []
         for line in tqdm.tqdm(dataset.to_list(), desc='processing dataset'):
             # create the sample
@@ -105,16 +104,35 @@ class BirdInteractReader(BaseReader):
                 for kb_id in self.instance2sol[line["instance_id"]]["external_knowledge"]
             ]
 
-            # remove old key in line. read them from ground truth file.
+            # remove the old key in line. read them from a ground truth file.
             del line['external_knowledge']
             del line['test_cases']
+            del line['sol_sql']  # renamed target in the dataset
+
+            sol_sql = self.instance2sol[line["instance_id"]]["sol_sql"]
+            agent_params = BirdInteractAgentParams(
+                database_engine=self.config_reader.database_engine,
+                user_query=line["amb_user_query"],
+                total_budget=self.user_patience,
+            )
+            simulator_params = BirdInteractUserSimulatorParams(
+                db_name=db_name,
+                db_schema=self._get_db_schema(db_name),
+                user_query=line["amb_user_query"],
+                ambiguities_json=json.dumps(line["user_query_ambiguity"]),
+                correct_sql=sol_sql,
+                database_engine=self.config_reader.database_engine,
+            )
 
             sample = Sample(
                 sample_id=line["instance_id"],
-                messages=self._build_messages(self.config_reader.database_engine,
-                                              line["amb_user_query"],
-                                              self.user_patience),
-                target=self.instance2sol[line["instance_id"]]["sol_sql"],
+                messages=build_agent_messages(
+                    self.prompt_factory,
+                    self.config_reader.system_prompt,
+                    self.config_reader.user_prompt,
+                    agent_params,
+                ),
+                target=sol_sql,
                 db_dsn=self.config_reader.db_dsn_template.format(database=db_name),
                 database_engine=self.config_reader.database_engine,
                 external_knowledge=external_knowledge,
@@ -128,20 +146,15 @@ class BirdInteractReader(BaseReader):
                     "unambig_query": line["query"],
                     "knowledge_ambiguity": line["knowledge_ambiguity"],
                     "user_query_ambiguity": line["user_query_ambiguity"],
-                    "preprocess_sql": line["preprocess_sql"],
-                    "clean_up_sqls": line["clean_up_sqls"],
+                    "preprocess_sql": line["preprocess_sql"], # SQL queries to run before executing the solution or prediction.
+                    "clean_up_sqls": line["clean_up_sqls"],  # SQL queries to run after the test cases to revert any changes made to the database.
                 },
                 **line,
             )
 
             # create user context used to give context to the LLM as a user in tool
             tool_context = ToolUserContext(
-                template_params={
-                    "db_schema": db_name,
-                    "user_query": line["amb_user_query"],
-                    "ambiguities_json": line["user_query_ambiguity"],
-                    "correct_sql": self.instance2sol[line["instance_id"]]["sol_sql"],
-                },
+                template_params=simulator_params,
                 user_simulator_prompt_folder=self.config_reader.user_simulator_prompt_folder,
                 user_simulator_system_prompt=self.config_reader.user_simulator_system_prompt,
                 user_simulator_user_prompt=self.config_reader.user_simulator_user_prompt,
@@ -166,30 +179,24 @@ class BirdInteractReader(BaseReader):
         with open(path) as f:
             return f.read()
 
-    def _build_messages(self, database_engine, amb_user_query, user_patience) -> list[BaseMessage] | str:
-        template_params = {
-            "database_engine": database_engine,
-            "user_query": amb_user_query,
-            "total_budget": user_patience,
-        }
-
-        if not self.set_needed_params.issubset(set(template_params.keys())):
-            missing_params = self.set_needed_params - set(template_params.keys())
-            raise ValueError(f"Missing parameters for prompt rendering: {missing_params}")
-
-        system_prompt = []
+    def _validate_agent_template_vars(self) -> None:
+        """Verify that the configured agent templates only need variables that
+        ``BirdInteractAgentParams`` provides.  Raises ``ValueError`` at init
+        time (not per-sample) if there is a mismatch.
+        """
+        provided = set(BirdInteractAgentParams.model_fields)
+        needed: set[str] = set()
         if self.config_reader.system_prompt:
-            system_prompt = self.prompt_factory.render_template(self.config_reader.system_prompt,
-                                                                frozendict(template_params))
-            system_prompt = [BaseMessage(role="system", content=system_prompt)]
+            needed.update(self.prompt_factory.get_template_variables(self.config_reader.system_prompt))
+        needed.update(self.prompt_factory.get_template_variables(self.config_reader.user_prompt))
 
-        user_prompt = [BaseMessage(
-            role="user",
-            content=self.prompt_factory.render_template(self.config_reader.user_prompt, frozendict(template_params))
-        )]
-
-        messages = system_prompt + user_prompt
-        return messages
+        missing = needed - provided
+        if missing:
+            raise ValueError(
+                f"Agent prompt templates require variables not present in "
+                f"BirdInteractAgentParams: {missing}. "
+                f"Add them to BirdInteractAgentParams or update the template."
+            )
 
     @cache
     def _load_column_meanings(self, database_name: str) -> dict[str, dict[str, str]]:

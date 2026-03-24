@@ -10,17 +10,16 @@ Cost summary (mirrors the original prompt):
     submit_sql  → 3 patience  (final SQL submission; typically ends the episode)
 
 The ``ask_user`` tool calls an LLM user-simulator whose prompt templates and
-parameters are stored in ``UserContext``.  ``submit_sql`` records the
-submission in ``UserContext.template_params["submitted_sql"]`` and returns a
-stub response; the evaluation harness (scorer) reads that key to grade the answer.
+parameters are stored in ``ToolUserContext``.  ``submit_sql`` records the
+submission in ``template_params.submitted_sql`` and returns a stub response;
+the evaluation harness (scorer) reads that attribute to grade the answer.
 """
-
-from frozendict import frozendict
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
+from conversation2sql.eval.interfaces import CustomAgentState, ToolUserContext
 from conversation2sql.eval.predictors.available_tools._patience_utils import deduct_and_note
-from conversation2sql.eval.predictors.langchain_agent_factory import CustomAgentState, get_cached_model, ToolUserContext
+from conversation2sql.eval.predictors.langchain_agent_factory import get_cached_model
 from conversation2sql.eval.registry import tool_registry
 from conversation2sql.prompt_factory import get_cached_prompt_factory
 
@@ -32,9 +31,9 @@ from conversation2sql.prompt_factory import get_cached_prompt_factory
 @tool_registry.register(name="ask_user")
 @tool(
     description=(
-        "Ask the user a single clarification question to resolve ambiguity in their request. "
-        "Only ask ONE question at a time to minimise patience cost. "
-        "Cost: 2 patience."
+            "Ask the user a single clarification question to resolve ambiguity in their request. "
+            "Only ask ONE question at a time to minimise patience cost. "
+            "Cost: 2 patience."
     )
 )
 def ask_user(question: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
@@ -50,8 +49,9 @@ def ask_user(question: str, runtime: ToolRuntime[ToolUserContext, CustomAgentSta
         top_k=None,
     )
 
-    template_params = runtime.context.template_params
-    template_params["clarification_question"] = question
+    updated_params = runtime.context.template_params.model_copy(
+        update={"clarification_question": question}
+    )
 
     prompt_factory = get_cached_prompt_factory(runtime.context.user_simulator_prompt_folder)
     messages = []
@@ -60,14 +60,14 @@ def ask_user(question: str, runtime: ToolRuntime[ToolUserContext, CustomAgentSta
         messages.append(
             prompt_factory.render_template(
                 template_name=runtime.context.user_simulator_system_prompt,
-                template_params=frozendict(**template_params),
+                template_params=updated_params,
             )
         )
 
     messages.append(
         prompt_factory.render_template(
             template_name=runtime.context.user_simulator_user_prompt,
-            template_params=frozendict(**template_params),
+            template_params=updated_params,
         )
     )
 
@@ -82,10 +82,10 @@ def ask_user(question: str, runtime: ToolRuntime[ToolUserContext, CustomAgentSta
 @tool_registry.register(name="submit_sql")
 @tool(
     description=(
-        "Submit your final SQL query to the user for evaluation. "
-        "The user will test the SQL against the database and return feedback on its correctness. "
-        "Use this only when you are confident the SQL is correct. "
-        "Cost: 3 patience."
+            "Submit your final SQL query to the user for evaluation. "
+            "The user will test the SQL against the database and return feedback on its correctness. "
+            "Use this only when you are confident the SQL is correct. "
+            "Cost: 3 patience."
     )
 )
 def submit_sql(sql: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]) -> str:
@@ -96,9 +96,9 @@ def submit_sql(sql: str, runtime: ToolRuntime[ToolUserContext, CustomAgentState]
     ``UserContext`` to wire up real execution-based feedback.
     """
     note = deduct_and_note(runtime, cost=3)
-    runtime.context.template_params["submitted_sql"] = sql
+    runtime.context.template_params.submitted_sql = sql
     return (
-        "[SUBMITTED] Your SQL has been submitted for evaluation. "
-        "Await feedback from the user."
-        + note
+            "[SUBMITTED] Your SQL has been submitted for evaluation. "
+            "Await feedback from the user."
+            + note
     )

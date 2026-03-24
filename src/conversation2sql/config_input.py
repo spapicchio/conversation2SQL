@@ -15,7 +15,8 @@ class ConfigPipeline(BaseModel):
 class ConfigReader(BaseModel):
     reader_name: str = 'BirdInteractReader'
     dataset_name: str = 'birdsql/bird-interact-lite'
-    dataset_path: str = 'data/bird_interact/bird-interact-lite'  # Path where
+    dataset_path: str = 'data/bird_interact/bird-interact-lite'
+    filter_query_category: bool = True
 
     dataset_kwargs: dict = Field(
         default_factory=lambda: {

@@ -11,8 +11,9 @@ pipeline:
 
 reader:
   reader_name: "BirdInteractReader"
-  dataset_name: 'birdsql/bird-interact-lite'. # HF name
+  dataset_name: 'birdsql/bird-interact-lite' # HF name
   dataset_path: 'data/bird_interact/bird-interact-lite'
+  filter_query_category: true
 
   database_engine: 'postgresql'
   db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}'
@@ -20,9 +21,9 @@ reader:
     gt_path_jsonl: "data/bird_interact/bird-interact-lite/bird_interact_lite_gt_kg_testcases_1008.jsonl"
 
   # Prompt related fields
-  prompt_dir: "prompts"
-  system_prompt: 'bird_interact_a_agent/system.jinja'
-  user_prompt: 'bird_interact_a_agent/user.jinja'
+  prompt_dir: "prompts/bird_interact_a_agent"
+  system_prompt: 'system.jinja'
+  user_prompt: 'user.jinja'
   is_chat_template: true
 
   # Simulator related fields
@@ -39,9 +40,15 @@ predictor:
   model_name: 'o4-mini'
   model_provider: 'openai'
   tool_names:
-    - "sql_query_tool"
-    - "db_query_tool"
+    - "execute_sql"
+    - "get_schema"
+    - "get_all_column_meanings"
+    - "get_column_meaning"
+    - "get_all_external_knowledge_names"
+    - "get_knowledge_definition"
+    - "get_all_knowledge_definitions"
     - "ask_user"
+    - "submit_sql"
   temperature: 1.0
   top_k: -1
   top_p: 1.0

@@ -66,16 +66,26 @@ class PromptFactory:
     # Core API
     # ------------------------------------------------------------------
 
-    @cache
-    def render_template(self, template_name: str, template_params: frozendict) -> str:
-        """Render a template by relative path (e.g. ``"eval/user.jinja"``)."""
+    def render_template(self, template_name: str, template_params: dict | BaseModel) -> str:
+        """Render a template by relative path (e.g. ``"eval/user.jinja"``).
+
+        ``template_params`` may be a plain ``dict`` or any Pydantic
+        ``BaseModel`` (e.g. a ``PromptParams`` subclass from
+        ``eval.prompt_params``).  Pydantic models are converted via
+        ``model_dump()`` before rendering.
+        """
         try:
             template = self._env.get_template(template_name)
         except TemplateNotFound:
             raise FileNotFoundError(
                 f"Template '{template_name}' not found in {self._prompt_dir}"
             )
-        rendered = template.render(**template_params)
+        params_dict = (
+            template_params
+            if isinstance(template_params, dict)
+            else template_params.model_dump()
+        )
+        rendered = template.render(**params_dict)
         logger.debug(f"Rendered template '{template_name}' ({len(rendered)} chars)")
         return rendered
 

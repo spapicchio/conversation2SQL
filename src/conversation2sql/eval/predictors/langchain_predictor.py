@@ -2,7 +2,8 @@ from langchain_community.adapters.openai import convert_message_to_dict
 
 from conversation2sql.config_input import ConfigPredictor
 from conversation2sql.eval import Sample, SampleWithPred, BasePredictor
-from conversation2sql.eval.predictors.langchain_agent_factory import LangChainAgentFactory, CustomAgentState
+from conversation2sql.eval.predictors.langchain_agent_factory import LangChainAgentFactory
+from conversation2sql.eval.interfaces import CustomAgentState
 from conversation2sql.eval.registry import predictor_registry
 from conversation2sql.logger import get_logger
 
