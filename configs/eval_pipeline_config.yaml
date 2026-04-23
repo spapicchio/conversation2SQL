@@ -8,27 +8,16 @@
 #   "BirdInteractReader" - reads from the BirdInteract dataset (requires `gt_path_jsonl` in `dataset_kwargs`)
 pipeline:
   debug: true
+  mode: a-interact  # a-interact | c-interact | oracle 
+  output: "results/eval_results.jsonl"
+  concurrency: 5  # Number of parallel tasks to run
 
 reader:
-  reader_name: "BirdInteractReader"
-  dataset_name: 'birdsql/bird-interact-lite' # HF name
-  dataset_path: 'data/bird_interact/bird-interact-lite'
+  dataset_name_jsonl: 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'
+  dataset_path: 'data/bird_interact/bird-interact-full'
   filter_query_category: true
-
-  database_engine: 'postgresql'
   db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}'
-  dataset_kwargs:
-    gt_path_jsonl: "data/bird_interact/bird-interact-lite/bird_interact_lite_gt_kg_testcases_1008.jsonl"
-
-  # Prompt related fields
-  prompt_dir: "prompts/bird_interact_a_agent"
-  system_prompt: 'system.jinja'
-  user_prompt: 'user.jinja'
-  is_chat_template: true
-
-  # Simulator related fields
-  user_simulator_prompt_folder: 'prompts/bird_interact_user_simulator'
-
+  user_patience_budget: 10
 
 # ── Predictor ─────────────────────────────────────────────────────────────────
 # Calls an LLM and returns the full message list including tool calls.
@@ -36,31 +25,16 @@ reader:
 #   "PlaceholderPredictor" — returns a canned AIMessage (no API key needed)
 #   "LangChainPredictor" — uses LangChain to call an LLM (requires `model_name` and `model_provider`)
 predictor:
-  predictor_name: "LangChainPredictor"
-  model_name: 'o4-mini'
-  model_provider: 'openai'
-  tool_names:
-    - "execute_sql"
-    - "get_schema"
-    - "get_all_column_meanings"
-    - "get_column_meaning"
-    - "get_all_external_knowledge_names"
-    - "get_knowledge_definition"
-    - "get_all_knowledge_definitions"
-    - "ask_user"
-    - "submit_sql"
-  temperature: 1.0
-  top_k: -1
-  top_p: 1.0
-  max_new_tokens: 2048
-
+  model_name: 'gpt-3.5-turbo'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
+  model_provider: 'openai'  # The model provider, e.g., 'openai', 'azure', 'anthropic', etc.
+  temperature: 0.0
+  top_p: 1
+  max_new_tokens: 2000
   user_patience_budget: 10
 
+user_simulator:
+  model_name: 'o4-mini'
+  model_provider: 'openai'
+  temperature: 0.0
+  max_new_tokens: int = 500
 
-# ── Scorer ────────────────────────────────────────────────────────────────────
-# Evaluates predictions against gold-standard answers.
-# Built-in types:
-#   "PlaceholderScorer" — exact string match
-scorer:
-  scorer_name: "PlaceholderScorer"
-  run_score_in_parallel: false

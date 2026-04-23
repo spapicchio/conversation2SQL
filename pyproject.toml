@@ -27,6 +27,18 @@ dependencies = [
     "langsmith>=0.7.14",
     "frozendict>=2.4.7",
     "psycopg2-binary>=2.9.11",
+    "ipykernel>=7.2.0",
+    "fastapi>=0.135.3",
+    # ── framework: MCP-based evaluation services ─────────────────────────────
+    "mcp>=1.5",                        # Official MCP SDK (FastMCP + transports)
+    "langchain-mcp-adapters>=0.2",     # MCP client for LangGraph ReAct agent
+    "uvicorn>=0.30",                   # ASGI server for FastAPI + FastMCP services
+    "httpx>=0.27",                     # Async HTTP client for orchestrator
+    "pydantic-settings>=2.0",          # BaseSettings for env-driven config
+    "sqlglot>=25.0",                   # SQL tokenizer for user-simulator prompt
+    "fastmcp>=3.2.4",
+    "types-psycopg2>=2.9.21.20260408",
+    "types-tqdm>=4.67.3.20260408",
 ]
 
 [project.optional-dependencies]
@@ -37,6 +49,7 @@ test = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
 
 [build-system]
 requires = ["hatchling"]
@@ -44,3 +57,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/conversation2sql"]
+
+[tool.pyrefly]
+# https://pyrefly.org/en/docs/configuration/#example-pyprojecttoml
+python-interpreter-path = ".venv/bin/python3"
+project-includes = ["src", "BIRD-Interact/BIRD-Interact-ADK"]
+search-path = ["src", "BIRD-Interact/BIRD-Interact-ADK"]
+site-package-path = [".venv/lib/python3.12/site-packages"]

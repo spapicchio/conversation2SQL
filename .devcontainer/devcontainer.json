@@ -24,7 +24,6 @@
       // }
     }
   },
-
   "postCreateCommand": {
     // This ensures gpustat is installed globally/to the tool path on every build
     "gpustat":    "uv pip install --system gpustat",
@@ -39,7 +38,6 @@
     // and (Just-In-Time Cache) jit-cache is used to cache the optimized kernels on disk.
     // run `flashinfer show-config` to match the same 0.6.3 version for both.
     "flashinfer": "uv pip install --system flashinfer-cubin==0.6.3 flashinfer-jit-cache==0.6.3  --extra-index-url https://flashinfer.ai/whl/cu129",
-
     // Installs the PostgreSQL client tools (psql, pg_isready) so they are available
     // directly in the dev container shell without needing docker exec.
     "postgresql_client": "apt-get update; apt-get install -y postgresql-client"

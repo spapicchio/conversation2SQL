@@ -33,6 +33,7 @@ from typing import Any, Union, get_args, get_origin
 import yaml
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
+from pydantic_core import PydanticUndefined
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -88,6 +89,8 @@ def _is_list_type(annotation: Any) -> bool:
 
 def _field_default(field_info: FieldInfo) -> Any:
     """Return the Pydantic field default, or _SENTINEL if required."""
+    if field_info.is_required() or field_info.default is PydanticUndefined:
+        return _SENTINEL
     if field_info.default is not None and field_info.default is not ...:
         return field_info.default
     if field_info.default_factory is not None:  # type: ignore[misc]
@@ -254,7 +257,7 @@ class PydanticParser:
     def parse_args_and_config(
             self,
             args: list[str] | None = None,
-    ) -> tuple[BaseModel, ...]:
+    ) -> tuple[Any, ...]:
         """
         Parse and merge configuration from env → yaml → CLI.
 

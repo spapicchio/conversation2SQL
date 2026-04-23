@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 class ConfigPipeline(BaseModel):
     debug: bool = True
+    mode: str = 'a-interact'  # a-interact | c-interact | oracle 
+    output: str = "results/eval_results.jsonl"
+    concurrency: int = Field(default=5, description="Number of parallel tasks to run")
 
 
 # ---------------------------------------------------------------------------
@@ -13,30 +16,11 @@ class ConfigPipeline(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ConfigReader(BaseModel):
-    reader_name: str = 'BirdInteractReader'
-    dataset_name: str = 'birdsql/bird-interact-lite'
-    dataset_path: str = 'data/bird_interact/bird-interact-lite'
+    dataset_name_jsonl: str = 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'
+    dataset_path: str = 'data/bird_interact/bird-interact-full'
     filter_query_category: bool = True
-
-    dataset_kwargs: dict = Field(
-        default_factory=lambda: {
-            "gt_path_jsonl": "data/bird_interact/bird-interact-lite/bird_interact_lite_gt_kg_testcases_1008.jsonl"
-        }
-    )
-    database_engine: str = 'postgresql'  # Database engine label surfaced in prompt templates (e.g. 'postgresql')
     db_dsn_template: str = 'postgresql://root:123123@localhost:5432/{database}'  # DSN template; {database} is replaced with the per-sample database name
-
-    # Prompt related fields
-    prompt_dir: str = 'prompts/bird_interact_a_agent'  # Directory where Jinja prompt templates are stored
-    system_prompt: str | None = 'system.jinja'  # System prompt for chat models
-    user_prompt: str = 'user.jinja'  # User prompt for chat models.
-    # For non-chat templates, the system prompt and the user prompt are concatenated together to form the final prompt template.
-    is_chat_template: bool = False  # Flag to indicate if the prompt template is for chat models
-
-    # USER simulator's params
-    user_simulator_prompt_folder: str = 'prompts/bird_interact_user_simulator'
-    user_simulator_system_prompt: str | None = None
-    user_simulator_user_prompt: str = 'simulator_base.jinja'
+    user_patience_budget: int = 10
 
 
 # ---------------------------------------------------------------------------
@@ -44,22 +28,16 @@ class ConfigReader(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ConfigPredictor(BaseModel):
-    predictor_name: str  # The class name of the predictor to be used, e.g., 'LLMPredictor', 'EmbeddingPredictor', etc.
-    model_name: str  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
-    model_provider: str  # The model provider, e.g., 'openai', 'huggingface', etc.
-    tool_names: list[str] = Field(
-        default_factory=list)  # List of tool names to be used by the predictor, e.g., ['calculator', 'search'], etc.
-    temperature: float
-    top_k: int
-    top_p: float
-    max_new_tokens: int
+    model_name: str = 'gpt-3.5-turbo'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
+    model_provider: str = 'openai'  # The model provider, e.g., 'openai', 'azure', 'anthropic', etc.
+    temperature: float = 0.0
+    top_p: float = 1
+    max_new_tokens: int = 2000
     user_patience_budget: int = 10
 
 
-# ---------------------------------------------------------------------------
-# Input Data for Scorer Name
-# ---------------------------------------------------------------------------
-
-class ConfigScorer(BaseModel):
-    scorer_name: str
-    run_score_in_parallel: bool = False
+class ConfigUserSimulator(BaseModel):
+    model_name: str = 'gpt-3.5-turbo'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
+    model_provider: str = 'openai' # The model provider, e.g., 'openai', 'azure', 'anthropic', etc.
+    temperature: float = 0.0
+    max_new_tokens: int = 500
