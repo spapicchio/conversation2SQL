@@ -13,6 +13,11 @@ The ``ask_user`` tool calls an LLM user-simulator whose prompt templates and
 parameters are stored in ``ToolUserContext``.  ``submit_sql`` records the
 submission in ``template_params.submitted_sql`` and returns a stub response;
 the evaluation harness (scorer) reads that attribute to grade the answer.
+
+Each langchain ``@tool`` is a thin wrapper that pulls the relevant fields out
+of ``runtime.context`` and delegates to a plain Python ``*_impl`` function.
+The ``*_impl`` functions hold all the real logic and are unit-tested directly
+in ``tests/eval_framework/tools/`` without needing the LangGraph runtime.
 """
 import json
 import re
@@ -79,9 +84,60 @@ def stage_2_generator(action,
         "action": action
     })
 
-    content: str = model_user_generator.invoke(messages).content
+    content = model_user_generator.invoke(messages).content
+    if not isinstance(content, str):
+        raise ValueError(f"Expected content to be a string, got {type(content)}")
+
     parsed_content = _extract_group_in_tag_pattern(content, 's')
     return "I'm not sure I understand your question." if parsed_content is None else parsed_content
+
+
+# ---------------------------------------------------------------------------
+# Pure implementation functions (testable without LangGraph runtime)
+# ---------------------------------------------------------------------------
+def ask_user_impl(
+        clarification_question: str,
+        task: TaskData,
+        model_user_parsing: BaseChatModel,
+        model_user_generator: BaseChatModel,
+) -> dict:
+    action = stage_1_parse_action(clarification_question, task, model_user_parsing)
+    generated = stage_2_generator(action, clarification_question, task, model_user_generator)
+    return {"user_answer": generated}
+
+
+def submit_sql_impl(
+        sql: str,
+        sol_sqls: list[str],
+        db_dsn: str,
+        conditions: dict | None,
+) -> dict:
+    pred_sql = remove_round(remove_distinct(remove_comments(sql)))
+    target_sql = remove_round(remove_distinct(remove_comments(sol_sqls[0])))
+    target_result, _ = _execute_query(query=target_sql, db_dsn=db_dsn)
+    passed = False
+    try:
+        pred_result, _ = _execute_query(query=pred_sql, db_dsn=db_dsn)
+        pred_result = preprocess_results(pred_result)
+        target_result = preprocess_results(target_result)
+        if conditions and conditions.get("order", False):
+            if pred_result == target_result:
+                passed = True
+                message = "Phase 1 correct!. Task finished.",
+            else:
+                message = "Your SQL is not correct."
+        else:
+            if set(pred_result) == set(target_result):
+                passed = True
+                message = "Phase 1 correct! Task finished.",
+            else:
+                message = "Your SQL is not correct."
+    except psycopg2.extensions.QueryCanceledError as e:
+        message = f"Submitted SQL execution timed out: {e}"
+    except psycopg2.DatabaseError as e:
+        message = f"DatabaseError executing submitted SQL: {e}"
+
+    return {"passed": passed, "message": message}
 
 
 # ---------------------------------------------------------------------------
@@ -104,13 +160,15 @@ def return_tool_ask_user(model_user_parsing: BaseChatModel,
         Returns:
             The user's response to your question.
         """
-
-        # step 1
-        action = stage_1_parse_action(clarification_question, runtime.context, model_user_parsing)
-        # step 2:
-        generated = stage_2_generator(action, clarification_question, runtime.context, model_user_generator)
-
-        return generated
+        return json.dumps(
+            ask_user_impl(
+                clarification_question=clarification_question,
+                task=runtime.context,
+                model_user_parsing=model_user_parsing,
+                model_user_generator=model_user_generator,
+            ),
+            indent=2,
+        )
 
     return ask_user
 
@@ -133,35 +191,12 @@ def submit_sql(
     Returns:
         Evaluation result including pass/fail, reward, and any follow-up instructions.
     """
-
-    sol_sqls = runtime.context.sol_sql
-    # test_cases = runtime.context.test_cases  # Empty for QUERY only
-    conditions = runtime.context.sql_query_conditions
-    # category = runtime.context.category
-
-    pred_sql = remove_round(remove_distinct(remove_comments(sql)))
-    target_sql = remove_round(remove_distinct(remove_comments(sol_sqls[0])))
-    target_result, _ = _execute_query(query=target_sql, db_dsn=runtime.context.db_dsn)
-    passed = False
-    try:
-        pred_result, _ = _execute_query(query=pred_sql, db_dsn=runtime.context.db_dsn)
-        pred_result = preprocess_results(pred_result)
-        target_result = preprocess_results(target_result)
-        if conditions and conditions.get("order", False):
-            if pred_result == target_result:
-                passed = True
-                message = f"Phase 1 correct!. Task finished.",
-            else:
-                message = "Your SQL is not correct."
-        else:
-            if set(pred_result) == set(target_result):
-                passed = True
-                message = f"Phase 1 correct! Task finished.",
-            else:
-                message = "Your SQL is not correct."
-    except psycopg2.errors.QueryCanceled as e:
-        message = f"Submitted SQL execution timed out: {e}"
-    except psycopg2.DatabaseError as e:
-        message = f"DatabaseError executing submitted SQL: {e}"
-
-    return json.dumps({"passed": passed, "message": message})
+    return json.dumps(
+        submit_sql_impl(
+            sql=sql,
+            sol_sqls=runtime.context.sol_sql,
+            db_dsn=runtime.context.db_dsn,
+            conditions=runtime.context.sql_query_conditions,
+        ),
+        indent=2,
+    )

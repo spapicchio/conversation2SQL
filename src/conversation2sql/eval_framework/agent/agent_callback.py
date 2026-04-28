@@ -1,7 +1,7 @@
 import json
 from typing import Callable, Any
 
-from langchain.agents.middleware import wrap_tool_call, before_model
+from langchain.agents.middleware import wrap_tool_call, before_model, wrap_model_call, ModelRequest, ModelResponse
 from langchain_core.messages import ToolMessage
 from langgraph.prebuilt import ToolRuntime
 from langgraph.prebuilt.tool_node import ToolCallRequest
@@ -37,7 +37,9 @@ def tool_wrapper_append_budget(
     # Execute the tool normally
     response = handler(request)
 
-    # Deduct cost and compute new patience
+    # Compute new patience for display only; the actual state update is a
+    # delta (-cost) so that the reducer in CustomAgentState can combine
+    # multiple parallel tool writes correctly.
     new_patience = max(user_patience - cost, -1)
 
     modified_content = (
@@ -45,11 +47,10 @@ def tool_wrapper_append_budget(
         f"\n\n[SYSTEM NOTE: Remaining budget: {new_patience:.1f}/{initial_user_patience:.1f}]"
     )
 
-    # Return a Command that both updates messages AND decrements user_patience
     return Command(
         update={
             "messages": [response.model_copy(deep=True, update={"content": modified_content})],
-            "updated_user_patience": new_patience,
+            "updated_user_patience": -cost,
         },
     )
 
@@ -65,10 +66,11 @@ def tool_wrapper_submit_sql(
     if tool_name == "submit_sql" and json.loads(response.content)['passed']:
         return Command(
             update={
-                "messages": [ToolMessage(
-                    content=json.loads(response.content)['message'],
-                    tool_call_id=request.tool_call["id"],
-                )],
+                "messages": [
+                    ToolMessage(
+                        content=json.loads(response.content)['message'],
+                        tool_call_id=request.tool_call["id"],
+                    )],
             },
             goto="end",
         )
@@ -78,7 +80,7 @@ def tool_wrapper_submit_sql(
 
 @before_model(state_schema=CustomAgentState, can_jump_to=["end"])
 def model_budget_exhausted(state: CustomAgentState, runtime: Runtime) -> dict[str, Any] | None:
-    updated_user_patience = state.get("updated_user_patience", 0)
-    if updated_user_patience < 0:
+    updated_user_patience = state["updated_user_patience"]
+    if updated_user_patience < -1:
         return {"jump_to": "end"}
     return None

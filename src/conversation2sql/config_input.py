@@ -28,12 +28,11 @@ class ConfigReader(BaseModel):
 # ---------------------------------------------------------------------------
 
 class ConfigPredictor(BaseModel):
-    model_name: str = 'gpt-3.5-turbo'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
-    model_provider: str = 'openai'  # The model provider, e.g., 'openai', 'azure', 'anthropic', etc.
+    model_name: str = 'qwen/qwen3.6-flash'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
+    model_provider: str = 'openrouter'  # The model provider, e.g., 'openai', 'azure', 'anthropic', etc.
     temperature: float = 0.0
     top_p: float = 1
     max_new_tokens: int = 2000
-    user_patience_budget: int = 10
 
 
 class ConfigUserSimulator(BaseModel):

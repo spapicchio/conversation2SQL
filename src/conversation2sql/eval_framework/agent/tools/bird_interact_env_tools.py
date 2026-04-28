@@ -11,6 +11,11 @@ LangGraph.  The runtime carries:
   - ``runtime.context``  → ``UserContext`` (db_dsn, knowledge, column meanings)
   - ``runtime.state``    → ``AgentState``  (user_patience counter)
 
+Each langchain ``@tool`` is a thin wrapper that pulls the relevant fields out
+of ``runtime.context`` and delegates to a plain Python ``*_impl`` function.
+The ``*_impl`` functions hold all the real logic and are unit-tested directly
+in ``tests/eval_framework/tools/`` without needing the LangGraph runtime.
+
 Cost summary (mirrors the original prompt):
     execute_sql                      → 1 patience
     get_schema                       → 1 patience
@@ -20,7 +25,6 @@ Cost summary (mirrors the original prompt):
     get_knowledge_definition         → 0.5 patience
     get_all_knowledge_definitions    → 1 patience
 """
-
 import json
 import re
 
@@ -31,7 +35,7 @@ from pydantic import BaseModel
 
 from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
 from conversation2sql.eval_framework.agent.tools.utils_db_execute import _execute_query, _format_result
-from conversation2sql.eval_framework.state import TaskData
+from conversation2sql.eval_framework.state import ColumnMeaningEntry, ExternalKnowledgeEntry, TaskData
 
 MAX_RESULT_LENGTH = 500
 
@@ -58,7 +62,85 @@ class ExecuteSQLResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Database execution tools
+# Pure implementation functions (testable without LangGraph runtime)
+# ---------------------------------------------------------------------------
+def execute_sql_impl(sql: str, db_dsn: str) -> ExecuteSQLResponse:
+    sql_cleaned = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
+    sql_cleaned = re.sub(r'/\*.*?\*/', '', sql_cleaned, flags=re.DOTALL)
+    sql_upper = sql_cleaned.strip().upper()
+    if not sql_upper.startswith(("SELECT", "WITH", "EXPLAIN")):
+        return ExecuteSQLResponse(
+            result="", success=False,
+            error="Only SELECT queries allowed in execute_sql",
+        )
+
+    try:
+        result, desc = _execute_query(query=sql, db_dsn=db_dsn)
+        format_result = _format_result(result, desc)
+        return ExecuteSQLResponse(result=format_result[:MAX_RESULT_LENGTH], success=True)
+
+    except psycopg2.extensions.QueryCanceledError:
+        return ExecuteSQLResponse(result="", success=False, error="SQL execution timed out")
+
+    except psycopg2.DatabaseError as e:
+        return ExecuteSQLResponse(result="", success=False, error=f"DatabaseError SQL error: {str(e)}")
+
+
+def get_schema_impl(ddl_database_schema: str) -> dict:
+    return {"schema": ddl_database_schema}
+
+
+def get_all_column_meanings_impl(
+        column_meanings: dict[str, ColumnMeaningEntry],
+) -> dict:
+    output = {k: v.model_dump_json(exclude_none=True) for k, v in column_meanings.items()}
+    return {"column_meanings": output}
+
+
+def get_column_meaning_impl(
+        table_name: str,
+        column_name: str,
+        db_name: str,
+        column_meanings: dict[str, ColumnMeaningEntry],
+) -> dict:
+    key = f"{db_name}|{table_name.lower()}|{column_name.lower()}"
+    meaning = column_meanings.get(key, "Column meaning not found")
+    return {
+        "meaning": meaning
+        if isinstance(meaning, str) else meaning.model_dump_json(exclude_none=True)
+    }
+
+
+def get_all_external_knowledge_names_impl(
+        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+) -> dict:
+    return {"names": list(masked_agent_kb.keys())}
+
+
+def get_knowledge_definition_impl(
+        knowledge_name: str,
+        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+) -> dict:
+    if knowledge_name in masked_agent_kb:
+        kb_entry = masked_agent_kb[knowledge_name].model_dump_json(
+            include=set(KNOWLEDGE_VISIBLE_FIELDS))
+        return {"knowledge": kb_entry}
+    return {"knowledge": "Knowledge not found."}
+
+
+def get_all_knowledge_definitions_impl(
+        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+) -> dict:
+    dump_kb = []
+    for knowledge_name in masked_agent_kb:
+        kb_entry = masked_agent_kb[knowledge_name].model_dump_json(
+            include=set(KNOWLEDGE_VISIBLE_FIELDS))
+        dump_kb.append(kb_entry)
+    return {"knowledge": dump_kb}
+
+
+# ---------------------------------------------------------------------------
+# Database execution tools (langchain wrappers)
 # ---------------------------------------------------------------------------
 
 
@@ -74,27 +156,8 @@ def execute_sql(sql: str, runtime: ToolRuntime[TaskData, CustomAgentState]) -> s
     Returns:
         The query results formatted as a table, or an error message.
     """
-    db_dsn = runtime.context.db_dsn
-
-    sql_cleaned = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
-    sql_cleaned = re.sub(r'/\*.*?\*/', '', sql_cleaned, flags=re.DOTALL)
-    sql_upper = sql_cleaned.strip().upper()
-    if not sql_upper.startswith(("SELECT", "WITH", "EXPLAIN")):
-        execute_sql_res = ExecuteSQLResponse(result="", success=False,
-                                             error="Only SELECT queries allowed in execute_sql")
-        return json.dumps(execute_sql_res.model_dump_json(), indent=2)
-
-    try:
-        result, desc = _execute_query(query=sql, db_dsn=db_dsn)
-        format_result = _format_result(result, desc)
-        execute_sql_res = ExecuteSQLResponse(result=format_result[:MAX_RESULT_LENGTH], success=True)
-
-    except psycopg2.errors.QueryCanceled:
-        execute_sql_res = ExecuteSQLResponse(result="", success=False, error="SQL execution timed out")
-    except psycopg2.DatabaseError as e:
-        execute_sql_res = ExecuteSQLResponse(result="", success=False, error=f"DatabaseError SQL error: {str(e)}")
-
-    return json.dumps(execute_sql_res.model_dump_json(), indent=2)
+    response = execute_sql_impl(sql=sql, db_dsn=runtime.context.db_dsn)
+    return response.model_dump_json(indent=2)
 
 
 @tool
@@ -105,8 +168,10 @@ def get_schema(runtime: ToolRuntime[TaskData, CustomAgentState]) -> str:
     Returns:
         The database schema as text.
     """
-    schema = runtime.context.ddl_database_schema
-    return json.dumps({'schema': schema}, indent=2)
+    return json.dumps(
+        get_schema_impl(ddl_database_schema=runtime.context.ddl_database_schema),
+        indent=2,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -120,10 +185,10 @@ def get_all_column_meanings(runtime: ToolRuntime[TaskData, CustomAgentState]) ->
     Returns:
         JSON string with column meanings for all tables.
     """
-    column_meanings = runtime.context.column_meanings
-    #  key = f"{db_name}|{req.table_name.lower()}|{req.column_name.lower()}"
-    output = {k: v.model_dump(exclude_none=True) for k, v in column_meanings.items()}
-    return {"column_meanings": json.dumps(output, indent=2)}
+    return json.dumps(
+        get_all_column_meanings_impl(column_meanings=runtime.context.column_meanings),
+        indent=2,
+    )
 
 
 @tool
@@ -140,13 +205,15 @@ def get_column_meaning(
     Returns:
         The column meaning/description.
     """
-    db_name = runtime.context.selected_database
-    key = f"{db_name}|{table_name.lower()}|{column_name.lower()}"
-    meaning = runtime.context.column_meanings.get(key, "Column meaning not found")
-    return json.dumps({
-        "meaning": meaning
-        if isinstance(meaning, str) else meaning.model_dump(exclude_none=True)
-    }, indent=2)
+    return json.dumps(
+        get_column_meaning_impl(
+            table_name=table_name,
+            column_name=column_name,
+            db_name=runtime.context.selected_database,
+            column_meanings=runtime.context.column_meanings,
+        ),
+        indent=2,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,11 +231,10 @@ def get_all_external_knowledge_names(
     Returns:
         JSON list of knowledge entry names.
     """
-    masked_agent_kb = runtime.context.masked_agent_kb
-    output = {
-        "names": list(masked_agent_kb.keys())
-    }
-    return json.dumps(output, indent=2)
+    return json.dumps(
+        get_all_external_knowledge_names_impl(masked_agent_kb=runtime.context.masked_agent_kb),
+        indent=2,
+    )
 
 
 @tool
@@ -186,12 +252,13 @@ def get_knowledge_definition(
         JSON string with the knowledge definition.
     """
     # Note that for Ambiguous query with KB ambiguity this is masked
-    if knowledge_name in runtime.context.masked_agent_kb:
-        # https://github.com/bird-bench/BIRD-Interact/blob/451fe2c3518ee1cf908d8139e2913483bd519381/BIRD-Interact-ADK/db_environment/server.py#L29
-        kb_entry = runtime.context.masked_agent_kb[knowledge_name].model_dump(include=set(KNOWLEDGE_VISIBLE_FIELDS))
-        return json.dumps({"knowledge": kb_entry}, indent=2)
-
-    return json.dumps({"knowledge": "Knowledge not found."}, indent=2)
+    return json.dumps(
+        get_knowledge_definition_impl(
+            knowledge_name=knowledge_name,
+            masked_agent_kb=runtime.context.masked_agent_kb,
+        ),
+        indent=2,
+    )
 
 
 @tool
@@ -199,9 +266,7 @@ def get_all_knowledge_definitions(
         runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Return all external knowledge with definitions (cost: 1 patience)."""
-    # https://github.com/bird-bench/BIRD-Interact/blob/451fe2c3518ee1cf908d8139e2913483bd519381/BIRD-Interact-ADK/db_environment/server.py#L29
-    dump_kb = []
-    for knowledge_name in runtime.context.masked_agent_kb:
-        kb_entry = runtime.context.masked_agent_kb[knowledge_name].model_dump(include=set(KNOWLEDGE_VISIBLE_FIELDS))
-        dump_kb.append(kb_entry)
-    return json.dumps({"knowledge": dump_kb}, indent=2)
+    return json.dumps(
+        get_all_knowledge_definitions_impl(masked_agent_kb=runtime.context.masked_agent_kb),
+        indent=2,
+    )
