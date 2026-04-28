@@ -59,21 +59,19 @@ class TestProjectPackage(unittest.TestCase):
                 "Run: uv venv --system-site-packages && uv sync && source .venv/bin/activate"
             )
 
-    def test_prompt_factory(self):
+    def test_eval_framework_run_agent(self):
         try:
-            from conversation2sql.prompt_factory import PromptFactory  # noqa: F401
+            from conversation2sql.eval_framework.agent import run_agent  # noqa: F401
         except ImportError as e:
-            self.fail(f"PromptFactory not importable: {e}")
+            self.fail(f"run_agent not importable: {e}")
 
-    def test_eval_registries(self):
+    def test_dataset_readers(self):
         try:
-            from conversation2sql.eval import (  # noqa: F401
-                reader_registry,
-                predictor_registry,
-                scorer_registry,
+            from conversation2sql.eval_framework.dataset_readers import (  # noqa: F401
+                load_bird_interact_as_tasks,
             )
         except ImportError as e:
-            self.fail(f"Eval registries not importable: {e}")
+            self.fail(f"dataset_readers not importable: {e}")
 
 
 class TestSystemTools(unittest.TestCase):
