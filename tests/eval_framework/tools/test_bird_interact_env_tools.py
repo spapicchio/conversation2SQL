@@ -4,8 +4,9 @@ Each test exercises the pure ``*_impl`` function directly so the behaviour is
 verified without needing a LangGraph runtime, the LangChain ``@tool``
 decorator, or a real PostgreSQL server.
 """
-
 from __future__ import annotations
+
+from conversation2sql.eval_framework.agent.tools.utils_db_execute import _execute_query
 
 import json
 from unittest.mock import patch
@@ -32,6 +33,36 @@ from conversation2sql.eval_framework.agent.tools.bird_interact_env_tools import 
 # ---------------------------------------------------------------------------
 # execute_sql_impl
 # ---------------------------------------------------------------------------
+
+def test_long_run_timeout_real_db():
+    sql = "SELECT pg_sleep(3600);"
+    db_dsn = 'postgresql://root:123123@localhost:5433/solar_panel'
+    output = execute_sql_impl(
+        sql,
+        db_dsn
+    )
+    assert output.success is False
+    assert output.error == "SQL execution timed out"
+
+
+def test_simple_query_real_db():
+    sql = "SELECT sitekey, sitelabel FROM plants LIMIT 10;"
+    db_dsn = 'postgresql://root:123123@localhost:5433/solar_panel'
+    result, desc = _execute_query(
+        sql,
+        db_dsn
+    )
+    print(result)
+    assert len(result) == 10
+    assert desc[0][0] == "sitekey"
+    assert desc[1][0] == "sitelabel"
+    response = execute_sql_impl(sql, db_dsn)
+    assert response.success is True
+    assert response.error is None
+
+
+
+
 class TestExecuteSqlImpl:
     """Behavioural contract for ``execute_sql_impl``.
 
@@ -149,15 +180,7 @@ class TestExecuteSqlImpl:
         assert response.success is True
         assert len(response.result) == env_tools.MAX_RESULT_LENGTH
 
-    def test_long_run_timeout_real_db(self):
-        sql = "SELECT pg_sleep(3600);"
-        db_dsn = 'postgresql://root:123123@localhost:5433/solar_panel'
-        output = execute_sql_impl(
-            sql,
-            db_dsn
-        )
-        assert output.success is False
-        assert output.error == "SQL execution timed out"
+
 
 # ---------------------------------------------------------------------------
 # get_schema_impl

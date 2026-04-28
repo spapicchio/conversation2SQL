@@ -25,6 +25,7 @@ Cost summary (mirrors the original prompt):
     get_knowledge_definition         → 0.5 patience
     get_all_knowledge_definitions    → 1 patience
 """
+
 import json
 import re
 
@@ -34,13 +35,20 @@ from langgraph.prebuilt import ToolRuntime
 from pydantic import BaseModel
 
 from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
-from conversation2sql.eval_framework.agent.tools.utils_db_execute import _execute_query, _format_result
-from conversation2sql.eval_framework.state import ColumnMeaningEntry, ExternalKnowledgeEntry, TaskData
+from conversation2sql.eval_framework.agent.tools.utils_db_execute import (
+    _execute_query,
+    _format_result,
+)
+from conversation2sql.eval_framework.state import (
+    ColumnMeaningEntry,
+    ExternalKnowledgeEntry,
+    TaskData,
+)
 
 MAX_RESULT_LENGTH = 500
 
 DB_TOOL_COSTS: dict[str, float] = {
-    "execute_sql": 1.0,
+    "execute_sql": 2.0,
     "get_schema": 1.0,
     "get_all_column_meanings": 1.0,
     "get_column_meaning": 0.5,
@@ -58,32 +66,40 @@ KNOWLEDGE_VISIBLE_FIELDS = ["id", "knowledge", "description", "definition"]
 class ExecuteSQLResponse(BaseModel):
     result: str
     success: bool
-    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Pure implementation functions (testable without LangGraph runtime)
 # ---------------------------------------------------------------------------
 def execute_sql_impl(sql: str, db_dsn: str) -> ExecuteSQLResponse:
-    sql_cleaned = re.sub(r'--.*$', '', sql, flags=re.MULTILINE)
-    sql_cleaned = re.sub(r'/\*.*?\*/', '', sql_cleaned, flags=re.DOTALL)
+    sql_cleaned = re.sub(r"--.*$", "", sql, flags=re.MULTILINE)
+    sql_cleaned = re.sub(r"/\*.*?\*/", "", sql_cleaned, flags=re.DOTALL)
     sql_upper = sql_cleaned.strip().upper()
     if not sql_upper.startswith(("SELECT", "WITH", "EXPLAIN")):
         return ExecuteSQLResponse(
-            result="", success=False,
-            error="Only SELECT queries allowed in execute_sql",
+            result="Error: Only SELECT queries are allowed for execution in this environment.",
+            success=False,
         )
 
     try:
         result, desc = _execute_query(query=sql, db_dsn=db_dsn)
         format_result = _format_result(result, desc)
-        return ExecuteSQLResponse(result=format_result[:MAX_RESULT_LENGTH], success=True)
+        return ExecuteSQLResponse(
+            result=f"The query returned the following results:\n{format_result[:MAX_RESULT_LENGTH]}",
+            success=True,
+        )
 
     except psycopg2.extensions.QueryCanceledError:
-        return ExecuteSQLResponse(result="", success=False, error="SQL execution timed out")
+        return ExecuteSQLResponse(
+            result="Error: SQL execution timed out.",
+            success=False,
+        )
 
     except psycopg2.DatabaseError as e:
-        return ExecuteSQLResponse(result="", success=False, error=f"DatabaseError SQL error: {str(e)}")
+        return ExecuteSQLResponse(
+            result=f"Error: Database error occurred: {str(e)}.",
+            success=False,
+        )
 
 
 def get_schema_impl(ddl_database_schema: str) -> dict:
@@ -91,50 +107,55 @@ def get_schema_impl(ddl_database_schema: str) -> dict:
 
 
 def get_all_column_meanings_impl(
-        column_meanings: dict[str, ColumnMeaningEntry],
+    column_meanings: dict[str, ColumnMeaningEntry],
 ) -> dict:
-    output = {k: v.model_dump_json(exclude_none=True) for k, v in column_meanings.items()}
+    output = {
+        k: v.model_dump_json(exclude_none=True) for k, v in column_meanings.items()
+    }
     return {"column_meanings": output}
 
 
 def get_column_meaning_impl(
-        table_name: str,
-        column_name: str,
-        db_name: str,
-        column_meanings: dict[str, ColumnMeaningEntry],
+    table_name: str,
+    column_name: str,
+    db_name: str,
+    column_meanings: dict[str, ColumnMeaningEntry],
 ) -> dict:
     key = f"{db_name}|{table_name.lower()}|{column_name.lower()}"
     meaning = column_meanings.get(key, "Column meaning not found")
     return {
         "meaning": meaning
-        if isinstance(meaning, str) else meaning.model_dump_json(exclude_none=True)
+        if isinstance(meaning, str)
+        else meaning.model_dump_json(exclude_none=True)
     }
 
 
 def get_all_external_knowledge_names_impl(
-        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     return {"names": list(masked_agent_kb.keys())}
 
 
 def get_knowledge_definition_impl(
-        knowledge_name: str,
-        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+    knowledge_name: str,
+    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     if knowledge_name in masked_agent_kb:
         kb_entry = masked_agent_kb[knowledge_name].model_dump_json(
-            include=set(KNOWLEDGE_VISIBLE_FIELDS))
+            include=set(KNOWLEDGE_VISIBLE_FIELDS)
+        )
         return {"knowledge": kb_entry}
     return {"knowledge": "Knowledge not found."}
 
 
 def get_all_knowledge_definitions_impl(
-        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     dump_kb = []
     for knowledge_name in masked_agent_kb:
         kb_entry = masked_agent_kb[knowledge_name].model_dump_json(
-            include=set(KNOWLEDGE_VISIBLE_FIELDS))
+            include=set(KNOWLEDGE_VISIBLE_FIELDS)
+        )
         dump_kb.append(kb_entry)
     return {"knowledge": dump_kb}
 
@@ -157,7 +178,7 @@ def execute_sql(sql: str, runtime: ToolRuntime[TaskData, CustomAgentState]) -> s
         The query results formatted as a table, or an error message.
     """
     response = execute_sql_impl(sql=sql, db_dsn=runtime.context.db_dsn)
-    return response.model_dump_json(indent=2)
+    return response.result
 
 
 @tool
@@ -193,7 +214,7 @@ def get_all_column_meanings(runtime: ToolRuntime[TaskData, CustomAgentState]) ->
 
 @tool
 def get_column_meaning(
-        table_name: str, column_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
+    table_name: str, column_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
 ) -> str:
     """Get the meaning/description of a specific column in a table.
     Cost: 0.5 bird-coins.
@@ -220,9 +241,10 @@ def get_column_meaning(
 # External knowledge tools
 # ---------------------------------------------------------------------------
 
+
 @tool
 def get_all_external_knowledge_names(
-        runtime: ToolRuntime[TaskData, CustomAgentState],
+    runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Get the names of all available external knowledge entries for this database.
     Use this to discover what domain knowledge is available.
@@ -232,15 +254,17 @@ def get_all_external_knowledge_names(
         JSON list of knowledge entry names.
     """
     return json.dumps(
-        get_all_external_knowledge_names_impl(masked_agent_kb=runtime.context.masked_agent_kb),
+        get_all_external_knowledge_names_impl(
+            masked_agent_kb=runtime.context.masked_agent_kb
+        ),
         indent=2,
     )
 
 
 @tool
 def get_knowledge_definition(
-        knowledge_name: str,
-        runtime: ToolRuntime[TaskData, CustomAgentState],
+    knowledge_name: str,
+    runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Get the definition/details of a specific external knowledge entry.
     Cost: 0.5 bird-coins.
@@ -263,10 +287,27 @@ def get_knowledge_definition(
 
 @tool
 def get_all_knowledge_definitions(
-        runtime: ToolRuntime[TaskData, CustomAgentState],
+    runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Return all external knowledge with definitions (cost: 1 patience)."""
     return json.dumps(
-        get_all_knowledge_definitions_impl(masked_agent_kb=runtime.context.masked_agent_kb),
+        get_all_knowledge_definitions_impl(
+            masked_agent_kb=runtime.context.masked_agent_kb
+        ),
         indent=2,
     )
+
+
+if __name__ == "__main__":
+    sql = "SELECT pr.snapkey, pr.sitetie, om.mtbfh, om.mttrh\nFROM plant_record pr\nJOIN plants p ON pr.sitetie = p.sitekey\nJOIN operational_metrics om ON pr.snapkey = om.snapops\nWHERE p.sitelabel = 'Solar Plant West Davidport';"
+    sql = "SELECT a.snapalrt, a.alrtstate, a.alrtc, a.maintprio, a.replprio\nFROM alert a\nJOIN plant_record pr ON a.snapalrt = pr.snapkey\nJOIN plants p ON pr.sitetie = p.sitekey\nWHERE p.sitelabel = 'Solar Plant West Davidport'"
+    sql = "SELECT i.inspectmode, i.inspectres, i.inspectdt, i.maintsched, i.dqscore\nFROM inspection i\nWHERE i.inspectmode IN (SELECT pr.snapkey FROM plant_record pr JOIN plants p ON pr.sitetie = p.sitekey WHERE p.sitelabel = 'Solar Plant West Davidport')"
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    response = execute_sql_impl(sql, db_dsn=db_dsn)
+    print(response.result)
+
+    result, desc = _execute_query(query=sql, db_dsn=db_dsn)
+    print()
+    print(result)
+    print()
+    print(desc)

@@ -19,6 +19,9 @@ of ``runtime.context`` and delegates to a plain Python ``*_impl`` function.
 The ``*_impl`` functions hold all the real logic and are unit-tested directly
 in ``tests/eval_framework/tools/`` without needing the LangGraph runtime.
 """
+
+from conversation2sql.eval_framework.agent.tools.utils_db_execute import _format_result
+from sqlglot import condition
 import json
 import re
 
@@ -28,11 +31,20 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
 from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
-from conversation2sql.eval_framework.agent.tools.bird_user_prompt import build_llm_as_a_parser_messages, \
-    build_llm_as_a_generator_messages
-from conversation2sql.eval_framework.agent.tools.utils import _segment_sql_and_parse_in_str, remove_round, \
-    remove_distinct, remove_comments
-from conversation2sql.eval_framework.agent.tools.utils_db_execute import _execute_query, preprocess_results
+from conversation2sql.eval_framework.agent.tools.bird_user_prompt import (
+    build_llm_as_a_parser_messages,
+    build_llm_as_a_generator_messages,
+)
+from conversation2sql.eval_framework.agent.tools.utils import (
+    _segment_sql_and_parse_in_str,
+    remove_round,
+    remove_distinct,
+    remove_comments,
+)
+from conversation2sql.eval_framework.agent.tools.utils_db_execute import (
+    _execute_query,
+    preprocess_results,
+)
 from conversation2sql.eval_framework.state import TaskData
 
 USER_TOOL_COSTS: dict[str, float] = {
@@ -41,7 +53,7 @@ USER_TOOL_COSTS: dict[str, float] = {
 }
 
 
-def _extract_group_in_tag_pattern(content: str, pattern_tag: str = 's') -> str | None:
+def _extract_group_in_tag_pattern(content: str, pattern_tag: str = "s") -> str | None:
     pattern = re.compile(
         rf"\s*<{pattern_tag}>\s*([\s\S]*?)\s*</{pattern_tag}>\s*",
         flags=re.DOTALL | re.MULTILINE | re.IGNORECASE,
@@ -52,84 +64,114 @@ def _extract_group_in_tag_pattern(content: str, pattern_tag: str = 's') -> str |
     return None
 
 
-def stage_1_parse_action(clarification_question, task: TaskData, model_user_parsing: BaseChatModel) -> str:
+def stage_1_parse_action(
+    clarification_question, task: TaskData, model_user_parsing: BaseChatModel
+) -> str:
     """Stage 1: Action Parser — maps clarification question to action (AMB/LOC/UNA)."""
 
-    sql_segments = "\n===\n".join(_segment_sql_and_parse_in_str(sql) for sql in task.sol_sql)
+    sql_segments = "\n===\n".join(
+        _segment_sql_and_parse_in_str(sql) for sql in task.sol_sql
+    )
 
-    messages = build_llm_as_a_parser_messages({
-        'ambiguities_json': json.dumps(task.user_query_ambiguity, indent=4),
-        'sql_segments': sql_segments,
-        'clarification_question': clarification_question,
-    })
+    messages = build_llm_as_a_parser_messages(
+        {
+            "ambiguities_json": json.dumps(task.user_query_ambiguity, indent=4),
+            "sql_segments": sql_segments,
+            "clarification_question": clarification_question,
+        }
+    )
 
-    content: str = model_user_parsing.invoke(messages).content  # pyrefly: ignore
-    parsed_content = _extract_group_in_tag_pattern(content, 's')
-    return "I'm not sure I understand your question." if parsed_content is None else parsed_content
+    content = model_user_parsing.invoke(messages).content
+
+    if isinstance(content, list):
+        content = "\n".join(
+            [msg if isinstance(msg, str) else msg[msg["type"]] for msg in content]
+        )
+
+    parsed_content = _extract_group_in_tag_pattern(content, "s")
+    return (
+        "I'm not sure I understand your question."
+        if parsed_content is None
+        else parsed_content
+    )
 
 
-def stage_2_generator(action,
-                      clarification_question,
-                      task: TaskData,
-                      model_user_generator: BaseChatModel) -> str:
-    sql_segments = "\n===\n".join(_segment_sql_and_parse_in_str(sql) for sql in task.sol_sql)
+def stage_2_generator(
+    action, clarification_question, task: TaskData, model_user_generator: BaseChatModel
+) -> str:
+    sql_segments = "\n===\n".join(
+        _segment_sql_and_parse_in_str(sql) for sql in task.sol_sql
+    )
 
-    messages = build_llm_as_a_generator_messages({
-        "db_schema": task.ddl_database_schema,
-        "ambiguities_json": json.dumps(task.user_query_ambiguity, indent=4),
-        "not_ambig_question": task.not_ambiguos_query,
-        "gt_sql": task.sol_sql,
-        "sql_segments": sql_segments,
-        "asked_question": clarification_question,
-        "action": action
-    })
+    messages = build_llm_as_a_generator_messages(
+        {
+            "db_schema": task.ddl_database_schema,
+            "ambiguities_json": json.dumps(task.user_query_ambiguity, indent=4),
+            "not_ambig_question": task.not_ambiguos_query,
+            "gt_sql": task.sol_sql,
+            "sql_segments": sql_segments,
+            "asked_question": clarification_question,
+            "action": action,
+        }
+    )
 
     content = model_user_generator.invoke(messages).content
-    if not isinstance(content, str):
-        raise ValueError(f"Expected content to be a string, got {type(content)}")
 
-    parsed_content = _extract_group_in_tag_pattern(content, 's')
-    return "I'm not sure I understand your question." if parsed_content is None else parsed_content
+    if isinstance(content, list):
+        content = "\n".join(
+            [msg if isinstance(msg, str) else msg[msg["type"]] for msg in content]
+        )
+
+    parsed_content = _extract_group_in_tag_pattern(content, "s")
+    return (
+        "I'm not sure I understand your question."
+        if parsed_content is None
+        else parsed_content
+    )
 
 
 # ---------------------------------------------------------------------------
 # Pure implementation functions (testable without LangGraph runtime)
 # ---------------------------------------------------------------------------
 def ask_user_impl(
-        clarification_question: str,
-        task: TaskData,
-        model_user_parsing: BaseChatModel,
-        model_user_generator: BaseChatModel,
+    clarification_question: str,
+    task: TaskData,
+    model_user_parsing: BaseChatModel,
+    model_user_generator: BaseChatModel,
 ) -> dict:
     action = stage_1_parse_action(clarification_question, task, model_user_parsing)
-    generated = stage_2_generator(action, clarification_question, task, model_user_generator)
+    generated = stage_2_generator(
+        action, clarification_question, task, model_user_generator
+    )
     return {"user_answer": generated}
 
 
 def submit_sql_impl(
-        sql: str,
-        sol_sqls: list[str],
-        db_dsn: str,
-        conditions: dict | None,
+    sql: str,
+    sol_sqls: list[str],
+    db_dsn: str,
+    conditions: dict | None,
 ) -> dict:
     pred_sql = remove_round(remove_distinct(remove_comments(sql)))
     target_sql = remove_round(remove_distinct(remove_comments(sol_sqls[0])))
-    target_result, _ = _execute_query(query=target_sql, db_dsn=db_dsn)
+    target_result, target_desc = _execute_query(query=target_sql, db_dsn=db_dsn)
     passed = False
     try:
-        pred_result, _ = _execute_query(query=pred_sql, db_dsn=db_dsn)
-        pred_result = preprocess_results(pred_result)
-        target_result = preprocess_results(target_result)
+        pred_result, pred_desc = _execute_query(query=pred_sql, db_dsn=db_dsn)
+
+        pred_result = preprocess_results(pred_result, pred_desc)
+        target_result = preprocess_results(target_result, target_desc)
+        
         if conditions and conditions.get("order", False):
             if pred_result == target_result:
                 passed = True
-                message = "Phase 1 correct!. Task finished.",
+                message = ("Phase 1 correct!. Task finished.",)
             else:
-                message = "Your SQL is not correct."
+                message = "Your SQL is not correct one."
         else:
             if set(pred_result) == set(target_result):
                 passed = True
-                message = "Phase 1 correct! Task finished.",
+                message = ("Phase 1 correct! Task finished.",)
             else:
                 message = "Your SQL is not correct."
     except psycopg2.extensions.QueryCanceledError as e:
@@ -143,12 +185,13 @@ def submit_sql_impl(
 # ---------------------------------------------------------------------------
 # Ask user (clarification) — cost: 2 patience
 # ---------------------------------------------------------------------------
-def return_tool_ask_user(model_user_parsing: BaseChatModel,
-                         model_user_generator: BaseChatModel):
+def return_tool_ask_user(
+    model_user_parsing: BaseChatModel, model_user_generator: BaseChatModel
+):
     @tool
     def ask_user(
-            clarification_question: str,
-            runtime: ToolRuntime[TaskData, CustomAgentState],
+        clarification_question: str,
+        runtime: ToolRuntime[TaskData, CustomAgentState],
     ) -> str:
         """Ask the user a clarification question about their query.
         Use this when the user's request is ambiguous and you need more information.
@@ -178,8 +221,8 @@ def return_tool_ask_user(model_user_parsing: BaseChatModel,
 # ---------------------------------------------------------------------------
 @tool
 def submit_sql(
-        sql: str,
-        runtime: ToolRuntime[TaskData, CustomAgentState],
+    sql: str,
+    runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Submit your final SQL query for evaluation.
     This tests your SQL against the ground truth. Only submit when confident.
@@ -200,3 +243,29 @@ def submit_sql(
         ),
         indent=2,
     )
+
+
+if __name__ == "__main__":
+    # content = 'The AI collaborator is asking about our meaning of “downtime score,” which is an existing labeled ambiguity point. So we select that term.\n\n<s>labeled("downtime score")</s>'
+    # output = _extract_group_in_tag_pattern(
+    #     content=content,
+    #     # pattern_tag=pattern_tag,
+    # )
+
+    # print(output)
+    # sql = "SELECT \n    p.sitelabel,\n    om.mtbfh,\n    om.mttrh,\n    CASE \n        WHEN om.mtbfh IS NOT NULL AND (om.mtbfh + om.mttrh) > 0 \n        THEN om.mttrh / (om.mtbfh + om.mttrh)\n        ELSE NULL\n    END AS downtime_score\nFROM plants p\nJOIN plant_record pr ON p.sitekey = pr.sitetie\nJOIN operational_metrics om ON pr.snapkey = om.snapops\nWHERE p.sitelabel = 'Solar Plant West Davidport';"
+    sol_sqls = [
+        """SELECT om.mttrh / (om.mtbfh + om.mttrh) AS downtime_score\nFROM plant_record pr\nJOIN operational_metrics om ON pr.snapkey = om.snapops\nJOIN plants p ON pr.sitetie = p.sitekey\nWHERE p.sitelabel = 'Solar Plant West Davidport';"""
+    ]
+    sql = 'SELECT ROUND(CAST(om."mttrh" / (om."mtbfh" + om."mttrh") AS numeric), 4)\nFROM operational_metrics om\nJOIN plant_record pr ON om."snapops" = pr."snapkey"\nJOIN plants p ON pr."sitetie" = p."sitekey"\nWHERE LOWER(p."sitelabel") = \'solar plant west davidport\'\nLIMIT 1;'
+
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+
+    output = submit_sql_impl(
+        sql=sql,
+        sol_sqls=sol_sqls,
+        db_dsn=db_dsn,
+        conditions=None,
+    )
+
+    print(output)
