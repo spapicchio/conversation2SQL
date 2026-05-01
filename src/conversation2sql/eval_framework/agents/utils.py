@@ -2,105 +2,15 @@ import json
 import re
 from typing import Any
 
-from langchain.agents import create_agent
-from langchain.agents.middleware import (
-    ToolCallLimitMiddleware,
-    ModelCallLimitMiddleware,
-    ModelRetryMiddleware,
-    ToolRetryMiddleware,
-)
-from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
+from langchain_core.messages import BaseMessage, AIMessage, ToolMessage
+from langchain_litellm import ChatLiteLLM
 
-from conversation2sql.eval_framework.agent.agent_callback import (
-    tool_wrapper_patience_and_submit,
-    TOOL_COSTS,
-    wrap_model_append_tool_message, check_budget_limit,
-)
-from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
-from conversation2sql.eval_framework.agent.prompts import (
-    build_bird_interact_agent_messages,
-)
-from conversation2sql.eval_framework.agent.tools import (
-    execute_sql,
-    get_all_column_meanings,
-    get_schema,
-    get_column_meaning,
-    get_all_external_knowledge_names,
-    get_knowledge_definition,
-    get_all_knowledge_definitions,
-    return_tool_ask_user,
-    submit_sql,
-)
-from conversation2sql.eval_framework.state import TaskData
-from conversation2sql.logger import get_logger
-
-logger = get_logger(__name__)
+from conversation2sql.eval_framework.agents.bird_baseline.agent_callback import TOOL_COSTS
+from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
 
 
-def run_agent(
-        single_task: TaskData,
-        model_agent: BaseChatModel,
-        model_user_parsing: BaseChatModel,
-        model_user_generator: BaseChatModel,
-) -> CustomAgentState:
-    messages = build_bird_interact_agent_messages(
-        params={
-            "total_budget": single_task.task_budget,
-            "amb_user_query": single_task.amb_user_query,
-            # "amb_user_query": 'This is a debug message, call only ask_user as tool with an invented question and return without submitting'
-        }
-    )
-
-    tools = [
-        execute_sql,
-        get_all_column_meanings,
-        get_schema,
-        get_column_meaning,
-        get_all_external_knowledge_names,
-        get_knowledge_definition,
-        get_all_knowledge_definitions,
-        return_tool_ask_user(model_user_parsing, model_user_generator),
-        submit_sql,
-    ]
-
-    agent = create_agent(
-        model_agent,
-        tools,
-        state_schema=CustomAgentState,  # mutable from the tool
-        context_schema=TaskData,  # immutable cannot be changed in the tool
-        middleware=[  # pyrefly: ignore
-            ModelRetryMiddleware(max_delay=60.0, on_failure="error"),
-            ToolRetryMiddleware(max_delay=60.0, on_failure="error"),
-            ModelCallLimitMiddleware(run_limit=single_task.task_budget + 5),
-            ToolCallLimitMiddleware(
-                # Maximum tool calls per single invocation (one user message → response cycle).
-                # Resets with each new user message.
-                run_limit=single_task.task_budget + 5,
-                # Maximum tool calls across all runs in a thread (conversation).
-                # Persists across multiple invocations with the same thread ID.
-                # Requires a checkpointer to maintain state. None means no thread limit.
-                thread_limit=single_task.task_budget * 2,
-            ),
-            check_budget_limit,
-            wrap_model_append_tool_message,
-            tool_wrapper_patience_and_submit,
-        ],
-    )
-
-    agent_state: CustomAgentState = {
-        "messages": messages,  # pyrefly: ignore,
-        "initial_user_patience": single_task.task_budget,
-        "updated_user_patience": single_task.task_budget,
-        "tool_called_patience": list(),
-    }
-
-    response: CustomAgentState = agent.invoke(agent_state, context=single_task)  # pyrefly: ignore
-    return _process_agent_response(response)
-
-
-def _process_agent_response(response: CustomAgentState) -> Any:
-    messages = [_process_single_msg(m) for m in response.pop("messages")]
+def utils_process_agent_response(response: CustomAgentState) -> Any:
+    messages = [utils_process_single_msg(m) for m in response.pop("messages")]
     total_cost = 0
     total_tokens = 0
     mean_prompt_tokens = []
@@ -131,7 +41,7 @@ def _process_agent_response(response: CustomAgentState) -> Any:
     }
 
 
-def _process_single_msg(message: BaseMessage) -> dict:
+def utils_process_single_msg(message: BaseMessage) -> dict:
     # https://docs.langchain.com/oss/python/langchain/messages
     base = {
         "role": message.type,  # 'ai' | 'human' | 'system' | 'tool'
@@ -139,7 +49,7 @@ def _process_single_msg(message: BaseMessage) -> dict:
     }
 
     if isinstance(message, AIMessage):
-        return {**base, **_extract_ai_metadata(message)}
+        return {**base, **utils_extract_ai_metadata(message)}
 
     if isinstance(message, ToolMessage):
         content = base.pop("content")
@@ -161,7 +71,7 @@ def _process_single_msg(message: BaseMessage) -> dict:
     return base
 
 
-def _extract_ai_metadata(message: AIMessage) -> dict:
+def utils_extract_ai_metadata(message: AIMessage) -> dict:
     # --- token usage (LangChain-normalised; LiteLLM populates this for all providers) ---
     um = (
             message.usage_metadata or {}
@@ -221,3 +131,18 @@ def _extract_ai_metadata(message: AIMessage) -> dict:
         "tool_calls": tool_calls,
         "invalid_tool_calls": invalid_tool_calls,
     }
+
+
+def utils_create_model(model_name: str, model_provider: str, temperature: float,
+                       max_tokens: int, top_p: float | None = None) -> ChatLiteLLM:
+    # LiteLLM uses "{provider}/{model}" format
+    # https://docs.litellm.ai/docs/providers
+
+    litellm_model = f"{model_provider}/{model_name}"
+    # reasoning + result
+    model_kwargs = {'max_completion_tokens': max_tokens + 2000}
+    kwargs = dict(model=litellm_model, temperature=temperature, max_tokens=max_tokens, model_kwargs=model_kwargs)
+    if top_p is not None:
+        kwargs["top_p"] = top_p
+
+    return ChatLiteLLM(**kwargs)

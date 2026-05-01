@@ -12,6 +12,7 @@ pipeline:
   output_folder: "results"  # Folder to save results and logs
   concurrency: 5  # Number of parallel tasks to run
 
+
 reader:
   dataset_name_jsonl: 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'
   dataset_path: 'data/bird_interact/bird-interact-full'
@@ -19,6 +20,8 @@ reader:
   # db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}' # Lite DB
   db_dsn_template: 'postgresql://root:123123@localhost:5433/{database}' # Full DB
   user_patience_budget: 1
+  make_data_ambiguous: true # if set to False, the data is not made ambiguous (KG is not masked and the question does not contain ambiguity)
+
 
 # ── Predictor ─────────────────────────────────────────────────────────────────
 # Calls an LLM and returns the full message list including tool calls.

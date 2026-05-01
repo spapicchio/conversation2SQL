@@ -1,7 +1,7 @@
 # =============================================================================
 # LLM-as-a-Parser  (step 1 of two-stage user simulator)
 # =============================================================================
-from conversation2sql.eval_framework.agent.prompts import _build_messages
+from conversation2sql.eval_framework.agents.bird_baseline.prompts import _build_messages
 
 _PARSER_USER = """
 You are role-playing as a human USER interacting with an AI collaborator to complete a Text-to-SQL task. The AI collaborator may ask one question about this task. Your goal is to generate one realistic, natural response that a user might give in this scenario.

@@ -20,8 +20,6 @@ The ``*_impl`` functions hold all the real logic and are unit-tested directly
 in ``tests/eval_framework/tools/`` without needing the LangGraph runtime.
 """
 
-from conversation2sql.eval_framework.agent.tools.utils_db_execute import _format_result
-from sqlglot import condition
 import json
 import re
 
@@ -30,18 +28,18 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
-from conversation2sql.eval_framework.agent.tools.bird_user_prompt import (
+from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_user_prompt import (
     build_llm_as_a_parser_messages,
     build_llm_as_a_generator_messages,
 )
-from conversation2sql.eval_framework.agent.tools.utils import (
+from conversation2sql.eval_framework.agents.bird_baseline.tools.utils import (
     _segment_sql_and_parse_in_str,
     remove_round,
     remove_distinct,
     remove_comments,
 )
-from conversation2sql.eval_framework.agent.tools.utils_db_execute import (
+from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute import (
     _execute_query,
     preprocess_results,
 )
@@ -107,7 +105,7 @@ def stage_2_generator(
         {
             "db_schema": task.ddl_database_schema,
             "ambiguities_json": json.dumps(task.user_query_ambiguity, indent=4),
-            "not_ambig_question": task.not_ambiguos_query,
+            "not_ambig_question": task.task_question,
             "gt_sql": task.sol_sql,
             "sql_segments": sql_segments,
             "asked_question": clarification_question,

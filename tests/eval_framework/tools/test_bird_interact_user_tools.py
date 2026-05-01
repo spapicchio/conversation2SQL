@@ -11,8 +11,8 @@ from unittest.mock import patch
 import psycopg2
 import pytest
 
-from conversation2sql.eval_framework.agent.tools import bird_interact_user_tools as user_tools
-from conversation2sql.eval_framework.agent.tools.bird_interact_user_tools import (
+from conversation2sql.eval_framework.agents.bird_baseline.tools import bird_interact_user_tools as user_tools
+from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     _extract_group_in_tag_pattern,
     ask_user_impl,
     stage_1_parse_action,

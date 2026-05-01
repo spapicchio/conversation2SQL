@@ -21,6 +21,7 @@ class ConfigReader(BaseModel):
     filter_query_category: bool = True
     db_dsn_template: str = 'postgresql://root:123123@localhost:5432/{database}'  # DSN template; {database} is replaced with the per-sample database name
     user_patience_budget: int = 10
+    make_data_ambiguous: bool = True
 
 
 # ---------------------------------------------------------------------------

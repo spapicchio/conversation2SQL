@@ -1,4 +1,4 @@
-from conversation2sql.eval_framework.agent.tools.bird_interact_env_tools import (
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
     execute_sql,
     get_all_column_meanings,
     get_schema, get_column_meaning,
@@ -8,7 +8,7 @@ from conversation2sql.eval_framework.agent.tools.bird_interact_env_tools import 
     DB_TOOL_COSTS,
 )
 
-from conversation2sql.eval_framework.agent.tools.bird_interact_user_tools import (
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_user_tools import (
     USER_TOOL_COSTS,
     return_tool_ask_user,
     submit_sql

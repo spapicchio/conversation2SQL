@@ -34,8 +34,8 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 from pydantic import BaseModel
 
-from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
-from conversation2sql.eval_framework.agent.tools.utils_db_execute import (
+from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute import (
     _execute_query,
     _format_result,
 )
@@ -85,7 +85,7 @@ def execute_sql_impl(sql: str, db_dsn: str) -> ExecuteSQLResponse:
         result, desc = _execute_query(query=sql, db_dsn=db_dsn)
         format_result = _format_result(result, desc)
         return ExecuteSQLResponse(
-            result=f"The query returned the following results:\n{format_result[:MAX_RESULT_LENGTH]}",
+            result=f"{format_result[:MAX_RESULT_LENGTH]}",
             success=True,
         )
 

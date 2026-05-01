@@ -1,24 +1,19 @@
 import copy
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
 import tqdm
 import yaml
-from langchain_litellm import ChatLiteLLM
 
 from conversation2sql.config_input import ConfigReader, ConfigPredictor, ConfigUserSimulator, ConfigPipeline
-from conversation2sql.eval_framework.agent import run_agent
-from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents import run_agent_bird_baseline
+from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents.utils import utils_create_model
 from conversation2sql.eval_framework.dataset_readers import load_bird_interact_as_tasks
 from conversation2sql.eval_framework.state import TaskData
 from conversation2sql.logger import get_logger
 
 logger = get_logger(__name__)
-
-LAUNCH_TS = datetime.now(timezone.utc)  # fixed timestamp for this process run
-LAUNCH_DAY = LAUNCH_TS.strftime("%Y_%m_%d")
-LAUNCH_HOUR = LAUNCH_TS.strftime("%H_%M_%S")
 
 
 def workflow_evaluation_pipeline(
@@ -54,7 +49,7 @@ def workflow_evaluation_pipeline(
     result = []
     try:
         for i, task in tqdm.tqdm(enumerate(dataset), desc="Processing dataset"):
-            response: CustomAgentState = run_agent(task, model_agent, model_user_parsing, model_user_generator)
+            response: CustomAgentState = run_agent_bird_baseline(task, model_agent, model_user_parsing, model_user_generator)
             task_output = {
                 "config_predictor": config_predictor.model_dump(),
                 "config_user": config_user.model_dump(),
@@ -82,34 +77,22 @@ def workflow_evaluation_pipeline(
     return result
 
 
-def _create_model(model_name: str, model_provider: str, temperature: float,
-                  max_tokens: int, top_p: float | None = None):
-    # LiteLLM uses "{provider}/{model}" format
-    # https://docs.litellm.ai/docs/providers
-    litellm_model = f"{model_provider}/{model_name}"
-    kwargs = dict(model=litellm_model, temperature=temperature, max_tokens=max_tokens)
-    if top_p is not None:
-        kwargs["top_p"] = top_p
-
-    return ChatLiteLLM(**kwargs)
-
-
 def _init_models(config_predictor: ConfigPredictor,
                  config_user: ConfigUserSimulator) -> tuple:
-    model_agent = _create_model(
+    model_agent = utils_create_model(
         model_name=config_predictor.model_name,
         model_provider=config_predictor.model_provider,
         temperature=config_predictor.temperature,
         top_p=config_predictor.top_p,
         max_tokens=config_predictor.max_new_tokens,
     )
-    model_user_parsing = _create_model(
+    model_user_parsing = utils_create_model(
         model_name=config_user.model_name,
         model_provider=config_user.model_provider,
         temperature=config_user.temperature,
         max_tokens=config_user.max_new_tokens,
     )
-    model_user_generator = _create_model(
+    model_user_generator = utils_create_model(
         model_name=config_user.model_name,
         model_provider=config_user.model_provider,
         temperature=config_user.temperature,

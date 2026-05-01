@@ -39,12 +39,12 @@ class TaskData(BaseModel):
     """
 
     model_config = ConfigDict(extra="allow")
-
+    task_question: str # possible to be either amb_user_query or not_ambiguos_query depending on the modality
     instance_id: str
     selected_database: str
     amb_user_query: str
     sol_sql: list[str]
-    not_ambiguos_query: str | None
+    not_ambiguos_query: str
 
     follow_up: FollowUpPayload | None = None
 

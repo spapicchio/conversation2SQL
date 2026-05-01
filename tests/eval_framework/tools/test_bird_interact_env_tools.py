@@ -6,18 +6,15 @@ decorator, or a real PostgreSQL server.
 """
 from __future__ import annotations
 
-from conversation2sql.eval_framework.agent.tools.utils_db_execute import _execute_query
+from conversation2sql.eval_framework.agents.bird_baseline.tools import _execute_query
 
 import json
 from unittest.mock import patch
 
 import psycopg2
 
-
-from conversation2sql.eval_framework.agent.tools import (
-    bird_interact_env_tools as env_tools,
-)
-from conversation2sql.eval_framework.agent.tools.bird_interact_env_tools import (
+from conversation2sql.eval_framework.agents.bird_baseline.tools import bird_interact_env_tools as env_tools
+from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     KNOWLEDGE_VISIBLE_FIELDS,
     ExecuteSQLResponse,
     execute_sql_impl,
