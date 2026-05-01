@@ -9,7 +9,7 @@
 pipeline:
   debug: true
   mode: a-interact  # a-interact | c-interact | oracle 
-  output: "results/eval_results.jsonl"
+  output_folder: "results"  # Folder to save results and logs
   concurrency: 5  # Number of parallel tasks to run
 
 reader:
@@ -18,7 +18,7 @@ reader:
   filter_query_category: true
   # db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}' # Lite DB
   db_dsn_template: 'postgresql://root:123123@localhost:5433/{database}' # Full DB
-  user_patience_budget: 10
+  user_patience_budget: 1
 
 # ── Predictor ─────────────────────────────────────────────────────────────────
 # Calls an LLM and returns the full message list including tool calls.
@@ -26,14 +26,14 @@ reader:
 #   "PlaceholderPredictor" — returns a canned AIMessage (no API key needed)
 #   "LangChainPredictor" — uses LangChain to call an LLM (requires `model_name` and `model_provider`)
 predictor:
-  model_name: 'qwen/qwen3.6-flash'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
+  model_name: 'qwen/qwen3.6-plus'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
   model_provider: 'openrouter'  # The model provider, e.g., 'openai', 'azure', 'anthropic', etc.
-  temperature: 0.0
-  top_p: 1
+  temperature: 1.0
+  top_p: 0.95
   max_new_tokens: 2000
 
 user_simulator:
-  model_name: 'o4-mini'
+  model_name: 'gpt-5.4-mini-2026-03-17'
   model_provider: 'openai'
   temperature: 1.0
   max_new_tokens: 500

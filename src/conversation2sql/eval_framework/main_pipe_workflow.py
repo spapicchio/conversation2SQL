@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import tqdm
+import yaml
 from langchain_litellm import ChatLiteLLM
 
 from conversation2sql.config_input import ConfigReader, ConfigPredictor, ConfigUserSimulator, ConfigPipeline
@@ -31,6 +32,18 @@ def workflow_evaluation_pipeline(
     logger.info(f"config_predictor: {config_predictor}")
     logger.info(f"config_user: {config_user}")
 
+    output_folder = config_pipeline.output_folder
+
+    # save config in output folder
+    _save_configs_as_yaml(
+        output_folder=Path(output_folder),
+        config_pipeline=config_pipeline,
+        config_reader=config_reader,
+        config_predictor=config_predictor,
+        config_user=config_user,
+    )
+
+    file_result = Path(output_folder) / 'results.jsonl'
     # initialize models (API based)
     model_agent, (model_user_parsing, model_user_generator) = _init_models(config_predictor, config_user)
 
@@ -50,8 +63,8 @@ def workflow_evaluation_pipeline(
                 **task.model_dump(),
                 **response
             }
-            _save_record(response=task_output, output_path_jsonl=config_pipeline.output)
-            logger.info(f"Saved response for task_id={task.instance_id} to {config_pipeline.output}")
+            _save_record(response=task_output, output_path_jsonl=file_result)
+            logger.info(f"Saved response for task_id={task.instance_id} to {file_result}")
 
             result.append(task_output)
 
@@ -61,8 +74,9 @@ def workflow_evaluation_pipeline(
     except Exception as e:
         logger.error(f"Error occurred: {e}")
         response_error = {'error': str(e), 'last_processed_task': i}
-        output = config_pipeline.output.replace(".jsonl", f"_error_{LAUNCH_HOUR}.jsonl")
+        output = file_result.parent / f"{file_result.stem}_error.jsonl"
         _save_record(response=response_error, output_path_jsonl=output)
+        logger.info(f"Saved ERROR to {output}")
         raise e
 
     return result
@@ -104,16 +118,33 @@ def _init_models(config_predictor: ConfigPredictor,
     return model_agent, (model_user_parsing, model_user_generator)
 
 
-def _save_record(response: dict, output_path_jsonl: str):
-    output_path = Path(output_path_jsonl)
+def _save_configs_as_yaml(
+        output_folder: Path,
+        config_pipeline: ConfigPipeline,
+        config_reader: ConfigReader,
+        config_predictor: ConfigPredictor,
+        config_user: ConfigUserSimulator,
+) -> None:
+    output_folder.mkdir(parents=True, exist_ok=True)
+    configs = {
+        "pipeline": config_pipeline.model_dump(mode="json"),
+        "reader": config_reader.model_dump(mode="json"),
+        "predictor": config_predictor.model_dump(mode="json"),
+        "user": config_user.model_dump(mode="json"),
+    }
+    config_path = output_folder / "config.yaml"
+    with config_path.open("w", encoding="utf-8") as f:
+        yaml.safe_dump(configs, f, sort_keys=False, allow_unicode=True)
+    logger.info(f"Saved configs to {config_path}")
+
+
+def _save_record(response: dict, output_path_jsonl: Path):
     # include in the parent dir also the date
-    output_path_all = output_path.parent / LAUNCH_DAY / LAUNCH_HOUR / f"{output_path.stem}.jsonl"
-    output_path_all.parent.mkdir(parents=True, exist_ok=True)
-    with output_path_all.open("a", encoding="utf-8") as f:  # "a" = append line by line
+    with output_path_jsonl.open("a", encoding="utf-8") as f:  # "a" = append line by line
         f.write(json.dumps(response, ensure_ascii=False) + "\n")
 
     if 'error' not in response:
-        output_path_smaller = output_path.parent / LAUNCH_DAY / LAUNCH_HOUR / f"{output_path.stem}_smaller.jsonl"
+        output_path_smaller = output_path_jsonl.parent / f"{output_path_jsonl.stem}_smaller.jsonl"
         keep_vars = [
             "config_predictor",
             "config_user",

@@ -1,5 +1,3 @@
-from psycopg2.extensions import Column
-from psycopg2.extras import RealDictRow
 import json
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -8,6 +6,8 @@ from typing import Any
 import psycopg2
 import psycopg2.extensions
 import psycopg2.extras
+from psycopg2.extensions import Column
+from psycopg2.extras import RealDictRow
 
 
 def _connect(db_dsn: str) -> psycopg2.extensions.connection:
@@ -80,9 +80,9 @@ def process_decimals_recursive(item, decimal_places: int):
 
 
 def preprocess_results(
-    results: list[RealDictRow] | None,
-    cursor_desc: tuple[Column],
-    decimal_places: int = 2,
+        results: list[RealDictRow] | None,
+        cursor_desc: tuple[Column],
+        decimal_places: int = 2,
 ):
     if results is None:
         return None
@@ -140,7 +140,7 @@ def _format_result(result: list, cursor_desc: tuple[Column]) -> str:
     # take the first 100 rows to avoid overwhelming the output, and truncate each cell to 100 chars
     rows = [" | ".join(
         str(row[col])[:100] for col in cols
-        )
+    )
         for row in result[:100]
     ]
 
@@ -149,8 +149,8 @@ def _format_result(result: list, cursor_desc: tuple[Column]) -> str:
 
 
 if __name__ == "__main__":
-    sql = "SELECT * \nFROM plant_record pr"
+    sql = 'SELECT ROUND(CAST(om."mttrh" / (om."mtbfh" + om."mttrh") AS numeric), 4)\nFROM operational_metrics om\nJOIN plant_record pr ON om."snapops" = pr."snapkey"\nJOIN plants p ON pr."sitetie" = p."sitekey"\nWHERE LOWER(p."sitelabel") = \'solar plant west davidport\'\nLIMIT 1;'
     db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
     exec_query, cur = _execute_query(sql, db_dsn)
-    formatted = _format_result(exec_query, cur)
-    print(formatted)
+    # formatted = _format_result(exec_query, cur)
+    print(exec_query[0][cur[0][0]] is None)  # print the value of the first column in the first row

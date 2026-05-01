@@ -4,6 +4,7 @@ from pathlib import Path
 
 import tqdm
 
+from conversation2sql.eval_framework.agent.tools.utils_db_execute import _execute_query
 from conversation2sql.eval_framework.state import TaskData, ColumnMeaningEntry, ExternalKnowledgeEntry, FollowUpPayload
 from conversation2sql.logger import get_logger
 
@@ -84,6 +85,15 @@ def _get_masked_agent_kb(
     return masked_agent_kb
 
 
+def _is_query_empty(sql, db_dsn):
+    result, cur = _execute_query(sql, db_dsn)
+
+    return result is None or len(result) == 0 or (
+            len(result) == 1 and (
+            result[0][cur[0][0]] is None or result[0][cur[0][0]] == "" or result[0][cur[0][0]] == "None")
+    )
+
+
 def load_bird_interact_as_tasks(dataset_path: str,
                                 dataset_name_jsonl: str,
                                 filter_query_category: bool,
@@ -98,8 +108,10 @@ def load_bird_interact_as_tasks(dataset_path: str,
     """
     dataset_path = Path(dataset_path)
     samples = []
-    skipped = 0
-    with open(dataset_name_jsonl, "r", encoding="utf-8") as f:
+    skipped_instance_id = {'solar_panel_1', 'solar_panel_17', 'virtual_idol_10', 'households_12', 'fake_account_18', 'cold_chain_pharma_compliance_14'}
+    skipped_not_query = 0
+    skipped_empty = []
+    with (open(dataset_name_jsonl, "r", encoding="utf-8") as f):
         for i, raw_line in tqdm.tqdm(enumerate(f, start=1), desc="processing dataset"):
             if not raw_line:
                 logger.warning(f"Empty line at index {i}")
@@ -108,9 +120,13 @@ def load_bird_interact_as_tasks(dataset_path: str,
             line: dict = json.loads(raw_line.strip())
             if filter_query_category:
                 if line["category"] != "Query":
-                    skipped += 1
+                    skipped_not_query += 1
                     continue
             db_name = line.pop("selected_database")
+            if line['instance_id'] in skipped_instance_id:
+                # or _is_query_empty(line['sol_sql'][0], db_dsn_template.format(database=db_name)):
+                skipped_empty.append(line['instance_id'])
+                continue
 
             schema = _get_schema(dataset_path, db_name)
             column_meanings = _get_column_meanings(dataset_path, db_name)
@@ -146,7 +162,12 @@ def load_bird_interact_as_tasks(dataset_path: str,
             samples.append(sample)
 
     logger.info(
-        f'Skipped {skipped} sample since filter_query_category is set to {filter_query_category}')
+        f'Skipped {skipped_not_query} sample since filter_query_category is set to {filter_query_category}'
+    )
+    logger.info(
+        f'Skipped sample since the query is empty\n [{skipped_empty}]'
+    )
+
     return samples
 
 
@@ -154,7 +175,7 @@ if __name__ == '__main__':
     _dataset_path = 'data/bird_interact/bird-interact-full'
     _dataset_name_jsonl = 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'
     _filter_query_category = True
-    _db_dsn_template = 'postgresql://root:123123@localhost:5432/{database}'
+    _db_dsn_template = 'postgresql://root:123123@localhost:5433/{database}'
     _user_patience = 10
 
     samples = load_bird_interact_as_tasks(

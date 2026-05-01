@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 class ConfigPipeline(BaseModel):
     debug: bool = True
     mode: str = 'a-interact'  # a-interact | c-interact | oracle 
-    output: str = "results/eval_results.jsonl"
+    output_folder: str = "results"
     concurrency: int = Field(default=5, description="Number of parallel tasks to run")
 
 

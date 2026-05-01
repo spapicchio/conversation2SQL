@@ -1,16 +1,17 @@
 import json
-from typing import Callable
+from typing import Callable, Any
 
 from langchain.agents.middleware import (
     wrap_tool_call,
     wrap_model_call,
     ModelRequest,
     ModelResponse,
-    ExtendedModelResponse,
+    ExtendedModelResponse, before_model,
 )
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import ToolMessage, AIMessage
 from langgraph.prebuilt import ToolRuntime
 from langgraph.prebuilt.tool_node import ToolCallRequest
+from langgraph.runtime import Runtime
 from langgraph.types import Command, Overwrite
 
 from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
@@ -20,10 +21,20 @@ from conversation2sql.eval_framework.state import TaskData
 TOOL_COSTS: dict[str, float] = {**DB_TOOL_COSTS, **USER_TOOL_COSTS}
 
 
+@before_model(can_jump_to=["end"])
+def check_budget_limit(state: CustomAgentState, runtime: Runtime) -> dict[str, Any] | None:
+    if state["updated_user_patience"] < -1:
+        return {
+            "messages": [AIMessage("Conversation limit reached. User patience exhausted")],
+            "jump_to": "end"
+        }
+    return None
+
+
 @wrap_model_call(state_schema=CustomAgentState)
 def wrap_model_append_tool_message(
-    request: ModelRequest,
-    handler: Callable[[ModelRequest], ModelResponse[CustomAgentState]],
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse[CustomAgentState]],
 ) -> ExtendedModelResponse:
     # https://docs.langchain.com/oss/python/langgraph/use-graph-api#bypass-reducers-with-overwrite
     tool_called_patience = request.state["tool_called_patience"]  # pyrefly: ignore
@@ -62,8 +73,8 @@ def wrap_model_append_tool_message(
 
 @wrap_tool_call
 def tool_wrapper_patience_and_submit(
-    request: ToolCallRequest,
-    handler: Callable[[ToolCallRequest], ToolMessage | Command],
+        request: ToolCallRequest,
+        handler: Callable[[ToolCallRequest], ToolMessage | Command],
 ) -> ToolMessage | Command:
     tool_name = request.tool_call["name"]
     cost = TOOL_COSTS.get(tool_name, 0.0)
@@ -73,15 +84,21 @@ def tool_wrapper_patience_and_submit(
     # Block any non-`submit_sql` tool whose cost would exceed the remaining budget.
     # `submit_sql` is always allowed so the agent can finalize even when out of budget.
     if user_patience < cost and tool_name != "submit_sql":
-        return ToolMessage(
-            content=f"Budget exhausted ({user_patience:.1f} remaining). "
-            "You MUST call submit_sql now with your best SQL.",
-            tool_call_id=request.tool_call["id"],
+        return Command(
+            update={
+                "messages": [
+                    ToolMessage(
+                        content=f"Budget exhausted ({user_patience:.1f} remaining). "
+                                "You MUST call submit_sql now with your best SQL.",
+                        tool_call_id=request.tool_call["id"],
+                    )
+                ],
+                'updated_user_patience': -1
+            },
         )
 
     response = handler(request)
 
-    # `submit_sql` may terminate the graph: either the budget is gone, or the SQL passed.
     if tool_name == "submit_sql":
         tool_output = json.loads(response.content)
         message = tool_output["message"]
@@ -96,8 +113,8 @@ def tool_wrapper_patience_and_submit(
                             tool_call_id=request.tool_call["id"],
                         )
                     ],
+                    'updated_user_patience': -2
                 },
-                goto="end",
             )
 
         if tool_output["passed"]:
@@ -110,8 +127,8 @@ def tool_wrapper_patience_and_submit(
                             tool_call_id=request.tool_call["id"],
                         )
                     ],
+                    'updated_user_patience': -2
                 },
-                goto="end",
             )
 
         # SQL did not pass yet → fall through to record the cost and let the agent retry.
@@ -124,30 +141,3 @@ def tool_wrapper_patience_and_submit(
             "tool_called_patience": [cost],
         },
     )
-
-
-# """
-
-# SELECT:
-# SELECT ROUND(CAST(om."mttrh" / (om."mtbfh" + om."mttrh") AS numeric), 4)
-# FROM:
-# FROM operational_metrics om
-# JOIN:
-# JOIN plant_record pr ON om."snapops" = pr."snapkey"
-# JOIN:
-# JOIN plants p ON pr."sitetie" = p."sitekey"
-# WHERE:
-# WHERE LOWER(p."sitelabel") = 'solar plant west davidport'
-# LIMIT:
-# LIMIT 1;
-
-
-
-"""
-SELECT om.mttrh / (om.mtbfh + om.mttrh) AS downtime_score\nFROM plant_record pr\nJOIN operational_metrics om ON pr.snapkey = om.snapops\nJOIN plants p ON pr.sitetie = p.sitekey\nWHERE p.sitelabel = 'Solar Plant West Davidport';"}
-"""
-# """
-
-[
-    'SELECT ROUND(CAST(om."mttrh" / (om."mtbfh" + om."mttrh") AS numeric), 4)\nFROM operational_metrics om\nJOIN plant_record pr ON om."snapops" = pr."snapkey"\nJOIN plants p ON pr."sitetie" = p."sitekey"\nWHERE LOWER(p."sitelabel") = \'solar plant west davidport\'\nLIMIT 1;'
-]

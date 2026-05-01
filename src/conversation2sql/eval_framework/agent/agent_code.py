@@ -15,7 +15,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from conversation2sql.eval_framework.agent.agent_callback import (
     tool_wrapper_patience_and_submit,
     TOOL_COSTS,
-    wrap_model_append_tool_message,
+    wrap_model_append_tool_message, check_budget_limit,
 )
 from conversation2sql.eval_framework.agent.agent_code_state import CustomAgentState
 from conversation2sql.eval_framework.agent.prompts import (
@@ -39,10 +39,10 @@ logger = get_logger(__name__)
 
 
 def run_agent(
-    single_task: TaskData,
-    model_agent: BaseChatModel,
-    model_user_parsing: BaseChatModel,
-    model_user_generator: BaseChatModel,
+        single_task: TaskData,
+        model_agent: BaseChatModel,
+        model_user_parsing: BaseChatModel,
+        model_user_generator: BaseChatModel,
 ) -> CustomAgentState:
     messages = build_bird_interact_agent_messages(
         params={
@@ -82,6 +82,7 @@ def run_agent(
                 # Requires a checkpointer to maintain state. None means no thread limit.
                 thread_limit=single_task.task_budget * 2,
             ),
+            check_budget_limit,
             wrap_model_append_tool_message,
             tool_wrapper_patience_and_submit,
         ],
@@ -123,7 +124,7 @@ def _process_agent_response(response: CustomAgentState) -> Any:
         "total_tokens": total_tokens,
         "mean_prompt_tokens": sum(mean_prompt_tokens) / len(mean_prompt_tokens),
         "mean_completion_tokens": sum(mean_completion_tokens)
-        / len(mean_completion_tokens),
+                                  / len(mean_completion_tokens),
         "tool_calls_in_order": tool_calls_in_order,
         "execution_accuracy": passed,
         "messages": messages,
@@ -163,7 +164,7 @@ def _process_single_msg(message: BaseMessage) -> dict:
 def _extract_ai_metadata(message: AIMessage) -> dict:
     # --- token usage (LangChain-normalised; LiteLLM populates this for all providers) ---
     um = (
-        message.usage_metadata or {}
+            message.usage_metadata or {}
     )  # https://reference.langchain.com/python/langchain-core/messages/ai/UsageMetadata?_gl=1*11ucany*_gcl_au*NDc0Mzc2NTAuMTc3Mjc5MTAyOA..*_ga*MjA2NDMyNTk0Ny4xNzcyNzkxMDI4*_ga_47WX3HKKY2*czE3NzcyODQ1ODckbzQ3JGcwJHQxNzc3Mjg0NTg3JGo2MCRsMCRoMA..
 
     prompt_tokens = um.get("input_tokens", -1)
@@ -182,10 +183,10 @@ def _extract_ai_metadata(message: AIMessage) -> dict:
 
     # cost: LiteLLM injects _response_cost into response_metadata
     cost_usd = (
-        meta.get("_response_cost")
-        or meta.get("response_cost")
-        or meta.get("token_usage", {}).get("cost")
-        or 0.0
+            meta.get("_response_cost")
+            or meta.get("response_cost")
+            or meta.get("token_usage", {}).get("cost")
+            or 0.0
     )
 
     # tool calls — use LangChain-normalised list (works across all providers)

@@ -107,7 +107,7 @@ def get_schema_impl(ddl_database_schema: str) -> dict:
 
 
 def get_all_column_meanings_impl(
-    column_meanings: dict[str, ColumnMeaningEntry],
+        column_meanings: dict[str, ColumnMeaningEntry],
 ) -> dict:
     output = {
         k: v.model_dump_json(exclude_none=True) for k, v in column_meanings.items()
@@ -116,10 +116,10 @@ def get_all_column_meanings_impl(
 
 
 def get_column_meaning_impl(
-    table_name: str,
-    column_name: str,
-    db_name: str,
-    column_meanings: dict[str, ColumnMeaningEntry],
+        table_name: str,
+        column_name: str,
+        db_name: str,
+        column_meanings: dict[str, ColumnMeaningEntry],
 ) -> dict:
     key = f"{db_name}|{table_name.lower()}|{column_name.lower()}"
     meaning = column_meanings.get(key, "Column meaning not found")
@@ -131,14 +131,14 @@ def get_column_meaning_impl(
 
 
 def get_all_external_knowledge_names_impl(
-    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     return {"names": list(masked_agent_kb.keys())}
 
 
 def get_knowledge_definition_impl(
-    knowledge_name: str,
-    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+        knowledge_name: str,
+        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     if knowledge_name in masked_agent_kb:
         kb_entry = masked_agent_kb[knowledge_name].model_dump_json(
@@ -149,7 +149,7 @@ def get_knowledge_definition_impl(
 
 
 def get_all_knowledge_definitions_impl(
-    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     dump_kb = []
     for knowledge_name in masked_agent_kb:
@@ -214,7 +214,7 @@ def get_all_column_meanings(runtime: ToolRuntime[TaskData, CustomAgentState]) ->
 
 @tool
 def get_column_meaning(
-    table_name: str, column_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
+        table_name: str, column_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
 ) -> str:
     """Get the meaning/description of a specific column in a table.
     Cost: 0.5 bird-coins.
@@ -244,7 +244,7 @@ def get_column_meaning(
 
 @tool
 def get_all_external_knowledge_names(
-    runtime: ToolRuntime[TaskData, CustomAgentState],
+        runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Get the names of all available external knowledge entries for this database.
     Use this to discover what domain knowledge is available.
@@ -263,8 +263,8 @@ def get_all_external_knowledge_names(
 
 @tool
 def get_knowledge_definition(
-    knowledge_name: str,
-    runtime: ToolRuntime[TaskData, CustomAgentState],
+        knowledge_name: str,
+        runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Get the definition/details of a specific external knowledge entry.
     Cost: 0.5 bird-coins.
@@ -287,7 +287,7 @@ def get_knowledge_definition(
 
 @tool
 def get_all_knowledge_definitions(
-    runtime: ToolRuntime[TaskData, CustomAgentState],
+        runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Return all external knowledge with definitions (cost: 1 patience)."""
     return json.dumps(
