@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Optional
 
+import litellm
 import typer
 import yaml
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
@@ -28,6 +31,10 @@ def run(
     config: Optional[Path] = typer.Option(None, "--config", help="Path to YAML config file."),
 ) -> None:
     """Run an evaluation experiment."""
+    load_dotenv(".env")
+    litellm.suppress_debug_info = True
+    warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning)
+
     extra = ctx.args
     args = (["--config", str(config)] if config else []) + extra
     parser = PydanticParser(

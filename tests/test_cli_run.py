@@ -10,7 +10,7 @@ runner = CliRunner()
 def test_run_forwards_config_flag():
     with (
         patch("conversation2sql.cli.PydanticParser") as mock_cls,
-        patch("conversation2sql.cli.workflow_evaluation_pipeline"),
+        patch("conversation2sql.cli.workflow_evaluation_pipeline") as mock_wf,
     ):
         mock_parser = MagicMock()
         mock_parser.parse_args_and_config.return_value = (
@@ -22,6 +22,7 @@ def test_run_forwards_config_flag():
     mock_parser.parse_args_and_config.assert_called_once_with(
         ["--config", "configs/eval_pipeline_config.yaml"]
     )
+    mock_wf.assert_called_once()
 
 
 def test_run_forwards_extra_overrides():
