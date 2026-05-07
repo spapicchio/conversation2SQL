@@ -16,10 +16,9 @@ def run_baseline_model(
         params={
             "schema": single_task.ddl_database_schema,
             "question": single_task.task_question,
-            # "amb_user_query": 'This is a debug message, call only ask_user as tool with an invented question and return without submitting'
         }
     )
 
     response = model_agent.invoke(messages)
 
-    return utils_process_agent_response(response)
+    return utils_process_agent_response(response, tool_costs={})

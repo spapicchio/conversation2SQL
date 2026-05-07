@@ -13,7 +13,8 @@ from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state impor
 )
 
 
-def utils_process_agent_response(response: CustomAgentState, tool_costs: dict) -> Any:
+def utils_process_agent_response(response: CustomAgentState, tool_costs: dict | None = None) -> Any:
+    tool_costs = tool_costs or {}
     messages = [utils_process_single_msg(m, tool_costs=tool_costs) for m in response.pop("messages")]
     total_cost = 0
     total_tokens = 0
@@ -110,9 +111,7 @@ def utils_extract_ai_metadata(message: AIMessage, tool_costs: dict) -> dict:
         {
             "tool_name": tc["name"],
             "arguments": tc["args"],
-            "tool_cost": tool_costs.get(
-                tc["name"], -1
-            ),  # custom mapping of tool name to cost
+            "tool_cost": c if (c := tool_costs.get(tc["name"])) is not None else -1,
         }
         for tc in (message.tool_calls or [])
     ]

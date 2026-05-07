@@ -1,0 +1,1190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BIRD-Interact · Dataset & Agent</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --card: #1a1d27;
+    --border: #2a2d3e;
+    --accent: #6366f1;
+    --accent2: #22d3ee;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+    --code-bg: #0d1117;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  /* ── NAVIGATION ───────────────────────────────────────── */
+  nav {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 24px;
+    background: rgba(15,17,23,0.95);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(8px);
+  }
+  nav span { color: var(--muted); font-size: 13px; margin-right: auto; }
+  nav button {
+    padding: 6px 18px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); cursor: pointer;
+    font-size: 13px; transition: all .15s;
+  }
+  nav button:hover, nav button.active {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+
+  /* ── SLIDES ───────────────────────────────────────────── */
+  .slide {
+    display: none;
+    min-height: 100vh;
+    padding: 80px 40px 40px;
+    max-width: 1300px;
+    margin: 0 auto;
+  }
+  .slide.active { display: block; }
+
+  h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+  h2 { font-size: 18px; font-weight: 600; margin-bottom: 12px; color: var(--accent2); }
+  h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 15px; }
+
+  /* ── CARDS ────────────────────────────────────────────── */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+  /* ── STAT PILLS ───────────────────────────────────────── */
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  .stat {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 16px; text-align: center; min-width: 110px;
+  }
+  .stat .num { font-size: 26px; font-weight: 700; color: var(--accent); }
+  .stat .lbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+  /* ── BADGE ────────────────────────────────────────────── */
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  }
+  .badge.blue  { background: rgba(99,102,241,.2); color: #a5b4fc; border: 1px solid rgba(99,102,241,.4); }
+  .badge.cyan  { background: rgba(34,211,238,.15); color: #67e8f9; border: 1px solid rgba(34,211,238,.3); }
+  .badge.green { background: rgba(52,211,153,.15); color: #6ee7b7; border: 1px solid rgba(52,211,153,.3); }
+  .badge.amber { background: rgba(251,191,36,.15); color: #fde68a; border: 1px solid rgba(251,191,36,.3); }
+  .badge.red   { background: rgba(248,113,113,.15); color: #fca5a5; border: 1px solid rgba(248,113,113,.3); }
+
+  /* ── CODE / PRE ───────────────────────────────────────── */
+  pre, code {
+    font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+    font-size: 12px;
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    overflow-x: auto;
+    line-height: 1.6;
+    white-space: pre-wrap;
+  }
+  .kw  { color: #c792ea; }
+  .str { color: #c3e88d; }
+  .num { color: #f78c6c; }
+  .cmt { color: #546e7a; font-style: italic; }
+  .key { color: #82aaff; }
+  .val { color: #f07178; }
+
+  /* ── TOOL TABLE ───────────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; padding: 6px 10px; color: var(--muted); font-weight: 600;
+       border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; }
+  td { padding: 7px 10px; border-bottom: 1px solid rgba(42,45,62,.6); line-height: 1.45; }
+  tr:last-child td { border-bottom: none; }
+  .cost { font-weight: 700; color: var(--yellow); text-align: center; }
+
+  /* ── CONVERSATION ─────────────────────────────────────── */
+  .conv { display: flex; flex-direction: column; gap: 10px; }
+  .msg  { display: flex; gap: 10px; align-items: flex-start; }
+  .msg.right { flex-direction: row-reverse; }
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; flex-shrink: 0; font-weight: 700;
+  }
+  .av-agent  { background: linear-gradient(135deg,#6366f1,#8b5cf6); }
+  .av-tool   { background: linear-gradient(135deg,#0891b2,#22d3ee); }
+  .av-user   { background: linear-gradient(135deg,#059669,#34d399); }
+  .av-sys    { background: linear-gradient(135deg,#9f1239,#f43f5e); }
+  .bubble {
+    max-width: 85%; padding: 9px 13px; border-radius: 10px;
+    background: var(--card); border: 1px solid var(--border);
+    line-height: 1.55; font-size: 12.5px;
+  }
+  .bubble pre { margin-top: 6px; font-size: 11.5px; }
+  .bubble .tag { font-size: 10px; color: var(--muted); margin-bottom: 4px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+
+  /* ── PIPELINE ─────────────────────────────────────────── */
+  .pipeline { display: flex; align-items: center; gap: 0; flex-wrap: wrap; margin: 16px 0; }
+  .pstep {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 14px; font-size: 12px;
+    text-align: center; min-width: 100px;
+  }
+  .pstep .icon { font-size: 18px; display: block; margin-bottom: 4px; }
+  .pstep .name { font-weight: 600; }
+  .pstep .desc { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .parrow { color: var(--muted); font-size: 20px; padding: 0 4px; }
+
+  /* ── BUDGET BAR ───────────────────────────────────────── */
+  .budget-bar { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  .bar-outer { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .bar-inner { height: 100%; border-radius: 4px; background: linear-gradient(90deg,#34d399,#6366f1); }
+  .bar-label { font-size: 11px; color: var(--muted); min-width: 80px; text-align: right; }
+
+  /* ── AMBIGUITY LIST ───────────────────────────────────── */
+  .amb-item {
+    padding: 8px 10px; border-left: 3px solid var(--accent);
+    background: rgba(99,102,241,.06); border-radius: 0 6px 6px 0;
+    margin-bottom: 6px; font-size: 12.5px;
+  }
+  .amb-item .term { font-weight: 700; color: var(--accent2); }
+  .amb-item .type { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  /* ── DIVIDER ──────────────────────────────────────────── */
+  .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+
+  /* ── PHASE TAG ────────────────────────────────────────── */
+  .phase-tag {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 12px; border-radius: 20px; font-size: 12px; font-weight: 600;
+  }
+  .phase1 { background: rgba(99,102,241,.2); color: #a5b4fc; border: 1px solid rgba(99,102,241,.4); }
+  .phase2 { background: rgba(34,211,238,.15); color: #67e8f9; border: 1px solid rgba(34,211,238,.3); }
+
+  /* ── RESPONSIVE ───────────────────────────────────────── */
+  @media (max-width: 900px) {
+    .grid2, .grid3 { grid-template-columns: 1fr; }
+  }
+
+  /* ── EXPANDABLE CARDS ─────────────────────────────────── */
+  .card-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 8px; margin-bottom: 12px;
+  }
+  .card-header h2 { margin-bottom: 0; }
+  .expand-btn {
+    flex-shrink: 0;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--muted); border-radius: 5px;
+    width: 26px; height: 26px; cursor: pointer;
+    font-size: 14px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .15s;
+    margin-top: 2px;
+  }
+  .expand-btn:hover { border-color: var(--accent); color: var(--accent); background: rgba(99,102,241,.1); }
+
+  /* ── MODAL ────────────────────────────────────────────── */
+  #modal-overlay {
+    display: none;
+    position: fixed; inset: 0; z-index: 500;
+    background: rgba(0,0,0,.75);
+    backdrop-filter: blur(4px);
+    padding: 40px 24px;
+    overflow-y: auto;
+  }
+  #modal-overlay.open { display: flex; align-items: flex-start; justify-content: center; }
+  #modal-box {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: 100%; max-width: 1100px;
+    padding: 28px 32px;
+    position: relative;
+  }
+  #modal-box pre { max-height: none; overflow-x: auto; }
+  #modal-close {
+    position: absolute; top: 14px; right: 14px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--muted); border-radius: 6px;
+    width: 30px; height: 30px; cursor: pointer; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .15s;
+  }
+  #modal-close:hover { border-color: var(--red); color: var(--red); }
+</style>
+</head>
+<body>
+
+<!-- ── NAVIGATION ─────────────────────────────────────────────── -->
+<nav>
+  <span>BIRD-Interact Full · conversation2SQL</span>
+  <button class="active" onclick="showSlide(0)">1 · Dataset</button>
+  <button onclick="showSlide(1)">2 · Agent</button>
+  <button onclick="showSlide(2)">3 · User Simulator</button>
+</nav>
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 1 — DATASET
+══════════════════════════════════════════════════════════════════ -->
+<div class="slide active" id="slide-0">
+
+  <h1>BIRD-Interact Full</h1>
+  <p class="subtitle">
+    A benchmark for <strong>interactive Text-to-SQL</strong> with ambiguous user queries, external knowledge masking, and two-phase evaluation.
+    Source: <code>birdsql/bird-interact-full</code> on HuggingFace.
+  </p>
+
+  <!-- Stats row -->
+  <div class="stats">
+    <div class="stat"><div class="num">600</div><div class="lbl">Total instances</div></div>
+    <div class="stat"><div class="num">22</div><div class="lbl">Databases</div></div>
+    <div class="stat"><div class="num">410</div><div class="lbl">Query tasks</div></div>
+    <div class="stat"><div class="num">190</div><div class="lbl">Management tasks</div></div>
+    <div class="stat"><div class="num">98%</div><div class="lbl">With critical ambiguity</div></div>
+    <div class="stat"><div class="num">72%</div><div class="lbl">With knowledge ambiguity</div></div>
+    <div class="stat"><div class="num">100%</div><div class="lbl">With follow-up (phase 2)</div></div>
+  </div>
+
+  <!-- Two-phase structure -->
+  <div style="margin-bottom:20px;">
+    <h2>Two-Phase Evaluation</h2>
+    <div class="pipeline">
+      <div class="pstep">
+        <span class="icon">❓</span>
+        <div class="name">Ambiguous Query</div>
+        <div class="desc">User asks with injected ambiguities</div>
+      </div>
+      <span class="parrow">→</span>
+      <div class="pstep">
+        <span class="icon">🤖</span>
+        <div class="name">Agent Interacts</div>
+        <div class="desc">Asks clarifications, explores DB</div>
+      </div>
+      <span class="parrow">→</span>
+      <div class="pstep">
+        <span class="icon">📤</span>
+        <div class="name">Submit SQL</div>
+        <div class="desc">Phase 1 answer evaluated</div>
+      </div>
+      <span class="parrow">→</span>
+      <div class="pstep">
+        <span class="icon">🔄</span>
+        <div class="name">Follow-up</div>
+        <div class="desc">Phase 2: harder related question</div>
+      </div>
+      <span class="parrow">→</span>
+      <div class="pstep">
+        <span class="icon">✅</span>
+        <div class="name">Final Score</div>
+        <div class="desc">Reward aggregated over both phases</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Concrete example + Ambiguity types side by side -->
+  <div class="grid2" style="margin-bottom:20px;">
+
+    <!-- Real sample -->
+    <div class="card">
+      <h2>Real Sample — <code>solar_panel_1</code></h2>
+      <h3>Ambiguous Query (what the agent sees)</h3>
+      <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.3);border-radius:8px;padding:12px 14px;margin-bottom:12px;font-size:13px;font-style:italic;color:#e2e8f0;">
+        "What's the <strong style="color:#fbbf24;">downtime score</strong> for 'Solar Plant West Davidport'?"
+      </div>
+
+      <h3>Ambiguities injected</h3>
+      <div class="amb-item">
+        <div class="term">"downtime score"</div>
+        <div class="type">knowledge_linking_ambiguity — maps to "System Unavailability" (masked from agent)</div>
+      </div>
+      <div class="amb-item">
+        <div class="term">"down"</div>
+        <div class="type">semantic_ambiguity — "down" could mean different states</div>
+      </div>
+      <div class="amb-item" style="border-color:#fbbf24;background:rgba(251,191,36,.06);">
+        <div class="term">"rounded"</div>
+        <div class="type">non_critical — decimal precision (4 decimal places) — not critical</div>
+      </div>
+
+      <hr class="divider">
+      <h3>Ground Truth SQL (hidden from agent)</h3>
+<pre><span class="kw">SELECT</span> <span class="val">ROUND</span>(CAST(om."mttrh" / (om."mtbfh" + om."mttrh") <span class="kw">AS</span> numeric), <span class="num">4</span>)
+<span class="kw">FROM</span>  operational_metrics om
+<span class="kw">JOIN</span>  plant_record pr <span class="kw">ON</span> om."snapops" = pr."snapkey"
+<span class="kw">JOIN</span>  plants p        <span class="kw">ON</span> pr."sitetie" = p."sitekey"
+<span class="kw">WHERE</span> LOWER(p."sitelabel") = <span class="str">'solar plant west davidport'</span>
+<span class="kw">LIMIT</span> <span class="num">1</span>;</pre>
+
+      <hr class="divider">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <span class="phase2">Phase 2 follow-up</span>
+        <span style="font-size:12px;color:var(--muted);">Calculate the difference between System Unavailability for this plant vs. the average across all others (MTBF/MTTR available), rounded to 4 d.p.</span>
+      </div>
+    </div>
+
+    <!-- Ambiguity types + KB masking -->
+    <div style="display:flex;flex-direction:column;gap:16px;">
+
+      <div class="card">
+        <h2>Ambiguity Taxonomy</h2>
+        <table>
+          <thead><tr><th>Type</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td><span class="badge blue">knowledge_linking</span></td><td>Term maps to a specific KB entry that is masked from the agent</td></tr>
+            <tr><td><span class="badge amber">semantic</span></td><td>Word has multiple valid interpretations in the domain</td></tr>
+            <tr><td><span class="badge cyan">knowledge_ambiguity</span></td><td>Query relies on external knowledge deliberately hidden</td></tr>
+            <tr><td><span class="badge green">decimal</span></td><td>Numeric precision / rounding preference (non-critical)</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>External Knowledge Masking</h2>
+        <p style="color:var(--muted);font-size:12.5px;margin-bottom:10px;">
+          Each database has a Knowledge Base (KB). For queries with <em>knowledge ambiguity</em>, the relevant KB entry is <strong>deleted from the agent's view</strong> — forcing it to either ask the user or infer the formula.
+        </p>
+        <h3>Masked KB entry for this sample</h3>
+<pre>{
+  <span class="key">"id"</span>: <span class="num">4</span>,
+  <span class="key">"knowledge"</span>: <span class="str">"System Unavailability"</span>,
+  <span class="key">"description"</span>: <span class="str">"Proportion of time system is non-operational"</span>,
+  <span class="key">"definition"</span>: <span class="str">"U = MTTR / (MTBF + MTTR)"</span>,
+  <span class="key">"type"</span>: <span class="str">"calculation_knowledge"</span>
+}</pre>
+        <p style="margin-top:8px;font-size:12px;color:var(--muted);">The agent can discover other KB entries via <code>get_all_external_knowledge_names</code> but <strong>entry #4 is absent</strong> from its view.</p>
+      </div>
+
+      <div class="card">
+        <h2>Task Data Loaded by Reader</h2>
+        <table>
+          <thead><tr><th>Field</th><th>Visible to agent?</th></tr></thead>
+          <tbody>
+            <tr><td><code>amb_user_query</code></td><td><span class="badge green">Yes</span></td></tr>
+            <tr><td><code>ddl_database_schema</code></td><td><span class="badge amber">Via get_schema tool</span></td></tr>
+            <tr><td><code>masked_agent_kb</code></td><td><span class="badge amber">Partially (entry deleted)</span></td></tr>
+            <tr><td><code>column_meanings</code></td><td><span class="badge amber">Via tool</span></td></tr>
+            <tr><td><code>sol_sql</code></td><td><span class="badge red">No — grader only</span></td></tr>
+            <tr><td><code>user_query_ambiguity</code></td><td><span class="badge red">No — user simulator only</span></td></tr>
+            <tr><td><code>follow_up.query</code></td><td><span class="badge red">No — revealed after phase 1</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+</div><!-- /slide-0 -->
+
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 2 — AGENT
+══════════════════════════════════════════════════════════════════ -->
+<div class="slide" id="slide-1">
+
+  <h1>The SQL Agent</h1>
+  <p class="subtitle">
+    A LangChain / LangGraph ReAct agent with a <strong>bird-coin budget system</strong>, 9 tools, and a two-stage LLM user simulator.
+  </p>
+
+  <div class="grid2" style="margin-bottom:20px;">
+
+    <!-- LEFT: system prompt + tools -->
+    <div style="display:flex;flex-direction:column;gap:16px;">
+
+      <!-- System prompt -->
+      <div class="card">
+        <div class="card-header">
+          <h2>System Prompt (full)</h2>
+          <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+        </div>
+        <div class="expandable-body">
+<pre style="font-size:11.5px;max-height:280px;overflow-y:auto;"><span class="cmt">You are a helpful PostgreSQL agent that interacts with a user and a
+database to solve the user's question.</span>
+
+<span class="key">Task description:</span>
+Your goal is to understand the user's ambiguous question involving
+external knowledge retrieval and generate the correct SQL query.
+You can:
+  1. Interact with the <span class="str">user</span>  — ask clarifying questions or submit SQL.
+  2. Interact with the <span class="str">database</span> — explore schema, run queries.
+
+The interaction ends when you submit the correct SQL or budget runs out.
+Each action costs bird-coins, so you should be efficient.
+
+<span class="key">Available tools and costs:</span>
+- execute_sql                      Cost: <span class="num">1</span>
+- get_schema                       Cost: <span class="num">1</span>
+- get_all_column_meanings          Cost: <span class="num">1</span>
+- get_column_meaning               Cost: <span class="num">0.5</span>
+- get_all_external_knowledge_names Cost: <span class="num">0.5</span>
+- get_knowledge_definition         Cost: <span class="num">0.5</span>
+- get_all_knowledge_definitions    Cost: <span class="num">1</span>
+- ask_user                         Cost: <span class="num">2</span>
+- submit_sql                       Cost: <span class="num">3</span>
+
+<span class="key">Important strategy tips:</span>
+- First explore schema, column meanings, and relevant external knowledge.
+- If intent is ambiguous, ask clarifying questions before committing to SQL.
+- Ask one clarification question at a time.
+- Be efficient with your actions to conserve budget.
+- Test SQL with execute_sql before submit_sql when useful.
+- If a submission fails and budget remains, debug and try again.
+- After a successful phase-1 submission, you may receive a follow-up.</pre>
+        </div><!-- /expandable-body -->
+      </div>
+
+      <!-- Tools table -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Tools — costs &amp; signatures</h2>
+          <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+        </div>
+        <div class="expandable-body">
+        <table>
+          <thead><tr><th>Tool</th><th>Group</th><th style="text-align:center;">Cost ¢</th><th>Returns</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><code>execute_sql(sql)</code></td>
+              <td><span class="badge cyan">DB</span></td>
+              <td class="cost">1</td>
+              <td>Table results / error. SELECT / WITH / EXPLAIN only.</td>
+            </tr>
+            <tr>
+              <td><code>get_schema()</code></td>
+              <td><span class="badge cyan">DB</span></td>
+              <td class="cost">1</td>
+              <td>Full DDL (CREATE TABLE statements)</td>
+            </tr>
+            <tr>
+              <td><code>get_all_column_meanings()</code></td>
+              <td><span class="badge cyan">DB</span></td>
+              <td class="cost">1</td>
+              <td>JSON dict of all column descriptions</td>
+            </tr>
+            <tr>
+              <td><code>get_column_meaning(table, column)</code></td>
+              <td><span class="badge cyan">DB</span></td>
+              <td class="cost">0.5</td>
+              <td>Description of one column</td>
+            </tr>
+            <tr>
+              <td><code>get_all_external_knowledge_names()</code></td>
+              <td><span class="badge cyan">DB</span></td>
+              <td class="cost">0.5</td>
+              <td>List of KB entry names (masked entries absent)</td>
+            </tr>
+            <tr>
+              <td><code>get_knowledge_definition(name)</code></td>
+              <td><span class="badge cyan">DB</span></td>
+              <td class="cost">0.5</td>
+              <td>id, knowledge, description, definition for one entry</td>
+            </tr>
+            <tr>
+              <td><code>get_all_knowledge_definitions()</code></td>
+              <td><span class="badge cyan">DB</span></td>
+              <td class="cost">1</td>
+              <td>All visible KB entries with definitions</td>
+            </tr>
+            <tr>
+              <td><code>ask_user(clarification_question)</code></td>
+              <td><span class="badge green">User</span></td>
+              <td class="cost">2</td>
+              <td>LLM user-simulator response (2-stage)</td>
+            </tr>
+            <tr>
+              <td><code>submit_sql(sql)</code></td>
+              <td><span class="badge amber">Eval</span></td>
+              <td class="cost">3</td>
+              <td>pass/fail + message. On pass → episode ends.</td>
+            </tr>
+          </tbody>
+        </table>
+        </div><!-- /expandable-body -->
+      </div>
+
+      <!-- Budget formula -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Budget Formula</h2>
+          <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+        </div>
+        <div class="expandable-body">
+        <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">
+          Budget is computed per task by <code>BirdInteractReader.calculate_initial_budget()</code>:
+        </p>
+        <pre><span class="cmt"># 6 = ENV_INTERACT(3) + SUBMIT(3) base
+# 2 × m_amb = one ask_user per ambiguity point
+# 2 × patience = extra exploration tolerance</span>
+budget = <span class="num">6</span> + <span class="num">2</span> × m_amb + <span class="num">2</span> × patience</pre>
+        <p style="margin-top:10px;font-size:12px;color:var(--muted);">
+          For <code>solar_panel_1</code>: 2 critical + 1 knowledge ambiguity → m_amb = 3, patience = 3 → <strong style="color:var(--accent2);">budget = 18 bird-coins</strong>
+        </p>
+        <div class="budget-bar">
+          <div class="bar-outer"><div class="bar-inner" style="width:100%;"></div></div>
+          <span class="bar-label">18 / 18 coins</span>
+        </div>
+        </div><!-- /expandable-body -->
+      </div>
+
+    </div><!-- /left col -->
+
+    <!-- RIGHT: user simulator + conversation -->
+    <div style="display:flex;flex-direction:column;gap:16px;">
+
+      <!-- Two-stage user simulator -->
+      <div class="card">
+        <div class="card-header">
+          <h2>Two-Stage User Simulator (<code>ask_user</code>)</h2>
+          <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+        </div>
+        <div class="expandable-body">
+        <p style="font-size:12.5px;color:var(--muted);margin-bottom:12px;">
+          When the agent calls <code>ask_user</code>, two LLM calls are made internally — the user never really responds.
+        </p>
+        <div class="pipeline" style="justify-content:center;">
+          <div class="pstep" style="min-width:130px;">
+            <span class="icon">🔍</span>
+            <div class="name">Stage 1 · Parser</div>
+            <div class="desc">Maps question to action:<br>labeled / unlabeled / unanswerable</div>
+          </div>
+          <span class="parrow">→</span>
+          <div class="pstep" style="min-width:130px;">
+            <span class="icon">💬</span>
+            <div class="name">Stage 2 · Generator</div>
+            <div class="desc">Generates a natural user reply based on the action &amp; ambiguity points</div>
+          </div>
+        </div>
+        <p style="margin-top:10px;font-size:12px;color:var(--muted);">
+          The parser has access to <code>user_query_ambiguity</code> and gold SQL — the generator builds a realistic reply without leaking them.
+        </p>
+        </div><!-- /expandable-body -->
+      </div>
+
+      <!-- Conversation sample -->
+      <div class="card" style="flex:1;">
+        <div class="card-header">
+          <h2>Conversation Sample — <code>solar_panel_1</code></h2>
+          <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+        </div>
+        <div class="expandable-body">
+        <p style="font-size:12px;color:var(--muted);margin-bottom:12px;">
+          Simulated agent trace. Budget starts at <strong>18</strong> bird-coins.
+        </p>
+
+        <div class="conv">
+
+          <!-- USER message (initial) -->
+          <div class="msg">
+            <div class="avatar av-user">U</div>
+            <div class="bubble">
+              <div class="tag">User · Phase 1</div>
+              What's the <strong>downtime score</strong> for 'Solar Plant West Davidport'?
+            </div>
+          </div>
+
+          <!-- AGENT thinks → calls get_all_external_knowledge_names -->
+          <div class="msg right">
+            <div class="avatar av-agent">A</div>
+            <div class="bubble">
+              <div class="tag">Agent → tool call</div>
+              I need to understand what "downtime score" means. Let me check the available external knowledge first.
+              <pre><span class="val">get_all_external_knowledge_names</span>()</pre>
+            </div>
+          </div>
+
+          <!-- TOOL response -->
+          <div class="msg">
+            <div class="avatar av-tool">T</div>
+            <div class="bubble">
+              <div class="tag">Tool result · cost 0.5 · remaining 17.5</div>
+<pre>{
+  <span class="key">"names"</span>: [
+    <span class="str">"Specific Yield"</span>, <span class="str">"Power Capacity Factor"</span>,
+    <span class="str">"Soiling Loss Index"</span>, <span class="str">"Thermal Loss Factor"</span>,
+    <span class="str">"Fill Factor Degradation"</span>, <span class="str">"Operational Expenditure Index"</span>
+  ]
+}
+<span class="cmt">[SYSTEM NOTE: Remaining budget: 17.5/18.0]</span></pre>
+            </div>
+          </div>
+
+          <!-- AGENT notices "System Unavailability" is missing → asks user -->
+          <div class="msg right">
+            <div class="avatar av-agent">A</div>
+            <div class="bubble">
+              <div class="tag">Agent → tool call</div>
+              "System Unavailability" is not in the knowledge base. "Downtime score" is ambiguous — I need to clarify.
+              <pre><span class="val">ask_user</span>(
+  clarification_question=<span class="str">"Could you clarify what you mean by
+'downtime score'? Are you referring to a specific
+formula like System Unavailability (MTTR / (MTBF + MTTR)),
+or something else?"</span>
+)</pre>
+            </div>
+          </div>
+
+          <!-- USER SIMULATOR response -->
+          <div class="msg">
+            <div class="avatar av-user">U</div>
+            <div class="bubble">
+              <div class="tag">User Simulator · cost 2 · remaining 15.5</div>
+              Yes, I mean System Unavailability — the ratio of MTTR to the sum of MTBF and MTTR.
+              <br><span style="color:var(--muted);font-size:11px;margin-top:4px;display:block;">[SYSTEM NOTE: Remaining budget: 15.5/18.0]</span>
+            </div>
+          </div>
+
+          <!-- AGENT builds SQL -->
+          <div class="msg right">
+            <div class="avatar av-agent">A</div>
+            <div class="bubble">
+              <div class="tag">Agent → tool call</div>
+              Good. Now I'll get the schema to find the right tables.
+              <pre><span class="val">get_schema</span>()</pre>
+            </div>
+          </div>
+
+          <!-- TOOL schema response -->
+          <div class="msg">
+            <div class="avatar av-tool">T</div>
+            <div class="bubble">
+              <div class="tag">Tool result · cost 1 · remaining 14.5</div>
+              <pre>CREATE TABLE "operational_metrics" (
+  snapops text PRIMARY KEY,
+  mtbfh real,   <span class="cmt">-- Mean Time Between Failures (hours)</span>
+  mttrh real,   <span class="cmt">-- Mean Time To Repair (hours)</span>
+  ...
+);
+CREATE TABLE "plant_record" ( snapkey text, sitetie text, ... );
+CREATE TABLE "plants" ( sitekey text, sitelabel text, ... );
+<span class="cmt">[SYSTEM NOTE: Remaining budget: 14.5/18.0]</span></pre>
+            </div>
+          </div>
+
+          <!-- AGENT tests SQL -->
+          <div class="msg right">
+            <div class="avatar av-agent">A</div>
+            <div class="bubble">
+              <div class="tag">Agent → tool call</div>
+              I have enough info. Let me test my query first.
+              <pre><span class="val">execute_sql</span>(sql=<span class="str">"
+SELECT ROUND(CAST(om.mttrh / (om.mtbfh + om.mttrh) AS numeric), 4)
+FROM operational_metrics om
+JOIN plant_record pr ON om.snapops = pr.snapkey
+JOIN plants p ON pr.sitetie = p.sitekey
+WHERE LOWER(p.sitelabel) = 'solar plant west davidport'
+LIMIT 1"</span>)</pre>
+            </div>
+          </div>
+
+          <!-- TOOL execute result -->
+          <div class="msg">
+            <div class="avatar av-tool">T</div>
+            <div class="bubble">
+              <div class="tag">Tool result · cost 1 · remaining 13.5</div>
+              <pre>{<span class="key">"result"</span>: <span class="str">"round\n------\n0.1823"</span>, <span class="key">"success"</span>: <span class="val">true</span>}
+<span class="cmt">[SYSTEM NOTE: Remaining budget: 13.5/18.0]</span></pre>
+            </div>
+          </div>
+
+          <!-- AGENT submits -->
+          <div class="msg right">
+            <div class="avatar av-agent">A</div>
+            <div class="bubble">
+              <div class="tag">Agent → tool call</div>
+              Query runs correctly. Submitting.
+              <pre><span class="val">submit_sql</span>(sql=<span class="str">"
+SELECT ROUND(CAST(om.\"mttrh\" / (om.\"mtbfh\" + om.\"mttrh\") AS numeric), 4)
+FROM operational_metrics om
+JOIN plant_record pr ON om.\"snapops\" = pr.\"snapkey\"
+JOIN plants p ON pr.\"sitetie\" = p.\"sitekey\"
+WHERE LOWER(p.\"sitelabel\") = 'solar plant west davidport'
+LIMIT 1;"</span>)</pre>
+            </div>
+          </div>
+
+          <!-- EVAL result -->
+          <div class="msg">
+            <div class="avatar av-sys">E</div>
+            <div class="bubble" style="border-color:rgba(52,211,153,.4);background:rgba(52,211,153,.06);">
+              <div class="tag" style="color:var(--green);">Evaluator · cost 3 · Phase 1 PASSED</div>
+              <pre style="color:var(--green);">{"passed": true, "message": "Phase 1 correct! Task finished."}</pre>
+              <p style="margin-top:8px;font-size:12px;">→ <span class="phase2">Phase 2 follow-up unlocked</span>: <em>"Now calculate the difference between System Unavailability for this plant and the average across all others..."</em></p>
+            </div>
+          </div>
+
+        </div><!-- /conv -->
+        </div><!-- /expandable-body -->
+      </div><!-- /card conversation -->
+
+    </div><!-- /right col -->
+  </div><!-- /grid2 -->
+
+  <!-- Middleware callbacks -->
+  <div class="card">
+    <div class="card-header">
+      <h2>Agent Middleware (LangGraph hooks)</h2>
+      <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+    </div>
+    <div class="expandable-body">
+    <div class="grid3">
+      <div>
+        <h3>tool_wrapper_append_budget</h3>
+        <p style="font-size:12.5px;color:var(--muted);">Runs around every tool call. Deducts the tool's cost from <code>updated_user_patience</code>, appends the remaining budget to the tool message, and returns a <code>Command</code> that updates state atomically. If budget &lt; cost (and tool ≠ <code>submit_sql</code>), returns a forced-submit message instead.</p>
+      </div>
+      <div>
+        <h3>tool_wrapper_submit_sql</h3>
+        <p style="font-size:12.5px;color:var(--muted);">Intercepts <code>submit_sql</code> calls. On <em>pass</em>, converts the response and issues <code>goto="end"</code> to terminate the episode immediately — no extra model calls.</p>
+      </div>
+      <div>
+        <h3>model_budget_exhausted</h3>
+        <p style="font-size:12.5px;color:var(--muted);">Runs <em>before</em> each model call. If <code>updated_user_patience &lt; 0</code>, jumps directly to <code>"end"</code> — prevents the model from spending more budget on a response that can't improve the score.</p>
+      </div>
+    </div>
+    </div><!-- /expandable-body -->
+  </div>
+
+</div><!-- /slide-1 -->
+
+
+<!-- ══════════════════════════════════════════════════════════════
+     SLIDE 3 — USER SIMULATOR
+══════════════════════════════════════════════════════════════════ -->
+<div class="slide" id="slide-2">
+
+  <h1>Function-Driven User Simulator</h1>
+  <p class="subtitle">
+    A two-stage LLM pipeline that replaces a real human answering the agent's clarification questions —
+    designed to be <strong>leak-proof</strong>, <strong>controllable</strong>, and <strong>aligned with real human behavior</strong>.
+    <span style="color:var(--muted);">(BIRD-Interact paper §3.3 &amp; §6, ICLR 2026)</span>
+  </p>
+
+  <!-- ── WHY + RESULTS ROW ─────────────────────────────── -->
+  <div class="grid2" style="margin-bottom:20px;">
+
+    <div class="card">
+      <h2>Why a Two-Stage Simulator?</h2>
+      <p style="font-size:12.5px;color:var(--muted);margin-bottom:14px;">
+        Conventional LLM user simulators have two critical failure modes that invalidate evaluation:
+      </p>
+      <div class="amb-item" style="border-color:var(--red);background:rgba(248,113,113,.06);margin-bottom:8px;">
+        <div class="term" style="color:var(--red);">Ground-truth leakage</div>
+        <div class="type">The simulator reveals SQL fragments, schema details, or step-by-step reasoning the agent should not know — making the task artificially easy.</div>
+      </div>
+      <div class="amb-item" style="border-color:var(--red);background:rgba(248,113,113,.06);margin-bottom:14px;">
+        <div class="term" style="color:var(--red);">Task deviation</div>
+        <div class="type">The simulator answers questions outside its competence (e.g. database schema questions a real user wouldn't know), distorting the interaction.</div>
+      </div>
+      <p style="font-size:12.5px;color:var(--muted);margin-bottom:10px;">
+        Baseline simulators fail <strong style="color:var(--red);">67.4%</strong> of unanswerable (UNA) questions — leaking forbidden information.
+        The function-driven approach reduces this to <strong style="color:var(--green);">2.7%</strong>.
+      </p>
+      <p style="font-size:12.5px;color:var(--muted);">
+        The fix: <em>constrain</em> the simulator's responses to a symbolic action space before letting it generate free text.
+        The parser stage acts as a safety gate; the generator stage handles natural language variability.
+      </p>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:16px;">
+
+      <div class="card">
+        <h2>Alignment with Human Users</h2>
+        <p style="font-size:12.5px;color:var(--muted);margin-bottom:12px;">
+          Measured by Pearson correlation between simulator-driven and human-driven success rates across 7 models on 100 tasks (BI + DM domains):
+        </p>
+        <table>
+          <thead><tr><th>Model</th><th>Simulator</th><th style="text-align:center;">Pearson r</th><th>p-value</th></tr></thead>
+          <tbody>
+            <tr>
+              <td>GPT-4o</td>
+              <td><span class="badge green">w/ Function (Ours)</span></td>
+              <td style="text-align:center;font-weight:700;color:var(--green);">0.84</td>
+              <td>p = 0.02 ✓</td>
+            </tr>
+            <tr>
+              <td>Gemini-2.0-Flash</td>
+              <td><span class="badge green">w/ Function (Ours)</span></td>
+              <td style="text-align:center;font-weight:700;color:var(--green);">0.79</td>
+              <td>p = 0.03 ✓</td>
+            </tr>
+            <tr>
+              <td>GPT-4o</td>
+              <td><span class="badge red">Baseline</span></td>
+              <td style="text-align:center;font-weight:700;color:var(--red);">0.61</td>
+              <td>p = 0.14 ✗</td>
+            </tr>
+            <tr>
+              <td>Gemini-2.0-Flash</td>
+              <td><span class="badge red">Baseline</span></td>
+              <td style="text-align:center;font-weight:700;color:var(--red);">0.54</td>
+              <td>p = 0.21 ✗</td>
+            </tr>
+          </tbody>
+        </table>
+        <p style="margin-top:10px;font-size:12px;color:var(--muted);">Only the function-driven variants achieve statistical significance (p &lt; 0.05).</p>
+      </div>
+
+      <div class="card">
+        <h2>Three Symbolic Actions</h2>
+        <table>
+          <thead><tr><th>Action (paper)</th><th>Action (code)</th><th>When invoked</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="badge blue">AMB(term)</span></td>
+              <td><code>labeled("term")</code></td>
+              <td>Question targets a <strong>pre-annotated</strong> ambiguity point. Simulator can answer from the ambiguity annotations + GT SQL.</td>
+            </tr>
+            <tr>
+              <td><span class="badge cyan">LOC(segment)</span></td>
+              <td><code>unlabeled("ALTER")</code></td>
+              <td>Reasonable clarification <em>not</em> in annotated set. An AST-based retrieval locates the relevant SQL fragment from GT SQL to ground the answer.</td>
+            </tr>
+            <tr>
+              <td><span class="badge red">UNA()</span></td>
+              <td><code>unanswerable()</code></td>
+              <td>Question requests schema details, GT SQL, or solution steps — things a real user wouldn't know. Simulator refuses.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── ARCHITECTURE ──────────────────────────────────── -->
+  <div class="card" style="margin-bottom:20px;">
+    <h2>End-to-End Flow</h2>
+    <div class="pipeline" style="flex-wrap:nowrap;justify-content:center;overflow-x:auto;padding:4px 0;">
+      <div class="pstep" style="min-width:140px;">
+        <span class="icon">🤖</span>
+        <div class="name">Agent calls ask_user</div>
+        <div class="desc"><code>clarification_question: str</code></div>
+      </div>
+      <span class="parrow">→</span>
+      <div class="pstep" style="min-width:160px;border-color:rgba(99,102,241,.5);">
+        <span class="icon">🔍</span>
+        <div class="name">Stage 1 · Parser LLM</div>
+        <div class="desc">Reads ambiguity JSON + gold SQL segments. Classifies question → AMB / LOC / UNA. Outputs action tag in <code>&lt;s&gt;…&lt;/s&gt;</code>.</div>
+      </div>
+      <span class="parrow">→</span>
+      <div class="pstep" style="min-width:120px;border-color:rgba(99,102,241,.5);">
+        <span class="icon">⚙️</span>
+        <div class="name">Action extracted</div>
+        <div class="desc"><code>labeled("downtime score")</code> or <code>unanswerable()</code> etc.</div>
+      </div>
+      <span class="parrow">→</span>
+      <div class="pstep" style="min-width:160px;border-color:rgba(34,211,238,.5);">
+        <span class="icon">💬</span>
+        <div class="name">Stage 2 · Generator LLM</div>
+        <div class="desc">Given action + DB schema + ambiguity JSON + GT SQL → generates a natural, realistic user reply. Cannot leak GT.</div>
+      </div>
+      <span class="parrow">→</span>
+      <div class="pstep" style="min-width:120px;border-color:rgba(52,211,153,.5);">
+        <span class="icon">📩</span>
+        <div class="name">Response returned</div>
+        <div class="desc">Natural language reply appended to agent's conversation history.</div>
+      </div>
+    </div>
+    <p style="margin-top:10px;font-size:12px;color:var(--muted);text-align:center;">
+      If Stage 1 returns <code>None</code> (parse failure), both stages fall back to <em>"I'm not sure I understand your question."</em>
+    </p>
+  </div>
+
+  <!-- ── PROMPTS ────────────────────────────────────────── -->
+  <div class="grid2" style="margin-bottom:20px;">
+
+    <!-- Stage 1 Parser -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Stage 1 · Parser Prompt (full)</h2>
+        <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+      </div>
+      <div class="expandable-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+        User-only message (no system prompt). Variables: <code>ambiguities_json</code>, <code>sql_segments</code>, <code>clarification_question</code>.
+        Output parsed from <code>&lt;s&gt;…&lt;/s&gt;</code> tag.
+      </p>
+<pre style="font-size:11px;max-height:340px;overflow-y:auto;">You are role-playing as a human USER interacting with an AI collaborator
+to complete a Text-to-SQL task. Your goal is to generate one realistic,
+natural response.
+
+<span class="key">Action Choices:</span>
+1. <span class="val">labeled(term)</span>   — question is about a <span class="str">pre-annotated</span> ambiguity point
+2. <span class="val">unlabeled(segment)</span> — reasonable but NOT in annotated ambiguities
+3. <span class="val">unanswerable()</span>  — asks for solution, schema, or GT SQL  ← REFUSE
+
+<span class="cmt">|The Start of All Labeled Ambiguity Points (Not visible to the AI)|</span>
+<span class="cmt">```json</span>
+<span class="str">{{ ambiguities_json }}</span>
+<span class="cmt">```</span>
+
+<span class="cmt">|The Start of Ground-truth SQL Segments (Not visible to the AI)|</span>
+<span class="str">{{ sql_segments }}</span>
+
+<span class="cmt">|The Start of Question from AI Collaborator|</span>
+<span class="str">{{ clarification_question }}</span>
+
+<span class="key">Guidelines:</span>
+- Choose ONLY one action.
+- You do NOT have access to the ground-truth SQL or database schema.
+
+<span class="key">Output Format:</span>
+<span class="cmt">&lt;think&gt;[step-by-step reasoning]&lt;/think&gt;</span>
+<span class="cmt">&lt;s&gt;[chosen action]&lt;/s&gt;</span></pre>
+      </div>
+    </div>
+
+    <!-- Stage 2 Generator -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Stage 2 · Generator Prompt (full)</h2>
+        <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+      </div>
+      <div class="expandable-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+        User-only message. Variables: <code>db_schema</code>, <code>ambiguities_json</code>, <code>not_ambig_question</code>, <code>gt_sql</code>, <code>sql_segments</code>, <code>asked_question</code>, <code>action</code>.
+        Output parsed from <code>&lt;s&gt;…&lt;/s&gt;</code> tag.
+      </p>
+<pre style="font-size:11px;max-height:340px;overflow-y:auto;">You are role-playing as a human USER to generate a realistic response
+to the AI collaborator's question. Based on the chosen action:
+
+<span class="key">Action Space:</span>
+1. <span class="val">labeled(term)</span>   — reveal the clarification for this annotated ambiguity
+2. <span class="val">unlabeled(segment)</span> — answer from the located GT SQL fragment
+3. <span class="val">unanswerable()</span>  — politely refuse
+
+<span class="cmt">|DB Schema Information|</span>
+<span class="str">{{ db_schema }}</span>
+
+<span class="cmt">|All Labeled Ambiguity Points (Not visible to the AI)|</span>
+<span class="str">{{ ambiguities_json }}</span>
+
+<span class="cmt">|Original Text-to-SQL Question (NOT directly quotable)|</span>
+<span class="str">{{ not_ambig_question }}</span>
+
+<span class="cmt">|Ground-truth SQL (Not visible to the AI)|</span>
+<span class="str">{{ gt_sql }}</span>
+
+<span class="cmt">|Ground-truth SQL Segments (Not visible to the AI)|</span>
+<span class="str">{{ sql_segments }}</span>
+
+<span class="cmt">|Question from AI Collaborator|</span>
+<span class="str">{{ asked_question }}</span>
+
+<span class="cmt">|Action Chosen (Not visible to the AI)|</span>
+<span class="str">{{ action }}</span>
+
+<span class="key">Guidelines:</span>
+- Answer based ONLY on the action and original clear question.
+- Do NOT quote the original question directly.
+- Do NOT reveal GT SQL segments, thought steps, or schema details.
+- Do NOT ask any question back.
+- Response must be concise.
+
+<span class="key">Output Format:</span>
+<span class="cmt">&lt;s&gt;[your natural language response]&lt;/s&gt;</span></pre>
+      </div>
+    </div>
+
+  </div><!-- /grid2 prompts -->
+
+  <!-- ── CODE + EXAMPLE ─────────────────────────────────── -->
+  <div class="grid2" style="margin-bottom:20px;">
+
+    <!-- Code implementation -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Code Implementation</h2>
+        <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+      </div>
+      <div class="expandable-body">
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">
+        <code>bird_interact_user_tools.py</code> — the <code>ask_user</code> tool wires both stages together.
+        The tool is injected with <code>ToolRuntime[TaskData, CustomAgentState]</code> so both stages have full access to the task context.
+      </p>
+<pre style="font-size:11.5px;"><span class="kw">def</span> <span class="val">stage_1_parse_action</span>(question, task, cfg) → str:
+    messages = build_llm_as_a_parser_messages({
+        <span class="str">'ambiguities_json'</span>: json.dumps(task.user_query_ambiguity),
+        <span class="str">'sql_segments'</span>:     _segment_sql_and_parse(task.sol_sql),
+        <span class="str">'clarification_question'</span>: question,
+    })
+    content = model.invoke(messages).content
+    <span class="cmt"># extract from &lt;s&gt;…&lt;/s&gt;  → e.g. 'labeled("downtime score")'</span>
+    <span class="kw">return</span> _extract_group_in_tag_pattern(content, <span class="str">'s'</span>)
+        <span class="kw">or</span> <span class="str">"I'm not sure I understand your question."</span>
+
+<span class="kw">def</span> <span class="val">stage_2_generator</span>(action, question, task, cfg) → str:
+    messages = build_llm_as_a_generator_messages({
+        <span class="str">"db_schema"</span>:         task.ddl_database_schema,
+        <span class="str">"ambiguities_json"</span>:  json.dumps(task.user_query_ambiguity),
+        <span class="str">"not_ambig_question"</span>: task.not_ambiguos_query,
+        <span class="str">"gt_sql"</span>:            task.sol_sql,
+        <span class="str">"sql_segments"</span>:      _segment_sql_and_parse(task.sol_sql),
+        <span class="str">"asked_question"</span>:    question,
+        <span class="str">"action"</span>:            action,
+    })
+    content = model.invoke(messages).content
+    <span class="kw">return</span> _extract_group_in_tag_pattern(content, <span class="str">'s'</span>)
+        <span class="kw">or</span> <span class="str">"I'm not sure I understand your question."</span>
+
+<span class="cmt"># The tool wires stage 1 → stage 2</span>
+<span class="kw">def</span> <span class="val">return_tool_ask_user</span>(config_user_simulator):
+    @tool
+    <span class="kw">def</span> <span class="val">ask_user</span>(clarification_question, runtime):
+        action    = stage_1_parse_action(clarification_question,
+                                        runtime.context, cfg)
+        generated = stage_2_generator(action, clarification_question,
+                                      runtime.context, cfg)
+        <span class="kw">return</span> generated
+    <span class="kw">return</span> ask_user</pre>
+      </div>
+    </div>
+
+    <!-- Concrete example -->
+    <div class="card">
+      <div class="card-header">
+        <h2>Worked Example — <code>solar_panel_1</code></h2>
+        <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+      </div>
+      <div class="expandable-body">
+      <h3>Agent's question</h3>
+      <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.3);border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px;">
+        "Could you clarify what you mean by 'downtime score'? Are you referring to a specific formula like System Unavailability (MTTR / (MTBF + MTTR)), or something else?"
+      </div>
+
+      <h3>Stage 1 · Parser input (key fields)</h3>
+<pre style="font-size:11px;margin-bottom:10px;"><span class="key">ambiguities_json</span>:
+  critical: [<span class="str">"downtime score"</span> → knowledge_linking_ambiguity,
+             <span class="str">"down"</span>           → semantic_ambiguity]
+
+<span class="key">sql_segments</span>:  <span class="cmt">om."mttrh" / (om."mtbfh" + om."mttrh")</span>
+<span class="key">clarification_question</span>:  <span class="str">"...downtime score... formula..."</span></pre>
+
+      <h3>Stage 1 · Parser output</h3>
+<pre style="font-size:11.5px;margin-bottom:12px;"><span class="cmt">&lt;think&gt;
+The agent asks about "downtime score" and mentions a formula.
+This matches the labeled ambiguity "downtime score"
+(knowledge_linking_ambiguity). I'll use labeled().
+&lt;/think&gt;</span>
+<span class="val">&lt;s&gt;labeled("downtime score")&lt;/s&gt;</span>  <span class="cmt">← extracted action</span></pre>
+
+      <h3>Stage 2 · Generator receives</h3>
+<pre style="font-size:11px;margin-bottom:10px;"><span class="key">action</span>: <span class="str">labeled("downtime score")</span>
+<span class="key">not_ambig_question</span>: <span class="str">"What is the System Unavailability..."</span>
+<span class="key">gt_sql</span>: <span class="cmt">ROUND(mttrh / (mtbfh + mttrh), 4)</span></pre>
+
+      <h3>Stage 2 · Final response</h3>
+      <div style="background:rgba(52,211,153,.06);border:1px solid rgba(52,211,153,.3);border-radius:8px;padding:10px 12px;font-size:12.5px;">
+        <em>"Yes, I mean System Unavailability — the ratio of MTTR to the sum of MTBF and MTTR."</em>
+        <br><span style="font-size:11px;color:var(--muted);margin-top:4px;display:block;">→ Realistic. Confirms the formula. Does NOT mention ROUND, numeric cast, or table names.</span>
+      </div>
+
+      <hr class="divider">
+      <h3>What if the agent had asked an UNA question?</h3>
+      <div style="background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.3);border-radius:8px;padding:10px 12px;font-size:12.5px;">
+        <p style="color:var(--muted);font-size:12px;font-style:italic;margin-bottom:6px;">Agent: "What table stores MTBF data in the database?"</p>
+        <strong style="color:var(--red);">Stage 1 → <code>unanswerable()</code></strong><br>
+        <strong>Stage 2 → </strong><em>"Sorry, this question is out of scope, so I cannot answer your question."</em>
+      </div>
+      </div>
+    </div>
+
+  </div><!-- /grid2 code+example -->
+
+  <!-- ── USERSIM-GUARD ───────────────────────────────────── -->
+  <div class="card">
+    <div class="card-header">
+      <h2>USERSIM-GUARD — Evaluation Benchmark for Simulator Robustness</h2>
+      <button class="expand-btn" onclick="openModal(this.closest('.card'))" title="Expand">⤢</button>
+    </div>
+    <div class="expandable-body">
+    <p style="font-size:12.5px;color:var(--muted);margin-bottom:14px;">
+      A manually curated dataset of <strong>2,100 questions</strong> (by 7 annotators) covering the three action categories in three phrasing styles (concise / normal / verbose):
+    </p>
+    <div class="grid3">
+      <div class="card" style="border-color:rgba(99,102,241,.4);">
+        <h3 style="color:var(--accent);">AMB — Annotated Ambiguity</h3>
+        <p style="font-size:12px;color:var(--muted);">Questions based on the pre-annotated ambiguity points. Tests whether the simulator correctly maps to labeled ambiguities and gives accurate, constrained clarifications.</p>
+        <p style="margin-top:8px;font-size:12px;"><em>"What do you mean by 'downtime score'?"</em></p>
+      </div>
+      <div class="card" style="border-color:rgba(34,211,238,.4);">
+        <h3 style="color:var(--accent2);">LOC — Localizable</h3>
+        <p style="font-size:12px;color:var(--muted);">Reasonable clarifications outside annotated set. Annotators identify confusion points in the GT SQL (e.g., column choice, formatting, rounding) and craft questions. Answer is grounded by AST-based SQL retrieval.</p>
+        <p style="margin-top:8px;font-size:12px;"><em>"Should the result be rounded to 4 decimal places?"</em></p>
+      </div>
+      <div class="card" style="border-color:rgba(248,113,113,.4);">
+        <h3 style="color:var(--red);">UNA — Unanswerable</h3>
+        <p style="font-size:12px;color:var(--muted);">Intentionally inappropriate questions that probe for GT SQL, schema info, or step-by-step solution guidance. A robust simulator must refuse — baseline simulators fail <strong style="color:var(--red);">67.4%</strong> of these.</p>
+        <p style="margin-top:8px;font-size:12px;"><em>"What is the exact SQL query I should write?"</em></p>
+      </div>
+    </div>
+    <div style="margin-top:14px;padding:12px 14px;background:var(--code-bg);border-radius:8px;border:1px solid var(--border);font-size:12.5px;">
+      <strong>Key result:</strong> Function-driven simulator (ours) achieves <strong style="color:var(--green);">97.3% safety</strong> on UNA questions vs.
+      <strong style="color:var(--red);">32.6%</strong> for the baseline — a <strong>3× improvement</strong> in refusal accuracy.
+      Evaluated using Qwen3-235B as an independent LLM-as-Judge.
+    </div>
+    </div>
+  </div>
+
+</div><!-- /slide-2 -->
+
+
+<!-- ── MODAL ──────────────────────────────────────────────────── -->
+<div id="modal-overlay" role="dialog" aria-modal="true">
+  <div id="modal-box">
+    <button id="modal-close" onclick="closeModal()" title="Close (Esc)">✕</button>
+    <div id="modal-content"></div>
+  </div>
+</div>
+
+<script>
+  /* ── slide navigation ── */
+  function showSlide(idx) {
+    document.querySelectorAll('.slide').forEach((s, i) => s.classList.toggle('active', i === idx));
+    document.querySelectorAll('nav button').forEach((b, i) => b.classList.toggle('active', i === idx));
+  }
+
+  /* ── modal ── */
+  function openModal(cardEl) {
+    const content = cardEl.querySelector('.expandable-body');
+    document.getElementById('modal-content').innerHTML = content.innerHTML;
+    document.getElementById('modal-overlay').classList.add('open');
+    document.body.style.overflow = 'hidden';
+  }
+  function closeModal() {
+    document.getElementById('modal-overlay').classList.remove('open');
+    document.body.style.overflow = '';
+  }
+  document.getElementById('modal-overlay').addEventListener('click', e => {
+    if (e.target === document.getElementById('modal-overlay')) closeModal();
+  });
+
+  /* ── keyboard ── */
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { closeModal(); return; }
+    if (document.getElementById('modal-overlay').classList.contains('open')) return;
+    const slides = document.querySelectorAll('.slide');
+    const cur = [...slides].findIndex(s => s.classList.contains('active'));
+    if ((e.key === 'ArrowRight' || e.key === 'ArrowDown') && cur < slides.length - 1) showSlide(cur + 1);
+    if ((e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   && cur > 0)                 showSlide(cur - 1);
+  });
+</script>
+</body>
+</html>
