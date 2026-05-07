@@ -114,7 +114,10 @@ def test_level1_fields_passed_through():
     ))
     result = clf.classify_turn(
         message_index=1,
-        ai_msg={"content": [], "tool_calls": []},
+        ai_msg={
+            "content": [{"type": "text", "text": "What do you mean?"}],
+            "tool_calls": [],
+        },
         prior_failed_submit=False,
     )
     assert result.reasoning == "Clearly asking one question."
@@ -131,7 +134,10 @@ def test_alternatives_passed_through():
     ))
     result = clf.classify_turn(
         message_index=8,
-        ai_msg={"content": [], "tool_calls": []},
+        ai_msg={
+            "content": [{"type": "thinking", "text": "Let me reconsider."}],
+            "tool_calls": [],
+        },
         prior_failed_submit=True,
     )
     assert result.level1_alternatives == ["ANSWER_ATTEMPT"]

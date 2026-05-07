@@ -38,7 +38,7 @@ def classify_level2(
         NO_ACTION       — no tools, empty content
         UNKNOWN         — a tool is present but not in the YAML config
     """
-    tool_names = [tc["tool_name"] for tc in tool_calls]
+    tool_names = [tc.get("tool_name", "") for tc in tool_calls if tc.get("tool_name")]
 
     if not tool_names:
         return ("TEXT_ONLY" if has_content else "NO_ACTION"), []

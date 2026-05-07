@@ -72,6 +72,17 @@ class TurnClassifier:
             tool_calls, self._tool_categories, has_content=has_content
         )
 
+        if level2_cat == "NO_ACTION":
+            return TurnClassification(
+                message_index=message_index,
+                level2_category=level2_cat,
+                level2_tools_called=tools_called,
+                reasoning="Empty turn — no thinking, no text, no tool calls.",
+                level1_category="MISSING",
+                level1_alternatives=[],
+                confidence="CERTAIN",
+            )
+
         thinking, text = _extract_content_parts(content_items)
         tool_calls_summary = _summarize_tool_calls(tool_calls)
 
