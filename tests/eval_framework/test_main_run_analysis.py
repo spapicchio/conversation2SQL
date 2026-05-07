@@ -119,3 +119,56 @@ def test_classify_record_no_ai_turns():
     assert classifications == []
     assert enriched["turn_classifications"] == []
     mock_classifier.classify_turn.assert_not_called()
+
+
+# ── _update_summary ───────────────────────────────────────────────────────────
+
+def test_update_summary_increments_all_counters():
+    from conversation2sql.eval_framework.main_run_analysis import (
+        AnalysisSummary,
+        _update_summary,
+    )
+
+    summary = AnalysisSummary()
+    tc = _make_tc(l2="TEXT_ONLY", l1="DISCUSSION", confidence="CERTAIN")
+    _update_summary(summary, "q1", [tc])
+
+    assert summary.l2_counts["TEXT_ONLY"] == 1
+    assert summary.l1_counts["DISCUSSION"] == 1
+    assert summary.confidence_counts["CERTAIN"] == 1
+    assert "q1" in summary.per_instance
+    assert summary.per_instance["q1"].n_turns == 1
+    assert summary.per_instance["q1"].l1_counts["DISCUSSION"] == 1
+
+
+def test_update_summary_accumulates_across_calls():
+    from conversation2sql.eval_framework.main_run_analysis import (
+        AnalysisSummary,
+        _update_summary,
+    )
+
+    summary = AnalysisSummary()
+    _update_summary(summary, "q1", [_make_tc(l1="DISCUSSION"), _make_tc(l1="CLARIFICATION")])
+    _update_summary(summary, "q1", [_make_tc(l1="DISCUSSION")])
+
+    assert summary.l1_counts["DISCUSSION"] == 2
+    assert summary.l1_counts["CLARIFICATION"] == 1
+    assert summary.per_instance["q1"].n_turns == 3
+
+
+def test_update_summary_separate_instances():
+    from conversation2sql.eval_framework.main_run_analysis import (
+        AnalysisSummary,
+        _update_summary,
+    )
+
+    summary = AnalysisSummary()
+    _update_summary(summary, "q1", [_make_tc(l1="DISCUSSION")])
+    _update_summary(summary, "q2", [_make_tc(l1="CLARIFICATION")])
+
+    assert "q1" in summary.per_instance
+    assert "q2" in summary.per_instance
+    assert summary.per_instance["q1"].n_turns == 1
+    assert summary.per_instance["q2"].n_turns == 1
+    assert summary.l1_counts["DISCUSSION"] == 1
+    assert summary.l1_counts["CLARIFICATION"] == 1

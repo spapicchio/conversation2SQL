@@ -89,3 +89,19 @@ def classify_record(
         "turn_classifications": [tc.model_dump() for tc in turn_classifications],
     }
     return enriched, turn_classifications
+
+
+def _update_summary(
+    summary: AnalysisSummary,
+    instance_id: str,
+    classifications: list[TurnClassification],
+) -> None:
+    if instance_id not in summary.per_instance:
+        summary.per_instance[instance_id] = InstanceStats()
+    stats = summary.per_instance[instance_id]
+    for tc in classifications:
+        summary.l2_counts[tc.level2_category] += 1
+        summary.l1_counts[tc.level1_category] += 1
+        summary.confidence_counts[tc.confidence] += 1
+        stats.n_turns += 1
+        stats.l1_counts[tc.level1_category] += 1
