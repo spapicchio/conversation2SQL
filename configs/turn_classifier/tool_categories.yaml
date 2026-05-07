@@ -1,0 +1,14 @@
+# Tool name → Level 2 category
+# Valid categories: SQL_SUBMISSION, USER_INTERACTION, DB_EXPLORATION, KNOWLEDGE_LOOKUP
+# Priority when multiple categories appear in one turn:
+#   SQL_SUBMISSION > USER_INTERACTION > specific single category > MIXED
+tool_categories:
+  submit_sql: SQL_SUBMISSION
+  ask_user: USER_INTERACTION
+  execute_sql: DB_EXPLORATION
+  get_schema: DB_EXPLORATION
+  get_column_meaning: DB_EXPLORATION
+  get_all_column_meanings: DB_EXPLORATION
+  get_all_external_knowledge_names: KNOWLEDGE_LOOKUP
+  get_knowledge_definition: KNOWLEDGE_LOOKUP
+  get_all_knowledge_definitions: KNOWLEDGE_LOOKUP
