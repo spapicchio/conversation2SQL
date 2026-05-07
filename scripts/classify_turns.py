@@ -107,7 +107,12 @@ def main() -> None:
 
     with open(args.output, "w") as out_f:
         for input_path in args.inputs:
-            records = list(iter_records(input_path))
+            try:
+                records = list(iter_records(input_path))
+            except Exception as exc:
+                print(f"ERROR reading {input_path}: {exc}", file=sys.stderr)
+                errors += 1
+                continue
             for record in tqdm(records, desc=str(input_path)):
                 instance_id = record.get("instance_id", "?")
                 try:
