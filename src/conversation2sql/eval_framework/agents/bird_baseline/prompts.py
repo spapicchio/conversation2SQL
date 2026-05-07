@@ -9,27 +9,7 @@ Template variables use ``{{ jinja2 }}`` delimiters.
 
 from __future__ import annotations
 
-from jinja2 import Template
-
-
-# =============================================================================
-# Base
-# =============================================================================
-def _render(template_str: str, params: dict) -> str:
-    return Template(template_str).render(**params)
-
-
-def _build_messages(
-        system_str: str | None,
-        user_str: str,
-        params: dict,
-) -> list[dict]:
-    msgs: list[dict] = []
-    if system_str:
-        msgs.append(dict(role="system", content=_render(system_str, params)))
-    msgs.append(dict(role="user", content=_render(user_str, params)))
-    return msgs
-
+from conversation2sql.eval_framework.agents.utils import utils_build_messages
 
 # =============================================================================
 # Bird-Interact Agent
@@ -82,4 +62,4 @@ User's Question:
 def build_bird_interact_agent_messages(
         params: dict,
 ) -> list[dict]:
-    return _build_messages(_BIRD_AGENT_SYSTEM, _BIRD_AGENT_USER, params)
+    return utils_build_messages(_BIRD_AGENT_SYSTEM, _BIRD_AGENT_USER, params)

@@ -15,10 +15,8 @@ from langgraph.runtime import Runtime
 from langgraph.types import Command, Overwrite
 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
-from conversation2sql.eval_framework.agents.bird_baseline.tools import DB_TOOL_COSTS, USER_TOOL_COSTS
+from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COSTS
 from conversation2sql.eval_framework.state import TaskData
-
-TOOL_COSTS: dict[str, float] = {**DB_TOOL_COSTS, **USER_TOOL_COSTS}
 
 
 @before_model(can_jump_to=["end"])

@@ -57,6 +57,9 @@ class TaskData(BaseModel):
     # dicts: {ExternalKnowledgeEntry.knowledge: ExternalKnowledgeEntry}
     full_knowledge_base: dict[str, ExternalKnowledgeEntry] = Field(default_factory=dict)
     masked_agent_kb: dict[str, ExternalKnowledgeEntry] = Field(default_factory=dict)
+    # Per-entry linearized subgraph (triples + topologically ordered definitions),
+    # keyed by `knowledge` name. See dataset_readers/utils_kb.py.
+    masked_agent_kb_linearized: dict[str, str] = Field(default_factory=dict)
     gt_knowledge_base: dict[str, ExternalKnowledgeEntry] = Field(default_factory=dict)
     #  key = f"{db_name}|{req.table_name.lower()}|{req.column_name.lower()}"
     column_meanings: dict[str, ColumnMeaningEntry] = Field(default_factory=dict)

@@ -26,12 +26,13 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     return_tool_ask_user,
     submit_sql,
 )
+from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COSTS
+
 from conversation2sql.eval_framework.agents.utils import utils_process_agent_response
 from conversation2sql.eval_framework.state import TaskData
 from conversation2sql.logger import get_logger
 
 logger = get_logger(__name__)
-
 
 def run_agent_bird_baseline(
         single_task: TaskData,
@@ -91,4 +92,4 @@ def run_agent_bird_baseline(
     }
 
     response: CustomAgentState = agent.invoke(agent_state, context=single_task)  # pyrefly: ignore
-    return utils_process_agent_response(response)
+    return utils_process_agent_response(response, tool_costs=TOOL_COSTS)

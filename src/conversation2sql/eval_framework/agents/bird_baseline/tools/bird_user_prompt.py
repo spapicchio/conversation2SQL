@@ -1,7 +1,7 @@
 # =============================================================================
 # LLM-as-a-Parser  (step 1 of two-stage user simulator)
 # =============================================================================
-from conversation2sql.eval_framework.agents.bird_baseline.prompts import _build_messages
+from conversation2sql.eval_framework.agents.utils import utils_build_messages
 
 _PARSER_USER = """
 You are role-playing as a human USER interacting with an AI collaborator to complete a Text-to-SQL task. The AI collaborator may ask one question about this task. Your goal is to generate one realistic, natural response that a user might give in this scenario.
@@ -51,7 +51,7 @@ You should enclose your step-by-step thought between "<think>" and "</think>", a
 
 
 def build_llm_as_a_parser_messages(params: dict) -> list[dict]:
-    return _build_messages(None, _PARSER_USER, params)
+    return utils_build_messages(None, _PARSER_USER, params)
 
 
 # =============================================================================
@@ -130,7 +130,7 @@ Your response must follow the format "<s>[Fill-in-Your-Response]</s>"; for examp
 def build_llm_as_a_generator_messages(
         params: dict,
 ) -> list[dict]:
-    return _build_messages(None, _GENERATOR_USER, params)
+    return utils_build_messages(None, _GENERATOR_USER, params)
 
 
 # =============================================================================
@@ -185,4 +185,4 @@ class DefaultUserSimulatorParams(dict):
 def build_default_user_simulator_messages(
         params: DefaultUserSimulatorParams,
 ) -> list[dict]:
-    return _build_messages(None, _DEFAULT_SIM_USER, params)
+    return utils_build_messages(None, _DEFAULT_SIM_USER, params)

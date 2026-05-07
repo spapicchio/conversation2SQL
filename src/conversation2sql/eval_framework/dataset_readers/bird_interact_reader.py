@@ -5,6 +5,7 @@ from pathlib import Path
 import tqdm
 
 from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute import _execute_query
+from conversation2sql.eval_framework.dataset_readers.utils_kb import linearize_kb
 from conversation2sql.eval_framework.state import TaskData, ColumnMeaningEntry, ExternalKnowledgeEntry, FollowUpPayload
 from conversation2sql.logger import get_logger
 
@@ -168,6 +169,7 @@ def load_bird_interact_as_tasks(dataset_path: str,
                 ddl_database_schema=schema,
                 full_knowledge_base=kb_full,
                 masked_agent_kb=masked_agent_kb,
+                masked_agent_kb_linearized=linearize_kb(masked_agent_kb),
                 gt_knowledge_base={k: v for k, v in kb_full.items() if v.id in external_knowledge},
                 column_meanings=column_meanings,
                 user_query_ambiguity=line.pop("user_query_ambiguity"),
@@ -225,3 +227,6 @@ if __name__ == '__main__':
         _db_dsn_template,
         _user_patience,
     )
+
+    print(f"Loaded {len(samples)} samples")
+    print(samples[0].masked_agent_kb_linearized)

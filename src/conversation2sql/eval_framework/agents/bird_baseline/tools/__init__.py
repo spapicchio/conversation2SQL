@@ -14,6 +14,8 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_us
     submit_sql
 )
 
+TOOL_COSTS: dict[str, float] = {**DB_TOOL_COSTS, **USER_TOOL_COSTS}
+
 __all__ = [
     "execute_sql",
     "get_schema",
@@ -26,4 +28,5 @@ __all__ = [
     "submit_sql",
     "DB_TOOL_COSTS",
     "USER_TOOL_COSTS",
+    "TOOL_COSTS",
 ]
