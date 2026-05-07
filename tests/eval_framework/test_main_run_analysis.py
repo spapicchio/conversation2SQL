@@ -172,3 +172,97 @@ def test_update_summary_separate_instances():
     assert summary.per_instance["q2"].n_turns == 1
     assert summary.l1_counts["DISCUSSION"] == 1
     assert summary.l1_counts["CLARIFICATION"] == 1
+
+
+# ── workflow_classification_pipeline ─────────────────────────────────────────
+
+def test_workflow_writes_enriched_jsonl(tmp_path):
+    from unittest.mock import patch
+    from conversation2sql.eval_framework.main_run_analysis import workflow_classification_pipeline
+
+    input_file = tmp_path / "results_smaller.jsonl"
+    input_file.write_text(
+        json.dumps({
+            "instance_id": "q1",
+            "messages": [{"role": "ai", "content": [], "tool_calls": []}],
+        }) + "\n"
+    )
+    output = tmp_path / "out.jsonl"
+    tc = _make_tc(index=0, l2="NO_ACTION", l1="MISSING")
+
+    with (
+        patch("conversation2sql.eval_framework.main_run_analysis.utils_create_model"),
+        patch("conversation2sql.eval_framework.main_run_analysis.load_tool_categories", return_value={}),
+        patch("conversation2sql.eval_framework.main_run_analysis.TurnClassifier") as mock_cls,
+    ):
+        mock_cls.return_value.classify_turn.return_value = tc
+        summary = workflow_classification_pipeline(
+            inputs=[input_file],
+            output=output,
+            model_str="openai/gpt-4o-mini",
+            tool_categories_path=tmp_path / "tool_categories.yaml",
+        )
+
+    assert summary.total_records == 1
+    assert summary.total_errors == 0
+    assert output.exists()
+    record = json.loads(output.read_text().strip())
+    assert "turn_classifications" in record
+    assert record["turn_classifications"][0]["level1_category"] == "MISSING"
+
+
+def test_workflow_counts_unreadable_file_as_error(tmp_path):
+    from unittest.mock import patch
+    from conversation2sql.eval_framework.main_run_analysis import workflow_classification_pipeline
+
+    missing = tmp_path / "does_not_exist.jsonl"
+    output = tmp_path / "out.jsonl"
+
+    with (
+        patch("conversation2sql.eval_framework.main_run_analysis.utils_create_model"),
+        patch("conversation2sql.eval_framework.main_run_analysis.load_tool_categories", return_value={}),
+        patch("conversation2sql.eval_framework.main_run_analysis.TurnClassifier"),
+    ):
+        summary = workflow_classification_pipeline(
+            inputs=[missing],
+            output=output,
+            model_str="openai/gpt-4o-mini",
+            tool_categories_path=tmp_path / "tool_categories.yaml",
+        )
+
+    assert summary.total_records == 0
+    assert summary.total_errors == 1
+
+
+def test_workflow_aggregates_summary(tmp_path):
+    from unittest.mock import patch
+    from conversation2sql.eval_framework.main_run_analysis import workflow_classification_pipeline
+
+    input_file = tmp_path / "results_smaller.jsonl"
+    input_file.write_text(
+        "\n".join([
+            json.dumps({"instance_id": "q1", "messages": [{"role": "ai", "content": [], "tool_calls": []}]}),
+            json.dumps({"instance_id": "q2", "messages": [{"role": "ai", "content": [], "tool_calls": []}]}),
+        ])
+    )
+    output = tmp_path / "out.jsonl"
+    tc = _make_tc(l2="TEXT_ONLY", l1="DISCUSSION", confidence="CERTAIN")
+
+    with (
+        patch("conversation2sql.eval_framework.main_run_analysis.utils_create_model"),
+        patch("conversation2sql.eval_framework.main_run_analysis.load_tool_categories", return_value={}),
+        patch("conversation2sql.eval_framework.main_run_analysis.TurnClassifier") as mock_cls,
+    ):
+        mock_cls.return_value.classify_turn.return_value = tc
+        summary = workflow_classification_pipeline(
+            inputs=[input_file],
+            output=output,
+            model_str="openai/gpt-4o-mini",
+            tool_categories_path=tmp_path / "tc.yaml",
+        )
+
+    assert summary.total_records == 2
+    assert summary.l2_counts["TEXT_ONLY"] == 2
+    assert summary.l1_counts["DISCUSSION"] == 2
+    assert "q1" in summary.per_instance
+    assert "q2" in summary.per_instance
