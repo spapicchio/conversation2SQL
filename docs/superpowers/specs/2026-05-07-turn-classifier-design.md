@@ -119,9 +119,19 @@ record
     "message_index": 14,
     "level2_category": "USER_INTERACTION",
     "level2_tools_called": ["ask_user"],
+    "reasoning": "The agent presents four numbered sub-questions covering two independent ambiguities ...",
     "level1_category": "INTERROGATION",
-    "reasoning": "The agent presents four numbered sub-questions ...",
-    "confidence": 0.92
+    "level1_alternatives": [],
+    "confidence": "CERTAIN"
+  },
+  {
+    "message_index": 22,
+    "level2_category": "SQL_SUBMISSION",
+    "level2_tools_called": ["submit_sql"],
+    "reasoning": "Agent submits SQL after a prior failed attempt, but the thinking shows no explicit acknowledgment of the failure ...",
+    "level1_category": "REVISION",
+    "level1_alternatives": ["ANSWER_ATTEMPT"],
+    "confidence": "PLAUSIBLE"
   },
   ...
 ]
@@ -134,10 +144,19 @@ record
 ### Strategy: Single-pass CoT with structured output
 
 - **Model:** configurable via `--model` flag (default: `openai/gpt-4o-mini` via LiteLLM). Same `utils_create_model` factory used by the rest of the codebase.
-- **Structured output:** `model.with_structured_output(TurnClassification)` — LangChain enforces JSON schema, no regex parsing.
+- **Structured output:** `model.with_structured_output(Level1Classification)` — LangChain enforces JSON schema, no regex parsing.
 - **CoT:** the Pydantic schema places `reasoning: str` before `level1_category: str`, so the model writes its rationale before committing to a label.
 - **Cross-turn context:** `prior_failed_submit` flag is injected so the model can detect `REVISION` reliably without re-reading the full history.
-- **Prompt template:** Jinja2, in `prompts.py`. Includes all 10 category definitions plus disambiguation notes.
+- **Prompt template:** Jinja2, in `prompts.py`. Includes all 10 category definitions, confidence level definitions, and the instruction: *"When confidence is PLAUSIBLE or UNCERTAIN, list every other label that could reasonably apply in `level1_alternatives`. When confidence is CERTAIN or CONFIDENT, leave `level1_alternatives` empty."*
+
+### Confidence scale (discrete, 4 levels — evidence-anchored)
+
+| Value | Meaning |
+|---|---|
+| `CERTAIN` | Structurally determined — tool calls alone make the label unambiguous (e.g. `submit_sql` → ANSWER_ATTEMPT) |
+| `CONFIDENT` | Text/thinking strongly supports one label; a second interpretation exists but is clearly weaker |
+| `PLAUSIBLE` | Two labels are in competition; the chosen one is the best fit but the other is genuinely defensible — **must populate `level1_alternatives`** |
+| `UNCERTAIN` | Forced choice — turn is mixed or ambiguous enough that the label could easily be wrong — **must populate `level1_alternatives`** |
 
 ### Pydantic schemas
 
@@ -146,18 +165,20 @@ Two schemas keep responsibilities clean:
 ```python
 class Level1Classification(BaseModel):
     """What the LLM judge returns — only semantic fields."""
-    reasoning: str        # CoT — written before label
-    level1_category: str  # one of 10 labels
-    confidence: float     # 0.0–1.0
+    reasoning: str                  # CoT — written before label
+    level1_category: str            # primary (best-fit) label, one of 10
+    level1_alternatives: list[str]  # competing labels; non-empty only when PLAUSIBLE or UNCERTAIN
+    confidence: Literal["CERTAIN", "CONFIDENT", "PLAUSIBLE", "UNCERTAIN"]
 
 class TurnClassification(BaseModel):
     """Final assembled output per turn (rules + LLM merged by classifier.py)."""
     message_index: int
-    level2_category: str           # from rules.py
-    level2_tools_called: list[str] # from rules.py
-    reasoning: str                 # from LLM
-    level1_category: str           # from LLM
-    confidence: float              # from LLM
+    level2_category: str            # from rules.py
+    level2_tools_called: list[str]  # from rules.py
+    reasoning: str                  # from LLM
+    level1_category: str            # from LLM — primary label
+    level1_alternatives: list[str]  # from LLM — competing labels when PLAUSIBLE/UNCERTAIN
+    confidence: Literal["CERTAIN", "CONFIDENT", "PLAUSIBLE", "UNCERTAIN"]  # from LLM
 ```
 
 `model.with_structured_output(Level1Classification)` is called; `classifier.py` then assembles `TurnClassification` by merging the Level 2 fields from `rules.py` with the Level 1 fields from the LLM.
@@ -186,7 +207,8 @@ uv run python scripts/classify_turns.py \
 
 - **New tool:** add one line to `tool_categories.yaml`, no code change
 - **New Level 2 category:** add the string to the YAML values; `rules.py` uses the values as-is
-- **New Level 1 label:** add to the Pydantic `Literal` in `schemas.py` and update the prompt template in `prompts.py`
+- **New Level 1 label:** add to `schemas.py` and update the prompt template in `prompts.py` (both category definition and disambiguation notes)
+- **Confidence scale:** fixed at 4 values; changing it requires updating the `Literal` in `schemas.py` and the prompt
 - **Self-consistency:** wrap `TurnClassifier.classify_turn` with K-run majority vote by passing `n_votes > 1` — stub in `classifier.py`, not implemented by default
 
 ---
