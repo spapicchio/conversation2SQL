@@ -52,6 +52,9 @@ test = [
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "integration: requires live Postgres + provider API keys",
+]
 
 [build-system]
 requires = ["hatchling"]

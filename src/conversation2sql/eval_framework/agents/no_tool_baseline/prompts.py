@@ -36,4 +36,4 @@ Take a deep breath and think step by step to find the correct SQL query.
 def build_omnisql_prompt(
         params: dict,
 ) -> list[dict]:
-    return utils_build_messages(_BASE_MODEL_SYSTEM, _BASE_MODEL_SYSTEM, params)
+    return utils_build_messages(_BASE_MODEL_SYSTEM, _BASE_MODEL_USER, params)

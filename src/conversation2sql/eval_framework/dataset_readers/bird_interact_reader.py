@@ -55,15 +55,14 @@ def _get_external_knowledge(dataset_path: Path, db_name: str) -> dict[str, Exter
     return kb
 
 
-def _calculate_initial_budget(line: dict, user_patience: int) -> float:
-    """a-interact budget in bird-coins (per task, paper Section 3.2).
+def _calculate_initial_budget(line: dict, user_patience: int, count_ambiguity: bool = True) -> float:
+    """Task budget in bird-coins (paper Section 3.2).
 
-    Formula: 6 + 2 * m_amb + 2 * patience
-      - 6 = ENV_INTERACT(3) + SUBMIT(3) base budget
-      - 2 * m_amb = one ask_user (cost=2) per ambiguity point
-      - 2 * patience = extra exploration tolerance
-      - patience=3 in config = patience_budget=6 in reference (we multiply by 2)
+    With count_ambiguity=True (default): 6 + 2*m_amb + 2*patience
+    With count_ambiguity=False: 6 + 2*patience (no-ambiguity ablations).
     """
+    if not count_ambiguity:
+        return 6.0 + 2.0 * user_patience
     critical = len(line.get("user_query_ambiguity", {}).get("critical_ambiguity", []))
     knowledge = len(line.get("knowledge_ambiguity", []))
     m_amb = critical + knowledge
@@ -163,7 +162,7 @@ def load_bird_interact_as_tasks(dataset_path: str,
                 sol_sql=line.pop('sol_sql'),
                 not_ambiguos_query=not_ambiguos_query,
                 follow_up=FollowUpPayload(**line.pop("follow_up")),
-                task_budget=_calculate_initial_budget(line, user_patience_budget),
+                task_budget=_calculate_initial_budget(line, user_patience_budget, count_ambiguity=make_data_ambiguous),
                 db_dsn=db_dsn_template.format(database=db_name),
                 database_engine='postgresql',
                 ddl_database_schema=schema,

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -6,9 +8,10 @@ from pydantic import BaseModel, Field
 # ---------------------------------------------------------------------------
 class ConfigPipeline(BaseModel):
     debug: bool = True
-    mode: str = 'a-interact'  # a-interact | c-interact | oracle 
+    mode: str = 'a-interact'  # a-interact | c-interact | oracle
     output_folder: str = "results"
     concurrency: int = Field(default=5, description="Number of parallel tasks to run")
+    baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full'] = 'bird_full'
 
 
 # ---------------------------------------------------------------------------

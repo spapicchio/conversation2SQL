@@ -39,12 +39,20 @@ def run_agent_bird_baseline(
         model_agent: BaseChatModel,
         model_user_parsing: BaseChatModel,
         model_user_generator: BaseChatModel,
+        *,
+        enable_ask_user: bool,
 ) -> CustomAgentState:
+    if enable_ask_user:
+        assert (
+            model_user_parsing is not None and model_user_generator is not None
+        ), "model_user_parsing and model_user_generator must not be None when enable_ask_user=True"
+
     messages = build_bird_interact_agent_messages(
         params={
             "total_budget": single_task.task_budget,
             "amb_user_query": single_task.task_question,
             # "amb_user_query": 'This is a debug message, call only ask_user as tool with an invented question and return without submitting'
+            "enable_ask_user": enable_ask_user,
         }
     )
 
@@ -56,9 +64,10 @@ def run_agent_bird_baseline(
         get_all_external_knowledge_names,
         get_knowledge_definition,
         get_all_knowledge_definitions,
-        return_tool_ask_user(model_user_parsing, model_user_generator),
         submit_sql,
     ]
+    if enable_ask_user:
+        tools.append(return_tool_ask_user(model_user_parsing, model_user_generator))
 
     agent = create_agent(
         model_agent,
