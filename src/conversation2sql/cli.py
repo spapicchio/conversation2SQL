@@ -44,9 +44,76 @@ def run(
     workflow_evaluation_pipeline(*cfg)
 
 
+def _load_run(run_dir: Path) -> tuple[dict, list[dict]] | None:
+    config_path = run_dir / "config.yaml"
+    jsonl_path = run_dir / "results_smaller.jsonl"
+    if not config_path.exists() or not jsonl_path.exists():
+        return None
+    config = yaml.safe_load(config_path.read_text())
+    records = [
+        json.loads(line)
+        for line in jsonl_path.read_text().splitlines()
+        if line.strip()
+    ]
+    return config, records
+
+
+def _show_summary_table(results_dir: Path) -> None:
+    if not results_dir.exists():
+        typer.echo(f"Results directory not found: {results_dir}", err=True)
+        raise typer.Exit(1)
+
+    rows = []
+    for baseline_dir in sorted(results_dir.iterdir()):
+        if not baseline_dir.is_dir():
+            continue
+        for date_dir in sorted(baseline_dir.iterdir()):
+            if not date_dir.is_dir():
+                continue
+            for time_dir in sorted(date_dir.iterdir()):
+                if not time_dir.is_dir():
+                    continue
+                loaded = _load_run(time_dir)
+                if loaded is None or not loaded[1]:
+                    continue
+                config, records = loaded
+                n = len(records)
+                exec_acc = sum(r.get("execution_accuracy", 0) for r in records) / n
+                avg_cost = sum(r.get("total_cost", 0) for r in records) / n
+                rows.append((
+                    config.get("pipeline", {}).get("baseline", "?"),
+                    date_dir.name,
+                    time_dir.name,
+                    config.get("predictor", {}).get("model_name", "?"),
+                    n,
+                    exec_acc,
+                    avg_cost,
+                ))
+
+    rows.sort(key=lambda r: (r[1], r[2]), reverse=True)
+
+    table = Table(title="Evaluation Results")
+    for col, justify in [
+        ("baseline", "left"), ("date", "left"), ("time", "left"),
+        ("model", "left"), ("tasks", "right"), ("exec_acc", "right"), ("avg_cost", "right"),
+    ]:
+        table.add_column(col, justify=justify)
+
+    for baseline, date, time_s, model, n, exec_acc, avg_cost in rows:
+        table.add_row(baseline, date, time_s, model, str(n), f"{exec_acc:.2f}", f"{avg_cost:.4f}")
+
+    console.print(table)
+
+
 @app.command()
 def results(
-    results_dir: Optional[Path] = typer.Option(None, "--results-dir", help="Path to results directory."),
+    dir: Path = typer.Option(Path("results"), "--dir", help="Results folder root."),
+    run: Optional[str] = typer.Option(
+        None, "--run", help="Drill into a specific run: BASELINE/YYYY_MM_DD/HH_MM_SS."
+    ),
 ) -> None:
-    """Display evaluation results. (Not yet implemented.)"""
-    raise NotImplementedError("The 'results' command is not yet implemented.")
+    """Inspect past evaluation results."""
+    if run:
+        _show_run_drilldown(dir, run)
+    else:
+        _show_summary_table(dir)
