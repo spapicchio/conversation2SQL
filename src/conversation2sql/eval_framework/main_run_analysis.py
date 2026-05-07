@@ -125,6 +125,8 @@ def workflow_classification_pipeline(
         AnalysisSummary with aggregate counters and per-instance stats.
     """
     tool_categories = load_tool_categories(tool_categories_path)
+    if "/" not in model_str:
+        raise ValueError(f"model_str must be 'provider/model', got: {model_str!r}")
     provider, model_name = model_str.split("/", 1)
     model = utils_create_model(
         model_name=model_name,

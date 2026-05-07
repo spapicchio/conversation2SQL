@@ -266,3 +266,74 @@ def test_workflow_aggregates_summary(tmp_path):
     assert summary.l1_counts["DISCUSSION"] == 2
     assert "q1" in summary.per_instance
     assert "q2" in summary.per_instance
+
+
+# ── print_summary_tables ──────────────────────────────────────────────────────
+
+def test_print_summary_tables_no_exception():
+    import io
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import conversation2sql.eval_framework.main_run_analysis as mod
+    from conversation2sql.eval_framework.main_run_analysis import (
+        AnalysisSummary,
+        InstanceStats,
+        print_summary_tables,
+    )
+    from rich.console import Console
+
+    summary = AnalysisSummary(
+        l2_counts=Counter({"TEXT_ONLY": 3, "SQL_SUBMISSION": 1}),
+        l1_counts=Counter({"DISCUSSION": 2, "CLARIFICATION": 2}),
+        confidence_counts=Counter({"CERTAIN": 3, "CONFIDENT": 1}),
+        per_instance={
+            "q1": InstanceStats(n_turns=2, l1_counts=Counter({"DISCUSSION": 2})),
+            "q2": InstanceStats(n_turns=2, l1_counts=Counter({"CLARIFICATION": 2})),
+        },
+        total_records=2,
+        total_errors=0,
+    )
+
+    buf = io.StringIO()
+    with patch.object(mod, "console", Console(file=buf)):
+        print_summary_tables(summary, Path("results/out.jsonl"))
+    output = buf.getvalue()
+
+    assert "L2 Category Distribution" in output
+    assert "L1 Category Distribution" in output
+    assert "Confidence Distribution" in output
+    assert "Per-Instance Breakdown" in output
+    assert "2 records classified" in output
+
+
+def test_print_summary_tables_empty_instance():
+    import io
+    from pathlib import Path
+    from unittest.mock import patch
+
+    import conversation2sql.eval_framework.main_run_analysis as mod
+    from conversation2sql.eval_framework.main_run_analysis import (
+        AnalysisSummary,
+        InstanceStats,
+        print_summary_tables,
+    )
+    from rich.console import Console
+
+    # Instance with no turns (empty l1_counts) should use fallback "—"
+    summary = AnalysisSummary(
+        l2_counts=Counter(),
+        l1_counts=Counter(),
+        confidence_counts=Counter(),
+        per_instance={"q1": InstanceStats(n_turns=0, l1_counts=Counter())},
+        total_records=0,
+        total_errors=1,
+    )
+
+    buf = io.StringIO()
+    with patch.object(mod, "console", Console(file=buf)):
+        print_summary_tables(summary, Path("out.jsonl"))
+    output = buf.getvalue()
+
+    assert "—" in output  # "—" fallback for empty l1_counts
+    assert "1 errors" in output
