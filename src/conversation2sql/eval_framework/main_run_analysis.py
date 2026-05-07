@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -34,7 +35,7 @@ class AnalysisSummary:
     total_errors: int = 0
 
 
-def _iter_records(path: Path):
+def _iter_records(path: Path) -> Iterator[dict]:
     """Yield JSON objects from a file that is either compact JSONL or pretty-printed JSON."""
     text = path.read_text()
     decoder = json.JSONDecoder()
@@ -50,6 +51,7 @@ def _iter_records(path: Path):
             yield obj
             pos += whitespace_chars + end
         except json.JSONDecodeError:
+            print(f"WARN: unparseable content at position {pos} in {path}, stopping early", file=sys.stderr)
             break
 
 
@@ -76,6 +78,7 @@ def classify_record(
                 prior_failed_submit=prior_failed_submit,
             )
             turn_classifications.append(tc)
+        # Sticky: once a submit fails, all subsequent turns see prior_failed_submit=True
         elif role == "tool" and msg.get("tool_name") == "submit_sql":
             content = msg.get("content", {})
             if isinstance(content, dict) and not content.get("passed", True):

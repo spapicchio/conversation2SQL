@@ -4,8 +4,6 @@ import json
 from collections import Counter
 from unittest.mock import MagicMock
 
-import pytest
-
 from conversation2sql.eval_framework.turn_classifier.schemas import TurnClassification
 
 
