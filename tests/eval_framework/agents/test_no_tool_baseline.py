@@ -54,6 +54,31 @@ class TestExtractSqlFromResponse:
         text = "```sql\nSELECT 1;\n```\n```sql\nSELECT 2;"
         assert extract_sql_from_response(text) == "SELECT 1;"
 
+    def test_raw_sql_select_starts_line(self):
+        text = "The answer is:\nSELECT 1;"
+        assert extract_sql_from_response(text) == "SELECT 1;"
+
+    def test_raw_sql_with_keyword(self):
+        text = "Reasoning...\nWITH cte AS (SELECT 1) SELECT * FROM cte;"
+        assert extract_sql_from_response(text) == "WITH cte AS (SELECT 1) SELECT * FROM cte;"
+
+    def test_raw_sql_last_keyword_wins(self):
+        text = "First try:\nSELECT 0;\nBetter answer:\nSELECT 1;"
+        assert extract_sql_from_response(text) == "SELECT 1;"
+
+    def test_raw_sql_no_semicolon(self):
+        text = "Reasoning prose\nSELECT * FROM t"
+        assert extract_sql_from_response(text) == "SELECT * FROM t"
+
+    def test_raw_sql_keyword_inside_word_not_matched(self):
+        # SELECTING never starts a line — should return None
+        text = "I am SELECTING rows from the table"
+        assert extract_sql_from_response(text) is None
+
+    def test_closed_fence_takes_priority_over_raw_sql(self):
+        text = "```sql\nSELECT 1;\n```\nYou could also do SELECT 2;"
+        assert extract_sql_from_response(text) == "SELECT 1;"
+
 from unittest.mock import MagicMock, patch
 
 from langchain_core.messages import AIMessage
