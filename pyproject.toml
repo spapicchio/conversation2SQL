@@ -42,6 +42,8 @@ dependencies = [
     "langchain-openrouter>=0.2.1",
     "pytest>=9.0.2",
     "typer[all]>=0.12",
+    "types-pyyaml>=6.0.12.20260510",
+    "streamlit>=1.57.0",
 ]
 
 [project.scripts]
