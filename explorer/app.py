@@ -47,9 +47,13 @@ def _render_conversation(record: dict) -> None:
     for msg in record.get("messages", []):
         role = msg.get("role")
 
-        if role == "user":
+        if role in ("user", "system"):
             with st.expander("System prompt — click to expand"):
                 st.text(msg.get("content", ""))
+
+        elif role == "human":
+            with st.chat_message("user"):
+                st.markdown(msg.get("content", ""))
 
         elif role == "ai":
             with st.chat_message("assistant"):
@@ -134,10 +138,13 @@ chart_cols = st.columns(2 if has_tools else 1)
 
 with chart_cols[0]:
     st.subheader("Accuracy by Category")
-    cat_df = pd.DataFrame(
-        [{"Category": k, "Pass Rate": v} for k, v in stats.accuracy_by_category.items()]
-    ).set_index("Category")
-    st.bar_chart(cat_df)
+    if stats.accuracy_by_category:
+        cat_df = pd.DataFrame(
+            [{"Category": k, "Pass Rate": v} for k, v in stats.accuracy_by_category.items()]
+        ).set_index("Category")
+        st.bar_chart(cat_df)
+    else:
+        st.info("No category data available.")
 
 if has_tools:
     with chart_cols[1]:
