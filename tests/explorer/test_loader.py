@@ -118,3 +118,66 @@ class TestListRuns:
         (tmp_path / "no_tool" / "some_file.txt").write_text("noise")
         result = list_runs(tmp_path)
         assert "some_file.txt" not in result.get("no_tool", {})
+
+
+# ── load_run ───────────────────────────────────────────────────────────────────
+
+class TestLoadRun:
+    def _write_jsonl(self, path: Path, records: list[dict]) -> None:
+        path.write_text(
+            "\n".join(json.dumps(r) for r in records) + "\n",
+            encoding="utf-8",
+        )
+
+    def test_loads_smaller_jsonl(self, tmp_path):
+        self._write_jsonl(tmp_path / "results_smaller.jsonl", [make_record()])
+        run = load_run(tmp_path)
+        assert len(run.records) == 1
+        assert run.source_file == "results_smaller.jsonl"
+
+    def test_falls_back_to_full_jsonl(self, tmp_path):
+        self._write_jsonl(tmp_path / "results.jsonl", [make_record()])
+        run = load_run(tmp_path)
+        assert len(run.records) == 1
+        assert run.source_file == "results.jsonl"
+
+    def test_prefers_smaller_over_full(self, tmp_path):
+        self._write_jsonl(tmp_path / "results_smaller.jsonl", [make_record(total_tokens=111)])
+        self._write_jsonl(tmp_path / "results.jsonl", [make_record(total_tokens=999)])
+        run = load_run(tmp_path)
+        assert run.records[0]["total_tokens"] == 111
+
+    def test_loads_config_yaml(self, tmp_path):
+        self._write_jsonl(tmp_path / "results_smaller.jsonl", [make_record()])
+        (tmp_path / "config.yaml").write_text("pipeline:\n  baseline: no_tool\n")
+        run = load_run(tmp_path)
+        assert run.config["pipeline"]["baseline"] == "no_tool"
+
+    def test_missing_config_yaml_returns_empty_dict(self, tmp_path):
+        self._write_jsonl(tmp_path / "results_smaller.jsonl", [make_record()])
+        run = load_run(tmp_path)
+        assert run.config == {}
+
+    def test_malformed_lines_counted(self, tmp_path):
+        content = (
+            json.dumps(make_record()) + "\n"
+            + "NOT JSON\n"
+            + json.dumps(make_record()) + "\n"
+        )
+        (tmp_path / "results_smaller.jsonl").write_text(content, encoding="utf-8")
+        run = load_run(tmp_path)
+        assert len(run.records) == 2
+        assert run.malformed_count == 1
+
+    def test_empty_run_folder_returns_empty(self, tmp_path):
+        run = load_run(tmp_path)
+        assert run.records == []
+        assert run.malformed_count == 0
+        assert run.config == {}
+
+    def test_stats_computed(self, tmp_path):
+        records = [make_record(execution_accuracy=True), make_record(execution_accuracy=False)]
+        self._write_jsonl(tmp_path / "results_smaller.jsonl", records)
+        run = load_run(tmp_path)
+        assert run.stats.n_total == 2
+        assert run.stats.n_passed == 1

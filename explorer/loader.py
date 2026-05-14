@@ -91,4 +91,33 @@ def list_runs(results_root: Path) -> dict[str, dict[str, list[str]]]:
 
 def load_run(path: Path) -> RunData:
     """Load records and config from results/<baseline>/<date>/<time>/."""
-    raise NotImplementedError
+    smaller = path / "results_smaller.jsonl"
+    full = path / "results.jsonl"
+    source = smaller if smaller.exists() else full
+
+    records: list[dict] = []
+    malformed = 0
+    if source.exists():
+        with source.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    malformed += 1
+
+    config: dict = {}
+    config_path = path / "config.yaml"
+    if config_path.exists():
+        with config_path.open(encoding="utf-8") as f:
+            config = yaml.safe_load(f) or {}
+
+    return RunData(
+        records=records,
+        config=config,
+        stats=_compute_stats(records),
+        malformed_count=malformed,
+        source_file=source.name,
+    )
