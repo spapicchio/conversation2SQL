@@ -1,3 +1,4 @@
+from conversation2sql.eval_framework.agents.utils import utils_single_msg_to_str
 from typing import Any
 import re
 
@@ -19,6 +20,8 @@ _FENCED_SQL_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+_FENCE_OPEN_RE = re.compile(r"```(?:sql)?\s*\n", re.IGNORECASE)
+
 
 def _extract_closed_fence(text: str) -> str | None:
     matches = _FENCED_SQL_RE.findall(text)
@@ -29,8 +32,23 @@ def _extract_closed_fence(text: str) -> str | None:
     return None
 
 
+def _extract_unclosed_fence(text: str) -> str | None:
+    openings = list(_FENCE_OPEN_RE.finditer(text))
+    for m in reversed(openings):
+        after = text[m.end():]
+        if "```" in after:
+            continue  # this opener has a closer — handled by _extract_closed_fence
+        semi_pos = after.find(";")
+        candidate = after[: semi_pos + 1].strip() if semi_pos != -1 else after.strip()
+        return candidate if candidate else None
+    return None
+
+
 def extract_sql_from_response(text: str) -> str | None:
-    return _extract_closed_fence(text)
+    return (
+        _extract_closed_fence(text)
+        or _extract_unclosed_fence(text)
+    )
 
 
 def run_baseline_no_tool(
@@ -46,17 +64,7 @@ def run_baseline_no_tool(
     )
 
     ai_msg: AIMessage = model_agent.invoke(user_messages)  # pyrefly: ignore
-    if isinstance(ai_msg.content, str):
-        raw_text = ai_msg.content
-    elif isinstance(ai_msg.content, list):
-        raw_text = "\n\n".join(
-            f"# {block['type']}\n{block[block['type']]}"
-            if isinstance(block, dict) and "type" in block and block["type"] in block
-            else str(block)
-            for block in ai_msg.content
-        )
-    else:
-        raw_text = str(ai_msg.content)
+    raw_text = utils_single_msg_to_str(ai_msg)
 
     sql = extract_sql_from_response(raw_text)
     if sql is None:

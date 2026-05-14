@@ -33,6 +33,26 @@ class TestExtractSqlFromResponse:
         text = "```sql\n   \n```"
         assert extract_sql_from_response(text) is None
 
+    def test_no_sql_start(self):
+        text = "```\n   \n```"
+        assert extract_sql_from_response(text) is None
+
+    def test_unclosed_fence_with_semicolon(self):
+        text = "```sql\nSELECT 1;"
+        assert extract_sql_from_response(text) == "SELECT 1;"
+
+    def test_unclosed_fence_without_semicolon(self):
+        text = "```sql\nSELECT 1"
+        assert extract_sql_from_response(text) == "SELECT 1"
+
+    def test_unclosed_fence_stops_at_first_semicolon(self):
+        text = "```sql\nSELECT 1;\nSELECT 2"
+        assert extract_sql_from_response(text) == "SELECT 1;"
+
+    def test_closed_fence_takes_priority_over_unclosed(self):
+        # closed block first, then an unclosed block — closed wins
+        text = "```sql\nSELECT 1;\n```\n```sql\nSELECT 2;"
+        assert extract_sql_from_response(text) == "SELECT 1;"
 
 from unittest.mock import MagicMock, patch
 
@@ -50,7 +70,9 @@ def _make_task() -> MagicMock:
     return task
 
 
-def _make_ai(content: str, prompt_tokens: int = 100, completion_tokens: int = 50) -> AIMessage:
+def _make_ai(
+    content: str, prompt_tokens: int = 100, completion_tokens: int = 50
+) -> AIMessage:
     msg = AIMessage(content=content)
     msg.usage_metadata = {
         "input_tokens": prompt_tokens,
@@ -62,7 +84,9 @@ def _make_ai(content: str, prompt_tokens: int = 100, completion_tokens: int = 50
 
 
 class TestRunBaselineNoTool:
-    @patch("conversation2sql.eval_framework.agents.no_tool_baseline.baseline_model.submit_sql_impl")
+    @patch(
+        "conversation2sql.eval_framework.agents.no_tool_baseline.baseline_model.submit_sql_impl"
+    )
     def test_passes_when_sql_extracted_and_submit_passes(self, mock_submit):
         mock_submit.return_value = {"passed": True, "pred_result": [], "gt_result": []}
         model = MagicMock()
@@ -79,7 +103,9 @@ class TestRunBaselineNoTool:
         assert result["messages"][-1]["tool_name"] == "submit_sql_offline"
         assert result["total_tokens"] == 150
 
-    @patch("conversation2sql.eval_framework.agents.no_tool_baseline.baseline_model.submit_sql_impl")
+    @patch(
+        "conversation2sql.eval_framework.agents.no_tool_baseline.baseline_model.submit_sql_impl"
+    )
     def test_records_failure_when_no_sql_block(self, mock_submit):
         model = MagicMock()
         model.invoke.return_value = _make_ai("I cannot answer this.")
