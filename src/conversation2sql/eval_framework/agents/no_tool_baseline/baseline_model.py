@@ -1,4 +1,3 @@
-from conversation2sql.eval_framework.agents.utils import utils_single_msg_to_str
 from typing import Any
 import re
 
@@ -9,7 +8,10 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import submit_sq
 from conversation2sql.eval_framework.agents.no_tool_baseline.prompts import (
     build_omnisql_prompt,
 )
-from conversation2sql.eval_framework.agents.utils import utils_extract_ai_metadata
+from conversation2sql.eval_framework.agents.utils import (
+    utils_extract_ai_metadata,
+    utils_single_msg_to_str,
+)
 from conversation2sql.eval_framework.state import TaskData
 from conversation2sql.logger import get_logger
 
