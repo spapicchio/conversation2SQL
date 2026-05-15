@@ -44,30 +44,38 @@ class TestComputeStats:
         stats = _compute_stats([])
         assert stats.n_total == 0
         assert stats.n_passed == 0
-        assert stats.avg_tokens == 0.0
+        assert stats.avg_input_tokens == 0.0
+        assert stats.avg_output_tokens == 0.0
         assert stats.avg_cost == 0.0
         assert stats.avg_budget_remaining == 0.0
-        assert stats.accuracy_by_category == {}
+        assert stats.accuracy_by_database == {}
         assert stats.tool_usage == Counter()
 
     def test_single_passed(self):
-        records = [make_record(execution_accuracy=True, total_tokens=200, total_cost=0.01, updated_user_patience=4)]
+        records = [make_record(
+            execution_accuracy=True,
+            mean_prompt_tokens=150,
+            mean_completion_tokens=50,
+            total_cost=0.01,
+            updated_user_patience=4,
+        )]
         stats = _compute_stats(records)
         assert stats.n_total == 1
         assert stats.n_passed == 1
-        assert stats.avg_tokens == 200.0
+        assert stats.avg_input_tokens == 150.0
+        assert stats.avg_output_tokens == 50.0
         assert stats.avg_cost == pytest.approx(0.01)
         assert stats.avg_budget_remaining == 4.0
 
-    def test_accuracy_by_category(self):
+    def test_accuracy_by_database(self):
         records = [
-            make_record(execution_accuracy=True, category="Query"),
-            make_record(execution_accuracy=False, category="Query"),
-            make_record(execution_accuracy=True, category="Management"),
+            make_record(execution_accuracy=True, selected_database="db_a"),
+            make_record(execution_accuracy=False, selected_database="db_a"),
+            make_record(execution_accuracy=True, selected_database="db_b"),
         ]
         stats = _compute_stats(records)
-        assert stats.accuracy_by_category["Query"] == pytest.approx(0.5)
-        assert stats.accuracy_by_category["Management"] == pytest.approx(1.0)
+        assert stats.accuracy_by_database["db_a"] == pytest.approx(0.5)
+        assert stats.accuracy_by_database["db_b"] == pytest.approx(1.0)
 
     def test_tool_usage_dict_format(self):
         records = [
@@ -85,7 +93,8 @@ class TestComputeStats:
 
     def test_missing_fields_default_to_zero(self):
         stats = _compute_stats([{"execution_accuracy": False}])
-        assert stats.avg_tokens == 0.0
+        assert stats.avg_input_tokens == 0.0
+        assert stats.avg_output_tokens == 0.0
         assert stats.avg_cost == 0.0
 
 

@@ -44,7 +44,7 @@ Error classes are assigned by `classify_submit_error()` in `loader.py`. The func
 | `Empty Query` | Message contains *"empty query"* |
 | `Syntax Error` | Message matches `syntax error` |
 | `Column/Relation Not Found` | Message matches `does not exist` |
-| `Invalid Format` | Message is *"Your SQL is not correct."* |
+| `Wrong SQL` | Message is *"Your SQL is not correct."* |
 | `DB Error` | Other `DatabaseError` |
 | `Other` | None of the above |
 
