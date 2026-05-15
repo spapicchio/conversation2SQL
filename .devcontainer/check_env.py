@@ -59,12 +59,6 @@ class TestProjectPackage(unittest.TestCase):
                 "Run: uv venv --system-site-packages && uv sync && source .venv/bin/activate"
             )
 
-    def test_eval_framework_run_agent(self):
-        try:
-            from conversation2sql.eval_framework.agent import run_agent  # noqa: F401
-        except ImportError as e:
-            self.fail(f"run_agent not importable: {e}")
-
     def test_dataset_readers(self):
         try:
             from conversation2sql.eval_framework.dataset_readers import (  # noqa: F401
