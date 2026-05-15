@@ -39,7 +39,7 @@ no_tool / 2026_05_15 / 07_06_40
 
 Each label maps to its resolved `Path`. The sidebar renders a `st.multiselect` over all labels. A `st.warning` is shown if fewer than 2 runs are selected and the rest of the page is suppressed with `st.stop()`.
 
-Each selected run is loaded via `_load_run_cached(path_str)` — Streamlit's `@st.cache_data` is process-wide, so a run already loaded by `app.py` is not re-read. The result is a `dict[str, RunData]` (label → RunData) threaded through the rest of the page.
+Each selected run is loaded via a `@st.cache_data`-wrapped `load_run` call defined in `compare.py`. Streamlit keys cache entries on function identity, so this cache is independent from `app.py`'s wrapper — a run may be loaded once per page per session, which is acceptable given the small file sizes. The result is a `dict[str, RunData]` (label → RunData) threaded through the rest of the page.
 
 ---
 
