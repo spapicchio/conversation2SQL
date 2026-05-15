@@ -1,0 +1,88 @@
+#!/bin/bash
+# --- robust shell settings ---
+set -Eeuo pipefail
+
+# Check if job script is provided
+if [ -z "$1" ]; then
+  echo "[SUBMIT_AND_LOG] Usage: $0 path_to_script"
+  exit 1
+fi
+
+if [[ -z "${SCRATCH:-}" ]]; then
+  # Determine script path robustly (works when sourced or executed)
+  SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+  SCRIPT_REALPATH="$(realpath "$SCRIPT_PATH" 2>/dev/null || echo "$SCRIPT_PATH")"
+  BASE_WORK="$(dirname "$(dirname "$SCRIPT_REALPATH")")"
+  echo "[SUBMIT_AND_LOG] WORK variable is not set. Using BASE_WORK=${BASE_WORK}."
+else
+  BASE_WORK="${SCRATCH}/conversation2SQL"
+fi
+
+export BASE_WORK
+
+
+echo "[SUBMIT_AND_LOG] Using BASE_WORK=${BASE_WORK}"
+source "${BASE_WORK}/bash_scripts/utils/utils.sh"
+
+JOB_SCRIPT="$1"
+
+# copy and then launch the file
+# Generate a fake job ID based on the current timestamp and a hash
+if [[ -z "${SLURM_JOB_ID:-}" ]]; then
+  FAKE_JOB_ID=$(date +%s | sha256sum | head -c 8)
+  JOB_NAME="atlas_${FAKE_JOB_ID}"
+  echo "[SUBMIT_AND_LOG] Generated fake job ID for date $(date +%s): $FAKE_JOB_ID"
+else
+  echo "[SUBMIT_AND_LOG] Detected SLURM_JOB_ID: ${SLURM_JOB_ID}"
+  FAKE_JOB_ID="$SLURM_JOB_ID"
+  JOB_NAME="slurm_job_${FAKE_JOB_ID}"
+  echo "[SUBMIT_AND_LOG] Using SLURM_JOB_ID as job ID: $FAKE_JOB_ID"
+  
+  setup_idris
+  echo "[SUBMIT_AND_LOG] Loaded IDRIS environment for SLURM job."
+fi
+
+
+export MY_SLURM_JOB_ID="${FAKE_JOB_ID}"
+
+
+DATE_DIR="$(date +%Y-%m-%d)"
+TIME_TAG="$(date +%H-%M-%S)"
+DEST_DIR="${BASE_WORK}/bash_scripts/launched/${DATE_DIR}"
+mkdir -p "${DEST_DIR}"
+FAKE_JOB_PATH="${DEST_DIR}/${TIME_TAG}-${MY_SLURM_JOB_ID}.sh"
+
+cp "$JOB_SCRIPT" "$FAKE_JOB_PATH"
+chmod 770 "$FAKE_JOB_PATH"
+
+# Submit the job
+LOG_FOLDER="${BASE_WORK}/tmux_log/${DATE_DIR}"
+if [ -z "${2:-}" ]; then
+  log_section '[SUBMIT_AND_LOG]  NOT sending with sbatch' "${MY_SLURM_JOB_ID}"
+  LOG_FOLDER="${LOG_FOLDER}/${TIME_TAG}-${MY_SLURM_JOB_ID}"
+  mkdir -p "${LOG_FOLDER}"
+  tmux new-session -d -s "${MY_SLURM_JOB_ID}" \
+    "BASE_WORK=${BASE_WORK} \
+    JOB_NAME=${JOB_NAME} \
+    MY_SLURM_JOB_ID=${MY_SLURM_JOB_ID} \
+    ${FAKE_JOB_PATH} 2>&1 | \
+    stdbuf -oL tee -a ${LOG_FOLDER}/all.log | \
+    stdbuf -oL tee >(stdbuf -oL grep 'WARNING' >> ${LOG_FOLDER}/warning.log) | \
+    stdbuf -oL tee >(stdbuf -oL grep 'ERROR' >> ${LOG_FOLDER}/error.log)"
+else
+  JOB_OUTPUT=$(sbatch -J "$2" "${FAKE_JOB_PATH}")
+  MY_SLURM_JOB_ID=$(echo "$JOB_OUTPUT" | awk '{print $4}')
+  log_section "[SUBMIT_AND_LOG] Submitted job with JOB Name: $2 and SLURM Job ID: ${MY_SLURM_JOB_ID}" "${MY_SLURM_JOB_ID}"
+
+  LOG_FOLDER="${LOG_FOLDER}/${TIME_TAG}-${MY_SLURM_JOB_ID}"
+  mkdir -p $LOG_FOLDER
+  SLURM_LOG="${BASE_WORK}/logs/rl/${MY_SLURM_JOB_ID}.out"
+  ln -s "$SLURM_LOG" "${LOG_FOLDER}/all.out"
+
+  NEW_PATH="${DEST_DIR}/${TIME_TAG}-${MY_SLURM_JOB_ID}.sh"
+  mv "$FAKE_JOB_PATH" "${NEW_PATH}"
+  FAKE_JOB_PATH=$NEW_PATH
+fi
+
+log_section "[SUBMIT_AND_LOG] TMUX log ${LOG_FOLDER}/all.out" "${MY_SLURM_JOB_ID}"
+log_section "[SUBMIT_AND_LOG] created file $FAKE_JOB_PATH" "${MY_SLURM_JOB_ID}"

@@ -1,19 +1,42 @@
 import copy
 import json
+from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 import tqdm
 import yaml
 
 from conversation2sql.config_input import ConfigReader, ConfigPredictor, ConfigUserSimulator, ConfigPipeline
-from conversation2sql.eval_framework.agents import run_agent_bird_baseline
-from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents import (
+    run_agent_bird_baseline,
+    run_baseline_no_tool,
+)
 from conversation2sql.eval_framework.agents.utils import utils_create_model
 from conversation2sql.eval_framework.dataset_readers import load_bird_interact_as_tasks
 from conversation2sql.eval_framework.state import TaskData
 from conversation2sql.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _resolve_baseline_settings(baseline: str) -> tuple[bool, Callable, bool]:
+    """Map ConfigPipeline.baseline → (make_data_ambiguous, runner, needs_user_sim).
+
+    no_tool    -> clean query, no agent loop, no user-sim
+    tools_only -> clean query, agent without ask_user, no user-sim
+    tools_user -> clean query, agent with ask_user, user-sim required
+    bird_full  -> ambiguous query, agent with ask_user, user-sim required
+    """
+    table = {
+        "no_tool":    (False, run_baseline_no_tool, False),
+        "tools_only": (False, run_agent_bird_baseline, False),
+        "tools_user": (False, run_agent_bird_baseline, True),
+        "bird_full":  (True,  run_agent_bird_baseline, True),
+    }
+    if baseline not in table:
+        raise ValueError(f"Unknown baseline: {baseline!r}; expected one of {list(table)}")
+    return table[baseline]
 
 
 def workflow_evaluation_pipeline(
@@ -27,44 +50,70 @@ def workflow_evaluation_pipeline(
     logger.info(f"config_predictor: {config_predictor}")
     logger.info(f"config_user: {config_user}")
 
-    output_folder = config_pipeline.output_folder
+    # Resolve baseline settings and override make_data_ambiguous
+    forced_amb, runner, needs_user_sim = _resolve_baseline_settings(config_pipeline.baseline)
+    if config_reader.make_data_ambiguous != forced_amb:
+        logger.warning(
+            "baseline=%s forces make_data_ambiguous=%s; overriding ConfigReader.make_data_ambiguous=%s",
+            config_pipeline.baseline, forced_amb, config_reader.make_data_ambiguous,
+        )
+    config_reader = config_reader.model_copy(update={"make_data_ambiguous": forced_amb})
 
-    # save config in output folder
+    # Per-baseline output folder with date/time subfolders
+    now = datetime.now()
+    date_folder = now.strftime("%Y_%m_%d")
+    time_folder = now.strftime("%H_%M_%S")
+    output_folder = Path(config_pipeline.output_folder) / config_pipeline.baseline / date_folder / time_folder
+    # store the chosen output folder back into the pipeline config (string)
+    config_pipeline = config_pipeline.model_copy(update={"output_folder": str(output_folder)})
+
+    # save config in the output folder
     _save_configs_as_yaml(
-        output_folder=Path(output_folder),
+        output_folder=output_folder,
         config_pipeline=config_pipeline,
         config_reader=config_reader,
         config_predictor=config_predictor,
         config_user=config_user,
     )
 
-    file_result = Path(output_folder) / 'results.jsonl'
+    file_result = output_folder / 'results.jsonl'
+
     # initialize models (API based)
-    model_agent, (model_user_parsing, model_user_generator) = _init_models(config_predictor, config_user)
+    model_agent, (model_user_parsing, model_user_generator) = _init_models(
+        config_predictor, config_user, needs_user_sim=needs_user_sim,
+    )
 
     # read dataset
     dataset: list[TaskData] = load_bird_interact_as_tasks(**config_reader.model_dump())
+
+    if config_pipeline.debug:
+        dataset = dataset[:10]
+        logger.info("Debug mode is ON - using only the first 10 tasks from the dataset")
+
+
     # Process dataset
     i = -1
     result = []
     try:
-        for i, task in tqdm.tqdm(enumerate(dataset), desc="Processing dataset"):
-            response: CustomAgentState = run_agent_bird_baseline(task, model_agent, model_user_parsing, model_user_generator)
+        for i, task in tqdm.tqdm(enumerate(dataset), desc=f"Inference with {config_pipeline.baseline}"):
+            if config_pipeline.baseline == "no_tool":
+                response = runner(task, model_agent)
+            else:
+                response = runner(
+                    task, model_agent, model_user_parsing, model_user_generator,
+                    enable_ask_user=(config_pipeline.baseline in ("tools_user", "bird_full")),
+                )
             task_output = {
                 "config_predictor": config_predictor.model_dump(),
                 "config_user": config_user.model_dump(),
                 "config_pipeline": config_pipeline.model_dump(),
                 "config_reader": config_reader.model_dump(),
                 **task.model_dump(),
-                **response
+                **response,
             }
             _save_record(response=task_output, output_path_jsonl=file_result)
             logger.info(f"Saved response for task_id={task.instance_id} to {file_result}")
-
             result.append(task_output)
-
-            if config_pipeline.debug:
-                break
 
     except Exception as e:
         logger.error(f"Error occurred: {e}")
@@ -77,20 +126,35 @@ def workflow_evaluation_pipeline(
     return result
 
 
-def _init_models(config_predictor: ConfigPredictor,
-                 config_user: ConfigUserSimulator) -> tuple:
+def _init_models(
+        config_predictor: ConfigPredictor,
+        config_user: ConfigUserSimulator,
+        needs_user_sim: bool,
+) -> tuple:
     model_agent = utils_create_model(
         model_name=config_predictor.model_name,
         model_provider=config_predictor.model_provider,
         temperature=config_predictor.temperature,
-        top_p=config_predictor.top_p,
         max_tokens=config_predictor.max_new_tokens,
+        top_p=config_predictor.top_p,
+        top_k=config_predictor.top_k,
+        api_base=config_predictor.predictor_vllm_api_base,
+        min_p=config_predictor.min_p,
+        presence_penalty=config_predictor.presence_penalty,
+        repetition_penalty=config_predictor.repetition_penalty,
+        enable_thinking=config_predictor.enable_thinking,
+        reasoning_effort=config_predictor.reasoning_effort,
     )
+    if not needs_user_sim:
+        return model_agent, (None, None)
+
     model_user_parsing = utils_create_model(
         model_name=config_user.model_name,
         model_provider=config_user.model_provider,
         temperature=config_user.temperature,
         max_tokens=config_user.max_new_tokens,
+        api_base=config_user.user_simulator_vllm_api_base,
+        
     )
     model_user_generator = utils_create_model(
         model_name=config_user.model_name,
@@ -133,7 +197,7 @@ def _save_record(response: dict, output_path_jsonl: Path):
             "config_user",
             "config_pipeline",
             "config_reader",
-            'instance_id', 'selected_database', 'amb_user_query', 'sol_sql', 'sql_query_conditions',
+            'instance_id', 'selected_database', 'amb_user_query', 'sql_query_conditions',
             'not_ambiguos_query', 'gt_knowledge_base', 'category', 'initial_user_patience',
             'updated_user_patience',
             'total_cost',
@@ -141,7 +205,12 @@ def _save_record(response: dict, output_path_jsonl: Path):
             'mean_prompt_tokens',
             'mean_completion_tokens',
             'tool_calls_in_order', 'messages',
-            'execution_accuracy'
+            'execution_accuracy',
+            'sol_sql',
+            'predicted_sql',
+            'ddl_database_schema',
+            'masked_agent_kb_linearized',
+            'user_query_ambiguity',
         ]
         smaller_response = {var: copy.deepcopy(response[var]) for var in keep_vars}
         with output_path_smaller.open("a", encoding="utf-8") as f:

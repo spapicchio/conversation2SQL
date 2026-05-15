@@ -9,11 +9,15 @@ You are a data science expert. Below, you are provided with a database schema an
 Your task is to understand the schema and generate a valid SQL query to answer the question.
 
 Database Engine:
-SQLite
+PostgreSQL
 
 Database Schema:
 {{ schema }}
 This schema describes the database's structure, including tables, columns, primary keys, foreign keys, and any relevant relationships or constraints.
+
+Knowledge Base:
+{{ kb }}
+This knowledge base provides additional information about the database.
 
 Question:
 {{ question }}
@@ -36,4 +40,4 @@ Take a deep breath and think step by step to find the correct SQL query.
 def build_omnisql_prompt(
         params: dict,
 ) -> list[dict]:
-    return utils_build_messages(_BASE_MODEL_SYSTEM, _BASE_MODEL_SYSTEM, params)
+    return utils_build_messages(_BASE_MODEL_SYSTEM, _BASE_MODEL_USER, params)

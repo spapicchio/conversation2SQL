@@ -14,7 +14,7 @@ def _connect(db_dsn: str) -> psycopg2.extensions.connection:
     conn = psycopg2.connect(db_dsn, cursor_factory=psycopg2.extras.RealDictCursor)
     conn.set_session(readonly=True, autocommit=True)
     return conn
-
+    
 
 def _execute_query(query: str, db_dsn: str) -> Any:
     conn = _connect(db_dsn)
@@ -105,7 +105,7 @@ def preprocess_results(
     return processed
 
 
-def _format_result(result: list, cursor_desc: tuple[Column]) -> str:
+def _format_result(result: list, cursor_desc: tuple[Column], max_characters=100) -> str:
     """
     Output:
 
@@ -137,10 +137,9 @@ def _format_result(result: list, cursor_desc: tuple[Column]) -> str:
     cols = [desc[0] for desc in cursor_desc]
     header = " | ".join(cols)
 
-    # take the first 100 rows to avoid overwhelming the output, and truncate each cell to 100 chars
-    rows = [" | ".join(
-        str(row[col])[:100] for col in cols
-    )
+    # take the first 100 rows to avoid overwhelming the output, and truncate each cell to max_characters chars
+    rows = [
+        " | ".join(str(row[col])[:max_characters] for col in cols)
         for row in result[:100]
     ]
 

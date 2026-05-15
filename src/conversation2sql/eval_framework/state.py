@@ -75,6 +75,8 @@ class TaskData(BaseModel):
     ]  # possible string representing the python code to run as a unit test
     category: str  # the category of the task, which can be one of "Query", "Management"
     sql_query_conditions: dict  # dict containing "decimal": -1/1
+    table_in_gt_sql: dict[str, list[str]] = Field(default_factory=dict)
+    table_in_gt_sql_parse_error: str | None = None
 
     def has_follow_up_sql(self) -> bool:
         """Return ``True`` when a second-phase SQL answer is present.

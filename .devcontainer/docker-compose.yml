@@ -10,8 +10,8 @@ services:
     runtime: nvidia
     volumes:
       - ..:/workspaces/conversation2SQL:cached
-      - /home/papicchi/.cache/huggingface:/hf_cache
-      - /home/papicchi/data:/workspaces/conversation2SQL/data
+      - ${HOME}/.cache/huggingface:/hf_cache
+      - ${HOME}/data:/workspaces/conversation2SQL/data
     depends_on:
       - postgresql
       - postgresql_full

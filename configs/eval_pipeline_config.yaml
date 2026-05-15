@@ -8,36 +8,44 @@
 #   "BirdInteractReader" - reads from the BirdInteract dataset (requires `gt_path_jsonl` in `dataset_kwargs`)
 pipeline:
   debug: true
-  mode: a-interact  # a-interact | c-interact | oracle 
   output_folder: "results"  # Folder to save results and logs
-  concurrency: 5  # Number of parallel tasks to run
+  baseline: "no_tool" # (e.g., "no_tool", "tools_only", "tools_user", "bird_full")   
 
 
 reader:
-  dataset_name_jsonl: 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'
-  dataset_path: 'data/bird_interact/bird-interact-full'
+  # dataset_name_jsonl: 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'
+  # dataset_path: 'data/bird_interact/bird-interact-full'
+  dataset_name_jsonl: 'data/bird_interact/bird-interact-lite/bird_interact_data_GT.jsonl'
+  dataset_path: 'data/bird_interact/bird-interact-lite'
   filter_query_category: true
-  # db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}' # Lite DB
-  db_dsn_template: 'postgresql://root:123123@localhost:5433/{database}' # Full DB
+  db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}' # Lite DB
+  # db_dsn_template: 'postgresql://root:123123@localhost:5433/{database}' # Full DB
   user_patience_budget: 1
-  make_data_ambiguous: true # if set to False, the data is not made ambiguous (KG is not masked and the question does not contain ambiguity)
 
+  database_schema_type: 'ddl' # Whether to use the original DDL or toon format
+  make_data_ambiguous: false # if set to False, the data is not made ambiguous (KG is not masked and the question does not contain ambiguity)
+  read_only_gt_tables: false # if set to True, the schema linking is performed automatically (DB schema contains only relevant tables); if set to False, the agent read from all tables
+  read_only_gt_kb: false # if set to True, the agent read from the GT KB (GT KB contains only relevant facts); if set to False, the agent read from the full KB
 
 # ── Predictor ─────────────────────────────────────────────────────────────────
-# Calls an LLM and returns the full message list including tool calls.
-# Built-in types:
-#   "PlaceholderPredictor" — returns a canned AIMessage (no API key needed)
-#   "LangChainPredictor" — uses LangChain to call an LLM (requires `model_name` and `model_provider`)
 predictor:
-  model_name: 'qwen/qwen3.6-plus'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
-  model_provider: 'openrouter'  # The model provider, e.g., 'openai', 'azure', 'anthropic', etc.
+  model_name: 'Qwen/Qwen3.5-9B'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
+  model_provider: 'together_ai'  # The model provider, e.g., 'openai', 'azure', 'anthropic', 'together_ai' etc.
   temperature: 1.0
   top_p: 0.95
+  top_k: 20
+  min_p: 0.0
+  presence_penalty: 1.5
+  repetition_penalty: 1.0
   max_new_tokens: 2000
+  predictor_vllm_api_base: 'http://localhost:8000/v1'
 
+
+# ── User Simulator ─────────────────────────────────────────────────────────────────
 user_simulator:
   model_name: 'gpt-5.4-mini-2026-03-17'
   model_provider: 'openai'
   temperature: 1.0
   max_new_tokens: 500
+  user_simulator_vllm_api_base: 'http://localhost:8000/v1'
 

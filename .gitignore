@@ -3,6 +3,8 @@
 results
 scripts
 CLAUDE.md
+sif/
+launched
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

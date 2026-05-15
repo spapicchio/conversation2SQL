@@ -165,7 +165,7 @@ def submit_sql_impl(
                 passed = True
                 message = ("Phase 1 correct!. Task finished.",)
             else:
-                message = "Your SQL is not correct one."
+                message = "Your SQL is not correct."
         else:
             if set(pred_result) == set(target_result):
                 passed = True

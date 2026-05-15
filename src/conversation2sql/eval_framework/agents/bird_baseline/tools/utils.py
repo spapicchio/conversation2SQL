@@ -36,7 +36,9 @@ def _segment_sql(sql: str, dialect: str = "postgres") -> list[tuple[str, str]]:
         return segments
     except Exception:
         parts = [p.strip() for p in sql.split(";")]
-        return [("STATEMENT", p + ";" if not p.endswith(";") else p) for p in parts if p]
+        return [
+            ("STATEMENT", p + ";" if not p.endswith(";") else p) for p in parts if p
+        ]
 
 
 def _segment_sql_and_parse_in_str(sql, dialect: str = "postgres"):
@@ -52,7 +54,8 @@ def remove_round(sql_string: str) -> str:
                 depth += 1
             elif text[i] == ")":
                 depth -= 1
-                if depth == 0: return i
+                if depth == 0:
+                    return i
         return -1
 
     def find_first_arg_end(text, start):
@@ -79,8 +82,8 @@ def remove_round(sql_string: str) -> str:
         close_p = find_matching_paren(result, open_p)
         if close_p == -1:
             break
-        first_arg = result[open_p + 1: first_end].strip()
-        result = result[:start] + first_arg + result[close_p + 1:]
+        first_arg = result[open_p + 1 : first_end].strip()
+        result = result[:start] + first_arg + result[close_p + 1 :]
     return result
 
 

@@ -114,7 +114,7 @@ Key implementation details:
 - **Lite/full guard**: raises `ValueError` if the HF dataset name and GT file path disagree on lite vs full.
 - **Prompt rendering**: uses `PromptFactory` to render `system_prompt` and `user_prompt` Jinja templates per sample. Required template variables: `database_engine`, `user_query`, `total_budget`.
 - **`UserContext`**: each `Sample` includes a `UserContext` populated with `db_schema`, `amb_user_query`, `user_query_ambiguity`, and `correct_sql` — used by the user-simulator during multi-turn agent evaluation.
-- **`metadata`** per sample includes: `selected_database`, `unambig_query`, `knowledge_ambiguity`, `user_query_ambiguity`, `preprocess_sql`, `clean_up_sqls`, `test_cases`, `external_knowledge`.
+- **`metadata`** per sample includes: `selected_database`, `unambig_query`, `knowledge_ambiguity`, `user_query_ambiguity`, `preprocess_sql`, `clean_up_sqls`, `test_cases`, `external_knowledge`, `table_in_gt_sql`, `table_in_gt_sql_parse_error`.
 
 ---
 

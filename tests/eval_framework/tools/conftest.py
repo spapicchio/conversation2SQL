@@ -53,6 +53,7 @@ def task_data(column_meanings, masked_agent_kb) -> TaskData:
         amb_user_query="give me users",
         sol_sql=["SELECT id FROM users;"],
         not_ambiguos_query="give me all user ids",
+        task_question="give me all user ids",
         task_budget=10,
         db_dsn="postgresql://test:test@localhost:5432/mydb",
         ddl_database_schema="CREATE TABLE users (id INT, name TEXT);",
