@@ -2,9 +2,10 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from explorer.loader import RunData, RunStats, _compute_stats, list_runs, load_run
+from explorer.loader import RunData, RunStats, _compute_stats, list_runs, load_run, join_runs
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -181,3 +182,92 @@ class TestLoadRun:
         run = load_run(tmp_path)
         assert run.stats.n_total == 2
         assert run.stats.n_passed == 1
+
+
+# ── join_runs ──────────────────────────────────────────────────────────────────
+
+def _make_run_data(records: list[dict]) -> RunData:
+    from collections import Counter
+    return RunData(
+        records=records,
+        config={},
+        stats=RunStats(
+            n_total=len(records),
+            n_passed=sum(1 for r in records if r.get("execution_accuracy")),
+            avg_input_tokens=0.0,
+            avg_output_tokens=0.0,
+            avg_cost=0.0,
+            avg_budget_remaining=0.0,
+            accuracy_by_database={},
+            error_distribution=Counter(),
+            tool_usage=Counter(),
+        ),
+        malformed_count=0,
+    )
+
+
+class TestJoinRuns:
+    def test_two_runs_same_task_pass_fail(self):
+        r_a = make_record(instance_id="t1", execution_accuracy=True, selected_database="db1")
+        r_b = make_record(instance_id="t1", execution_accuracy=False, selected_database="db1")
+        runs = {"run_a": _make_run_data([r_a]), "run_b": _make_run_data([r_b])}
+        df = join_runs(runs)
+        assert len(df) == 1
+        assert df.iloc[0]["run_a"] == "✓"
+        assert df.iloc[0]["run_b"] == "✗"
+
+    def test_task_absent_in_one_run_shows_dash(self):
+        r_a = make_record(instance_id="t1", execution_accuracy=True, selected_database="db1")
+        r_b = make_record(instance_id="t2", execution_accuracy=False, selected_database="db1")
+        runs = {"run_a": _make_run_data([r_a]), "run_b": _make_run_data([r_b])}
+        df = join_runs(runs)
+        assert len(df) == 2
+        t1 = df[df["instance_id"] == "t1"].iloc[0]
+        t2 = df[df["instance_id"] == "t2"].iloc[0]
+        assert t1["run_a"] == "✓"
+        assert t1["run_b"] == "—"
+        assert t2["run_a"] == "—"
+        assert t2["run_b"] == "✗"
+
+    def test_question_truncated_at_80_chars(self):
+        long_q = "A" * 100
+        r = make_record(instance_id="t1", amb_user_query=long_q, selected_database="db1")
+        runs = {"run_a": _make_run_data([r])}
+        df = join_runs(runs)
+        q = df.iloc[0]["Question"]
+        assert q.endswith("…")
+        assert len(q) == 81  # 80 chars + ellipsis
+
+    def test_question_not_truncated_when_short(self):
+        r = make_record(instance_id="t1", amb_user_query="Short", selected_database="db1")
+        runs = {"run_a": _make_run_data([r])}
+        df = join_runs(runs)
+        assert df.iloc[0]["Question"] == "Short"
+
+    def test_not_ambiguous_query_fallback(self):
+        r = make_record(instance_id="t1", selected_database="db1")
+        r["amb_user_query"] = ""
+        r["not_ambiguos_query"] = "Fallback question"
+        runs = {"run_a": _make_run_data([r])}
+        df = join_runs(runs)
+        assert df.iloc[0]["Question"] == "Fallback question"
+
+    def test_database_column_from_first_run(self):
+        r = make_record(instance_id="t1", execution_accuracy=True, selected_database="my_db")
+        runs = {"run_a": _make_run_data([r])}
+        df = join_runs(runs)
+        assert df.iloc[0]["database"] == "my_db"
+
+    def test_empty_runs_returns_empty_dataframe(self):
+        runs = {"run_a": _make_run_data([]), "run_b": _make_run_data([])}
+        df = join_runs(runs)
+        assert len(df) == 0
+        assert isinstance(df, pd.DataFrame)
+
+    def test_columns_include_all_run_labels(self):
+        r = make_record(instance_id="t1", execution_accuracy=True, selected_database="db1")
+        runs = {"alpha": _make_run_data([r]), "beta": _make_run_data([r]), "gamma": _make_run_data([r])}
+        df = join_runs(runs)
+        assert "alpha" in df.columns
+        assert "beta" in df.columns
+        assert "gamma" in df.columns

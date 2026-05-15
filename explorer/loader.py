@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
 
@@ -12,10 +14,12 @@ import yaml
 class RunStats:
     n_total: int
     n_passed: int
-    avg_tokens: float
+    avg_input_tokens: float
+    avg_output_tokens: float
     avg_cost: float
     avg_budget_remaining: float
-    accuracy_by_category: dict[str, float]  # category -> pass rate
+    accuracy_by_database: dict[str, float]  # database -> pass rate
+    error_distribution: Counter[str]  # error_class -> count
     tool_usage: Counter[str]  # tool_name -> total calls
 
 
@@ -28,24 +32,55 @@ class RunData:
     source_file: str = "results_smaller.jsonl"
 
 
+def classify_submit_error(record: dict) -> str:
+    """Return a human-readable error class for the record's last submit_sql result."""
+    if record.get("execution_accuracy"):
+        return "Passed"
+    last_msg = None
+    for msg in record.get("messages", []):
+        if msg.get("role") == "tool" and "submit" in msg.get("tool_name", ""):
+            last_msg = msg
+    if last_msg is None:
+        return "No Submission"
+    content = last_msg.get("content", {})
+    message = content.get("message", "") if isinstance(content, dict) else str(content)
+    message_lower = message.lower()
+    if "empty query" in message_lower or "empty" in message_lower and "query" in message_lower:
+        return "Empty Query"
+    if re.search(r"syntax error", message_lower):
+        return "Syntax Error"
+    if re.search(r"column .+ does not exist|does not exist", message_lower):
+        return "Column/Relation Not Found"
+    if "your sql is not correct" in message_lower:
+        return "Wrong SQL"
+    if "databaseerror" in message_lower:
+        return "DB Error"
+    return "Other"
+
+
 def _compute_stats(records: list[dict]) -> RunStats:
     n_total = len(records)
     n_passed = sum(1 for r in records if r.get("execution_accuracy", False))
-    avg_tokens = sum(r.get("total_tokens", 0) for r in records) / max(n_total, 1)
-    avg_cost = sum(r.get("total_cost", 0) for r in records) / max(n_total, 1)
-    avg_budget = sum(r.get("updated_user_patience", 0) for r in records) / max(n_total, 1)
+    avg_input = sum(r.get("mean_prompt_tokens") or 0 for r in records) / max(n_total, 1)
+    avg_output = sum(r.get("mean_completion_tokens") or 0 for r in records) / max(n_total, 1)
+    avg_cost = sum(r.get("total_cost") or 0 for r in records) / max(n_total, 1)
+    avg_budget = sum(r.get("updated_user_patience") or 0 for r in records) / max(n_total, 1)
 
-    cat_totals: dict[str, int] = {}
-    cat_passed: dict[str, int] = {}
+    db_totals: dict[str, int] = {}
+    db_passed: dict[str, int] = {}
     for r in records:
-        cat = r.get("category", "Unknown")
-        cat_totals[cat] = cat_totals.get(cat, 0) + 1
+        db = r.get("selected_database", "Unknown")
+        db_totals[db] = db_totals.get(db, 0) + 1
         if r.get("execution_accuracy", False):
-            cat_passed[cat] = cat_passed.get(cat, 0) + 1
-    accuracy_by_category = {
-        cat: cat_passed.get(cat, 0) / total
-        for cat, total in cat_totals.items()
+            db_passed[db] = db_passed.get(db, 0) + 1
+    accuracy_by_database = {
+        db: db_passed.get(db, 0) / total
+        for db, total in db_totals.items()
     }
+
+    error_distribution: Counter[str] = Counter(
+        classify_submit_error(r) for r in records
+    )
 
     tool_usage: Counter[str] = Counter()
     for r in records:
@@ -58,10 +93,12 @@ def _compute_stats(records: list[dict]) -> RunStats:
     return RunStats(
         n_total=n_total,
         n_passed=n_passed,
-        avg_tokens=avg_tokens,
+        avg_input_tokens=avg_input,
+        avg_output_tokens=avg_output,
         avg_cost=avg_cost,
         avg_budget_remaining=avg_budget,
-        accuracy_by_category=accuracy_by_category,
+        accuracy_by_database=accuracy_by_database,
+        error_distribution=error_distribution,
         tool_usage=tool_usage,
     )
 
@@ -108,6 +145,9 @@ def load_run(path: Path) -> RunData:
                 except json.JSONDecodeError:
                     malformed += 1
 
+    for r in records:
+        r["_error_class"] = classify_submit_error(r)
+
     config: dict = {}
     config_path = path / "config.yaml"
     if config_path.exists():
@@ -121,3 +161,43 @@ def load_run(path: Path) -> RunData:
         malformed_count=malformed,
         source_file=source.name,
     )
+
+
+def join_runs(runs: dict[str, RunData]) -> "pd.DataFrame":
+    """Merge N RunData objects on instance_id into a comparison DataFrame.
+
+    Columns: instance_id, database, Question, then one column per run label
+    with values ✓ (passed), ✗ (failed), or — (task absent in that run).
+    """
+    all_ids: dict[str, dict] = {}
+    for run_data in runs.values():
+        for r in run_data.records:
+            iid = r.get("instance_id", "")
+            if iid not in all_ids:
+                q = r.get("amb_user_query") or r.get("not_ambiguos_query", "")
+                all_ids[iid] = {
+                    "instance_id": iid,
+                    "database": r.get("selected_database", ""),
+                    "Question": (q[:80] + "…") if len(q) > 80 else q,
+                }
+
+    id_to_records: dict[str, dict[str, dict]] = {}
+    for label, run_data in runs.items():
+        for r in run_data.records:
+            iid = r.get("instance_id", "")
+            id_to_records.setdefault(iid, {})[label] = r
+
+    rows = []
+    for iid, base in all_ids.items():
+        row = dict(base)
+        for label in runs:
+            record = id_to_records.get(iid, {}).get(label)
+            if record is None:
+                row[label] = "—"
+            elif record.get("execution_accuracy"):
+                row[label] = "✓"
+            else:
+                row[label] = "✗"
+        rows.append(row)
+
+    return pd.DataFrame(rows)
