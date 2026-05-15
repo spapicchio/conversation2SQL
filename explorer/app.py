@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-from loader import RunData
-from loader import load_run
-from loader import list_runs
-from render import render_ai_content
-from render import render_conversation
-
 import json
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+from loader import RunData
+from loader import load_run
+from loader import list_runs
+from render import render_conversation
 
 
 RESULTS_ROOT = Path("results")
