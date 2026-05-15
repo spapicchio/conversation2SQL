@@ -80,7 +80,7 @@ st.divider()
 # ── Charts ─────────────────────────────────────────────────────────────────────
 
 db_cols = st.columns(len(runs))
-for col, (label, run) in zip(db_cols, runs.items()):
+for col, (_, run) in zip(db_cols, runs.items()):
     with col:
         st.subheader("Accuracy by Database")
         db_df = pd.DataFrame(
@@ -89,7 +89,7 @@ for col, (label, run) in zip(db_cols, runs.items()):
         st.bar_chart(db_df)
 
 err_cols = st.columns(len(runs))
-for col, (label, run) in zip(err_cols, runs.items()):
+for col, (_, run) in zip(err_cols, runs.items()):
     with col:
         st.subheader("Error Distribution")
         err_df = pd.DataFrame(
@@ -100,7 +100,7 @@ for col, (label, run) in zip(err_cols, runs.items()):
 has_tools = any(bool(run.stats.tool_usage) for run in runs.values())
 if has_tools:
     tool_cols = st.columns(len(runs))
-    for col, (label, run) in zip(tool_cols, runs.items()):
+    for col, (_, run) in zip(tool_cols, runs.items()):
         with col:
             st.subheader("Tool Usage")
             tool_df = pd.DataFrame(
