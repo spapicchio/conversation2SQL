@@ -46,6 +46,9 @@ else
     DEFAULT_PARAMS='{"enable_thinking": false}'
 fi
 
+OUTPUT_DIR="${DEST_DIR}"
+DEBUG=true
+
 start_vllm_server "$MODEL_NAME" "$MAX_MODEL_LEN" \
     --tensor-parallel-size 1 \
     --data-parallel-size 1 \
@@ -67,4 +70,6 @@ run_suite "no_tool" \
     --database_schema_type "ddl" \
     --make_data_ambiguous false \
     --read_only_gt_tables true \
-    --read_only_gt_kb true 
+    --read_only_gt_kb true \
+    --output_folder "${OUTPUT_DIR}" \
+    --debug $DEBUG

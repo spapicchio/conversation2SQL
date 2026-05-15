@@ -60,10 +60,7 @@ def workflow_evaluation_pipeline(
     config_reader = config_reader.model_copy(update={"make_data_ambiguous": forced_amb})
 
     # Per-baseline output folder with date/time subfolders
-    now = datetime.now()
-    date_folder = now.strftime("%Y_%m_%d")
-    time_folder = now.strftime("%H_%M_%S")
-    output_folder = Path(config_pipeline.output_folder) / config_pipeline.baseline / date_folder / time_folder
+    output_folder = Path(config_pipeline.output_folder)
     # store the chosen output folder back into the pipeline config (string)
     config_pipeline = config_pipeline.model_copy(update={"output_folder": str(output_folder)})
 

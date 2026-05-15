@@ -20,7 +20,6 @@ fi
 
 export BASE_WORK
 
-
 echo "[SUBMIT_AND_LOG] Using BASE_WORK=${BASE_WORK}"
 source "${BASE_WORK}/bash_scripts/utils/utils.sh"
 
@@ -48,22 +47,26 @@ export MY_SLURM_JOB_ID="${FAKE_JOB_ID}"
 
 DATE_DIR="$(date +%Y-%m-%d)"
 TIME_TAG="$(date +%H-%M-%S)"
-DEST_DIR="${BASE_WORK}/bash_scripts/launched/${DATE_DIR}"
+DEST_DIR="${BASE_WORK}/results/${DATE_DIR}/${TIME_TAG}"
 mkdir -p "${DEST_DIR}"
-FAKE_JOB_PATH="${DEST_DIR}/${TIME_TAG}-${MY_SLURM_JOB_ID}.sh"
+
+
+FAKE_JOB_PATH="${DEST_DIR}/${MY_SLURM_JOB_ID}.sh"
 
 cp "$JOB_SCRIPT" "$FAKE_JOB_PATH"
 chmod 770 "$FAKE_JOB_PATH"
 
 # Submit the job
-LOG_FOLDER="${BASE_WORK}/tmux_log/${DATE_DIR}"
+LOG_FOLDER="${DEST_DIR}/tmux_log"
 if [ -z "${2:-}" ]; then
   log_section '[SUBMIT_AND_LOG]  NOT sending with sbatch' "${MY_SLURM_JOB_ID}"
-  LOG_FOLDER="${LOG_FOLDER}/${TIME_TAG}-${MY_SLURM_JOB_ID}"
   mkdir -p "${LOG_FOLDER}"
   tmux new-session -d -s "${MY_SLURM_JOB_ID}" \
     "BASE_WORK=${BASE_WORK} \
     JOB_NAME=${JOB_NAME} \
+    DEST_DIR=${DEST_DIR} \
+    TIME_TAG=${TIME_TAG} \
+    DATE_DIR=${DATE_DIR} \
     MY_SLURM_JOB_ID=${MY_SLURM_JOB_ID} \
     ${FAKE_JOB_PATH} 2>&1 | \
     stdbuf -oL tee -a ${LOG_FOLDER}/all.log | \
@@ -73,13 +76,13 @@ else
   JOB_OUTPUT=$(sbatch -J "$2" "${FAKE_JOB_PATH}")
   MY_SLURM_JOB_ID=$(echo "$JOB_OUTPUT" | awk '{print $4}')
   log_section "[SUBMIT_AND_LOG] Submitted job with JOB Name: $2 and SLURM Job ID: ${MY_SLURM_JOB_ID}" "${MY_SLURM_JOB_ID}"
-
-  LOG_FOLDER="${LOG_FOLDER}/${TIME_TAG}-${MY_SLURM_JOB_ID}"
+  
   mkdir -p $LOG_FOLDER
+  
   SLURM_LOG="${BASE_WORK}/logs/rl/${MY_SLURM_JOB_ID}.out"
   ln -s "$SLURM_LOG" "${LOG_FOLDER}/all.out"
 
-  NEW_PATH="${DEST_DIR}/${TIME_TAG}-${MY_SLURM_JOB_ID}.sh"
+  NEW_PATH="${DEST_DIR}/${MY_SLURM_JOB_ID}.sh"
   mv "$FAKE_JOB_PATH" "${NEW_PATH}"
   FAKE_JOB_PATH=$NEW_PATH
 fi
