@@ -174,11 +174,12 @@ class TestSubmitSqlImpl:
         required — the grader compares result sets, not lists."""
         # ``_execute_query`` is called twice: first for the target SQL,
         # then for the candidate. ``side_effect`` feeds them in order.
-        target_rows = [(1,), (2,)]
-        pred_rows = [(2,), (1,)]
+        cursor_desc = [("id",)]
+        target_rows = [{"id": 1}, {"id": 2}]
+        pred_rows = [{"id": 2}, {"id": 1}]
         with patch.object(
             user_tools, "_execute_query",
-            side_effect=[(target_rows, None), (pred_rows, None)],
+            side_effect=[(target_rows, cursor_desc), (pred_rows, cursor_desc)],
         ):
             result = submit_sql_impl(
                 sql="SELECT id FROM users;",
@@ -192,9 +193,10 @@ class TestSubmitSqlImpl:
         """Different rows fail regardless of ordering. ``conditions=None``
         confirms the absence of a ``conditions`` block defaults to the
         unordered-comparison path."""
+        cursor_desc = [("id",)]
         with patch.object(
             user_tools, "_execute_query",
-            side_effect=[([(1,)], None), ([(2,)], None)],
+            side_effect=[([{"id": 1}], cursor_desc), ([{"id": 2}], cursor_desc)],
         ):
             result = submit_sql_impl(
                 sql="SELECT id FROM users;",
@@ -210,10 +212,11 @@ class TestSubmitSqlImpl:
     def test_passes_when_ordered_results_match_in_order(self):
         """When ``conditions["order"]=True`` (e.g. queries with ORDER BY),
         identical lists in the same order pass."""
-        rows = [(1,), (2,)]
+        cursor_desc = [("id",)]
+        rows = [{"id": 1}, {"id": 2}]
         with patch.object(
             user_tools, "_execute_query",
-            side_effect=[(rows, None), (rows, None)],
+            side_effect=[(rows, cursor_desc), (rows, cursor_desc)],
         ):
             result = submit_sql_impl(
                 sql="SELECT id FROM users ORDER BY id;",
@@ -227,9 +230,10 @@ class TestSubmitSqlImpl:
         """The complement of the previous test: same rows, wrong order →
         fail when order is required. This is what catches a candidate that
         forgot ORDER BY on a question that demanded it."""
+        cursor_desc = [("id",)]
         with patch.object(
             user_tools, "_execute_query",
-            side_effect=[([(1,), (2,)], None), ([(2,), (1,)], None)],
+            side_effect=[([{"id": 1}, {"id": 2}], cursor_desc), ([{"id": 2}, {"id": 1}], cursor_desc)],
         ):
             result = submit_sql_impl(
                 sql="SELECT id FROM users;",
@@ -342,11 +346,12 @@ def test_submit_sql_wrapper_serializes_passed_result(task_data):
     """Wiring check for ``submit_sql``: the wrapper must read ``sol_sqls``,
     ``db_dsn`` and ``conditions`` from the task context (the agent only
     supplies the candidate ``sql``) and JSON-serialise the grade."""
-    rows = [(1,)]
+    cursor_desc = [("id",)]
+    rows = [{"id": 1}]
     # Identical target/candidate rows → expect ``passed=True`` after JSON
     # round-trip. The two side-effects model the target+candidate runs.
     with patch.object(user_tools, "_execute_query",
-                      side_effect=[(rows, None), (rows, None)]):
+                      side_effect=[(rows, cursor_desc), (rows, cursor_desc)]):
         raw = _invoke_tool(
             user_tools.submit_sql,
             sql="SELECT id FROM users;",

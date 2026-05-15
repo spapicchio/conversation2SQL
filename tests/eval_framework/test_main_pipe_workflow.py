@@ -52,6 +52,9 @@ def _fake_task():
         "not_ambiguos_query": "q",
         "gt_knowledge_base": [],
         "category": "easy",
+        "ddl_database_schema": "CREATE TABLE t (id INT);",
+        "masked_agent_kb_linearized": {},
+        "user_query_ambiguity": {},
     }
     return t
 
@@ -63,6 +66,7 @@ def _stub_response():
         "total_prompt_tokens": 0, "total_completion_tokens": 0,
         "mean_prompt_tokens": 0, "mean_completion_tokens": 0,
         "tool_calls_in_order": [], "execution_accuracy": False,
+        "predicted_sql": "",
     }
 
 

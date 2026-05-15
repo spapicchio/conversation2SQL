@@ -404,3 +404,4 @@ def test_get_knowledge_definition_wrapper_returns_marker_for_missing(task_data):
         runtime=_Runtime(task_data),
     )
     assert json.loads(raw) == {"knowledge": "Knowledge not found."}
+

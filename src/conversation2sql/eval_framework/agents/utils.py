@@ -1,54 +1,58 @@
 from __future__ import annotations
-
 import json
 import re
-from typing import Any
 
 from jinja2 import Template
 from langchain_core.messages import BaseMessage, AIMessage, ToolMessage
 from langchain_litellm import ChatLiteLLM
 
-from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import (
-    CustomAgentState,
-)
 
+def utils_single_msg_to_str(message: BaseMessage) -> str:
+    """Convert a single LangChain `BaseMessage` to a human-readable string.
 
-def utils_process_agent_response(response: CustomAgentState, tool_costs: dict | None = None) -> Any:
-    tool_costs = tool_costs or {}
-    messages = [utils_process_single_msg(m, tool_costs=tool_costs) for m in response.pop("messages")]
-    total_cost = 0
-    total_tokens = 0
-    mean_prompt_tokens = []
-    mean_completion_tokens = []
-    tool_calls_in_order = []
-    passed = False
-    for msg in messages:
-        if msg["role"] == "tool":
-            passed = msg["content"].get("passed", False)
+    This is used for logging and test assertions where we want a simple
+    string representation of the message content. For `ToolMessage` objects
+    it attempts to JSON-decode the content for better readability.
 
-        total_cost += msg.get("cost_usd", 0)
+    Parameters
+    - message: A LangChain `BaseMessage` (or subclass) instance.
 
-        total_tokens += msg.get("total_tokens", 0)
-        mean_prompt_tokens.append(msg.get("prompt_tokens", 0))
-        mean_completion_tokens.append(msg.get("completion_tokens", 0))
-        tool_calls_in_order.extend(msg.get("tool_calls", []))
+    Returns
+    A string representation of the message content.
+    """
 
-    return {
-        **response,
-        "total_cost": total_cost,
-        "total_tokens": total_tokens,
-        "total_prompt_tokens": sum(mean_prompt_tokens),
-        "total_completion_tokens": sum(mean_completion_tokens),
-        "mean_prompt_tokens": sum(mean_prompt_tokens) / len(mean_prompt_tokens),
-        "mean_completion_tokens": sum(mean_completion_tokens)
-        / len(mean_completion_tokens),
-        "tool_calls_in_order": tool_calls_in_order,
-        "execution_accuracy": passed,
-        "messages": messages,
-    }
+    if isinstance(message.content, str):
+        raw_text = message.content
+    elif isinstance(message.content, list):
+        raw_text = "\n\n".join(
+            f"# {block['type']}\n{block[block['type']]}"
+            if isinstance(block, dict) and "type" in block and block["type"] in block
+            else str(block)
+            for block in message.content
+        )
+    else:
+        raw_text = str(message.content)
+
+    return raw_text
+    
 
 
 def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:
+    """Convert a single LangChain `BaseMessage` to a serialisable dict.
+
+    The returned dict always includes `role` and `content`. For `AIMessage`
+    objects it appends token/cost/finish metadata extracted via
+    `utils_extract_ai_metadata`. For `ToolMessage` objects it attempts to
+    JSON-decode the tool output and exposes `tool_name` and `status`.
+
+    Parameters
+    - message: A LangChain `BaseMessage` (or subclass) instance.
+    - tool_costs: Mapping from tool name -> cost used to annotate tool calls
+
+    Returns
+    A dict representation suitable for logging and downstream metrics.
+    """
+
     # https://docs.langchain.com/oss/python/langchain/messages
     base = {
         "role": message.type,  # 'ai' | 'human' | 'system' | 'tool'
@@ -79,10 +83,27 @@ def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:
 
 
 def utils_extract_ai_metadata(message: AIMessage, tool_costs: dict) -> dict:
+    """Extract normalised metadata from an `AIMessage`.
+
+    The langchain `AIMessage` object may include `usage_metadata` and
+    `response_metadata` which vary across providers; this helper converts
+    them into a consistent dictionary with token counts, model id, cost,
+    and a list of parsed tool-calls annotated with their configured costs.
+
+    Parameters
+    - message: `AIMessage` instance returned by LangChain/LiteLLM.
+    - tool_costs: mapping from tool name to cost used to annotate tool call
+
+    Returns
+    A dict with keys: `prompt_tokens`, `completion_tokens`, `total_tokens`,
+    `model_name`, `finish_reason`, `cost_usd`, `tool_calls`, and
+    `invalid_tool_calls`.
+    """
+
     # --- token usage (LangChain-normalised; LiteLLM populates this for all providers) ---
     um = (
         message.usage_metadata or {}
-    )  # https://reference.langchain.com/python/langchain-core/messages/ai/UsageMetadata?_gl=1*11ucany*_gcl_au*NDc0Mzc2NTAuMTc3Mjc5MTAyOA..*_ga*MjA2NDMyNTk0Ny4xNzcyNzkxMDI4*_ga_47WX3HKKY2*czE3NzcyODQ1ODckbzQ3JGcwJHQxNzc3Mjg0NTg3JGo2MCRsMCRoMA..
+    )  # https://reference.langchain.com/python/langchain-core/messages/ai/UsageMetadata
 
     prompt_tokens = um.get("input_tokens", -1)
     completion_tokens = um.get("output_tokens", -1)
@@ -144,26 +165,79 @@ def utils_create_model(
     temperature: float,
     max_tokens: int,
     top_p: float | None = None,
+    top_k: int | None = None,
+    api_base: str | None = None,
+    min_p: float | None = None,
+    presence_penalty: float | None = None,
+    repetition_penalty: float | None = None,
+    enable_thinking: bool | None = None,
+    reasoning_effort: str | None = None,
 ) -> ChatLiteLLM:
+    """Create a configured `ChatLiteLLM` instance for agent use.
+
+    This wraps the common argument translation between the project's
+    higher-level model config fields and the `ChatLiteLLM` constructor.
+
+    Parameters mirror the pipeline config and allow lightweight tuning:
+    - `model_name` / `model_provider`: combined into the provider/model string
+    - `temperature`, `top_p`, `top_k`: sampling controls
+    - `max_tokens`: maximum user-visible completion length (the function
+      also reserves extra `max_completion_tokens` for reasoning)
+    - `enable_thinking`, `reasoning_effort`: provider-specific extras
+
+    Returns
+    A ready-to-use `ChatLiteLLM` instance. Use this when creating the
+    agent's model clients so behaviour and token limits are consistent.
+    """
+
     # LiteLLM uses "{provider}/{model}" format
     # https://docs.litellm.ai/docs/providers
 
     litellm_model = f"{model_provider}/{model_name}"
     # reasoning + result
-    model_kwargs = {"max_completion_tokens": max_tokens + 2000}
+    model_kwargs: dict = {"max_completion_tokens": max_tokens + 2000}
+    if reasoning_effort is not None:
+        model_kwargs["reasoning_effort"] = reasoning_effort
+
+    if min_p is not None:
+        model_kwargs["min_p"] = min_p
+    if presence_penalty is not None:
+        model_kwargs["presence_penalty"] = presence_penalty
+    if repetition_penalty is not None:
+        model_kwargs["repetition_penalty"] = repetition_penalty
+    if enable_thinking is not None:
+        model_kwargs["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+
     kwargs = dict(
         model=litellm_model,
         temperature=temperature,
-        max_tokens=max_tokens,
         model_kwargs=model_kwargs,
     )
     if top_p is not None:
         kwargs["top_p"] = top_p
+    if top_k is not None:
+        kwargs["top_k"] = top_k
+    if api_base is not None:
+        litellm_model = f"hosted_vllm/{model_name}"
+        kwargs["api_base"] = api_base
 
     return ChatLiteLLM(**kwargs)
 
 
 def utils_render_jinja(template_str: str, params: dict) -> str:
+    """Render a Jinja template string with the provided parameters.
+
+    A tiny convenience wrapper used by `utils_build_messages` to keep
+    message construction concise and testable.
+
+    Parameters
+    - template_str: Jinja template as a string
+    - params: mapping of variables to render into the template
+
+    Returns
+    The rendered string.
+    """
+
     return Template(template_str).render(**params)
 
 
@@ -172,6 +246,19 @@ def utils_build_messages(
     user_str: str,
     params: dict,
 ) -> list[dict]:
+    """Build a small list of message dicts for a chat model call.
+
+    The function renders the optional `system_str` and required `user_str`
+    using `utils_render_jinja` and returns a list of dictionaries with
+    `role`/`content` keys that downstream code (or tests) can consume.
+
+    Example
+    - `utils_build_messages("You are an assistant.", "Answer: {{q}}", {"q": "hi"})`
+
+    Returns
+    A list like `[{'role': 'system', 'content': '...'}, {'role': 'user', 'content': '...'}]`.
+    """
+
     msgs: list[dict] = []
     if system_str:
         msgs.append(dict(role="system", content=utils_render_jinja(system_str, params)))

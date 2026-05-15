@@ -56,8 +56,8 @@ def _iter_records(path: Path) -> Iterator[dict]:
 
 
 def classify_record(
-    record: dict,
-    classifier: TurnClassifier,
+        record: dict,
+        classifier: TurnClassifier,
 ) -> tuple[dict, list[TurnClassification]]:
     """Classify all AI turns in a record.
 
@@ -92,9 +92,9 @@ def classify_record(
 
 
 def _update_summary(
-    summary: AnalysisSummary,
-    instance_id: str,
-    classifications: list[TurnClassification],
+        summary: AnalysisSummary,
+        instance_id: str,
+        classifications: list[TurnClassification],
 ) -> None:
     if instance_id not in summary.per_instance:
         summary.per_instance[instance_id] = InstanceStats()
@@ -108,10 +108,10 @@ def _update_summary(
 
 
 def workflow_classification_pipeline(
-    inputs: list[Path],
-    output: Path,
-    model_str: str,
-    tool_categories_path: Path,
+        inputs: list[Path],
+        output: Path,
+        model_str: str,
+        tool_categories_path: Path,
 ) -> AnalysisSummary:
     """Classify every AI turn in the given input files and write enriched JSONL.
 

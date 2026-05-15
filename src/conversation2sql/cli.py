@@ -29,18 +29,31 @@ app = typer.Typer(help="conversation2SQL — evaluate LLM agents on BIRD-Interac
 console = Console()
 
 
-@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+@app.command(
+    context_settings={
+        "allow_extra_args": True,
+        "ignore_unknown_options": True,
+        "help_option_names": [],
+    }
+)
 def run(
     ctx: typer.Context,
     config: Optional[Path] = typer.Option(None, "--config", help="Path to YAML config file."),
+    help: bool = typer.Option(False, "--help", "-h", help="Show this message and exit."),
 ) -> None:
     """Run an evaluation experiment."""
     load_dotenv(".env")
     litellm.suppress_debug_info = True
     warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning)
 
+    if help and config is None:
+        typer.echo(ctx.get_help())
+        raise typer.Exit()
+
     extra = ctx.args
     args = (["--config", str(config)] if config else []) + extra
+    if help and config is not None:
+        args.append("--help")
     parser = PydanticParser(
         [ConfigPipeline, ConfigReader, ConfigPredictor, ConfigUserSimulator]
     )
@@ -111,7 +124,9 @@ def _show_summary_table(results_dir: Path) -> None:
 
 def _submit_msg(record: dict) -> str:
     for msg in reversed(record.get("messages", [])):
-        if isinstance(msg, dict) and msg.get("name") == "submit_sql":
+        if isinstance(msg, dict) and (
+            msg.get("tool_name") == "submit_sql" or msg.get("name") == "submit_sql"
+        ):
             return str(msg.get("content", ""))[:80]
     return ""
 

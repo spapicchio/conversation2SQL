@@ -1,3 +1,6 @@
+from conversation2sql.eval_framework.agents.utils_extract_sql_from_response import extract_sql_from_response
+from typing import Any
+from conversation2sql.eval_framework.agents.utils import utils_process_single_msg
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     ToolCallLimitMiddleware,
@@ -28,7 +31,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import (
 )
 from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COSTS
 
-from conversation2sql.eval_framework.agents.utils import utils_process_agent_response
+
 from conversation2sql.eval_framework.state import TaskData
 from conversation2sql.logger import get_logger
 
@@ -101,4 +104,71 @@ def run_agent_bird_baseline(
     }
 
     response: CustomAgentState = agent.invoke(agent_state, context=single_task)  # pyrefly: ignore
-    return utils_process_agent_response(response, tool_costs=TOOL_COSTS)
+    output = utils_process_agent_response(response, tool_costs=TOOL_COSTS)
+    raw_text = response["messages"][-1]["content"] if response["messages"] else ""  # pyrefly: ignore
+    output['predicted_sql'] = extract_sql_from_response(raw_text)
+    return output
+
+
+def utils_process_agent_response(
+    response: CustomAgentState, tool_costs: dict | None = None
+) -> Any:
+    """Normalise an agent `CustomAgentState` into a report dict.
+
+    This takes the mutable `response` (which contains a `messages` list of
+    LangChain `BaseMessage` subclasses) and returns a compact dictionary
+    summarising token usage, cost, tool calls and the parsed messages.
+
+    Parameters
+    - response: The agent state (expected to implement mapping access and
+      contain a `messages` entry with LangChain message objects).
+    - tool_costs: Optional mapping from tool name to its coin/cost value.
+
+    Returns
+    A dictionary with keys:
+    - `total_cost`, `total_tokens`, `total_prompt_tokens`,
+      `total_completion_tokens`, `mean_prompt_tokens`, `mean_completion_tokens`
+    - `tool_calls_in_order`: flattened sequence of tool call entries
+    - `execution_accuracy`: boolean derived from the last tool (submit)
+    - `messages`: list of parsed message dicts (see `utils_process_single_msg`)
+
+    Why: downstream logging and metrics expect a stable, JSON-friendly
+    shape rather than rich LangChain objects.
+    """
+
+    tool_costs = tool_costs or {}
+    messages = [
+        utils_process_single_msg(m, tool_costs=tool_costs)
+        for m in response.pop("messages") #pyrefly: ignore
+    ]
+    total_cost = 0
+    total_tokens = 0
+    mean_prompt_tokens = []
+    mean_completion_tokens = []
+    tool_calls_in_order = []
+    passed = False
+    for msg in messages:
+        if msg["role"] == "tool":
+            passed = msg["content"].get("passed", False)
+
+        total_cost += msg.get("cost_usd", 0)
+
+        total_tokens += msg.get("total_tokens", 0)
+        mean_prompt_tokens.append(msg.get("prompt_tokens", 0))
+        mean_completion_tokens.append(msg.get("completion_tokens", 0))
+        tool_calls_in_order.extend(msg.get("tool_calls", []))
+
+    return {
+        **response,
+        "total_cost": total_cost,
+        "total_tokens": total_tokens,
+        "total_prompt_tokens": sum(mean_prompt_tokens),
+        "total_completion_tokens": sum(mean_completion_tokens),
+        "mean_prompt_tokens": sum(mean_prompt_tokens) / len(mean_prompt_tokens),
+        "mean_completion_tokens": sum(mean_completion_tokens)
+        / len(mean_completion_tokens),
+        "tool_calls_in_order": tool_calls_in_order,
+        "execution_accuracy": passed,
+        "messages": messages,
+    }
+

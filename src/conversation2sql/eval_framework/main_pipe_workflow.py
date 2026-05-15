@@ -1,5 +1,6 @@
 import copy
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -58,11 +59,15 @@ def workflow_evaluation_pipeline(
         )
     config_reader = config_reader.model_copy(update={"make_data_ambiguous": forced_amb})
 
-    # Per-baseline output folder
-    output_folder = Path(config_pipeline.output_folder) / config_pipeline.baseline
+    # Per-baseline output folder with date/time subfolders
+    now = datetime.now()
+    date_folder = now.strftime("%Y_%m_%d")
+    time_folder = now.strftime("%H_%M_%S")
+    output_folder = Path(config_pipeline.output_folder) / config_pipeline.baseline / date_folder / time_folder
+    # store the chosen output folder back into the pipeline config (string)
     config_pipeline = config_pipeline.model_copy(update={"output_folder": str(output_folder)})
 
-    # save config in output folder
+    # save config in the output folder
     _save_configs_as_yaml(
         output_folder=output_folder,
         config_pipeline=config_pipeline,
@@ -81,11 +86,16 @@ def workflow_evaluation_pipeline(
     # read dataset
     dataset: list[TaskData] = load_bird_interact_as_tasks(**config_reader.model_dump())
 
+    if config_pipeline.debug:
+        dataset = dataset[:10]
+        logger.info("Debug mode is ON - using only the first 10 tasks from the dataset")
+
+
     # Process dataset
     i = -1
     result = []
     try:
-        for i, task in tqdm.tqdm(enumerate(dataset), desc="Processing dataset"):
+        for i, task in tqdm.tqdm(enumerate(dataset), desc=f"Inference with {config_pipeline.baseline}"):
             if config_pipeline.baseline == "no_tool":
                 response = runner(task, model_agent)
             else:
@@ -104,9 +114,6 @@ def workflow_evaluation_pipeline(
             _save_record(response=task_output, output_path_jsonl=file_result)
             logger.info(f"Saved response for task_id={task.instance_id} to {file_result}")
             result.append(task_output)
-
-            if config_pipeline.debug:
-                break
 
     except Exception as e:
         logger.error(f"Error occurred: {e}")
@@ -128,8 +135,15 @@ def _init_models(
         model_name=config_predictor.model_name,
         model_provider=config_predictor.model_provider,
         temperature=config_predictor.temperature,
-        top_p=config_predictor.top_p,
         max_tokens=config_predictor.max_new_tokens,
+        top_p=config_predictor.top_p,
+        top_k=config_predictor.top_k,
+        api_base=config_predictor.predictor_vllm_api_base,
+        min_p=config_predictor.min_p,
+        presence_penalty=config_predictor.presence_penalty,
+        repetition_penalty=config_predictor.repetition_penalty,
+        enable_thinking=config_predictor.enable_thinking,
+        reasoning_effort=config_predictor.reasoning_effort,
     )
     if not needs_user_sim:
         return model_agent, (None, None)
@@ -139,6 +153,8 @@ def _init_models(
         model_provider=config_user.model_provider,
         temperature=config_user.temperature,
         max_tokens=config_user.max_new_tokens,
+        api_base=config_user.user_simulator_vllm_api_base,
+        
     )
     model_user_generator = utils_create_model(
         model_name=config_user.model_name,
@@ -181,7 +197,7 @@ def _save_record(response: dict, output_path_jsonl: Path):
             "config_user",
             "config_pipeline",
             "config_reader",
-            'instance_id', 'selected_database', 'amb_user_query', 'sol_sql', 'sql_query_conditions',
+            'instance_id', 'selected_database', 'amb_user_query', 'sql_query_conditions',
             'not_ambiguos_query', 'gt_knowledge_base', 'category', 'initial_user_patience',
             'updated_user_patience',
             'total_cost',
@@ -189,7 +205,12 @@ def _save_record(response: dict, output_path_jsonl: Path):
             'mean_prompt_tokens',
             'mean_completion_tokens',
             'tool_calls_in_order', 'messages',
-            'execution_accuracy'
+            'execution_accuracy',
+            'sol_sql',
+            'predicted_sql',
+            'ddl_database_schema',
+            'masked_agent_kb_linearized',
+            'user_query_ambiguity',
         ]
         smaller_response = {var: copy.deepcopy(response[var]) for var in keep_vars}
         with output_path_smaller.open("a", encoding="utf-8") as f:

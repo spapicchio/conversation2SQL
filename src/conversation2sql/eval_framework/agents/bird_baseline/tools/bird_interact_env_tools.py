@@ -66,6 +66,7 @@ KNOWLEDGE_VISIBLE_FIELDS = ["id", "knowledge", "description", "definition"]
 class ExecuteSQLResponse(BaseModel):
     result: str
     success: bool
+    error: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -77,8 +78,9 @@ def execute_sql_impl(sql: str, db_dsn: str) -> ExecuteSQLResponse:
     sql_upper = sql_cleaned.strip().upper()
     if not sql_upper.startswith(("SELECT", "WITH", "EXPLAIN")):
         return ExecuteSQLResponse(
-            result="Error: Only SELECT queries are allowed for execution in this environment.",
+            result="",
             success=False,
+            error="Only SELECT queries allowed in execute_sql",
         )
 
     try:
@@ -93,12 +95,14 @@ def execute_sql_impl(sql: str, db_dsn: str) -> ExecuteSQLResponse:
         return ExecuteSQLResponse(
             result="Error: SQL execution timed out.",
             success=False,
+            error="SQL execution timed out",
         )
 
     except psycopg2.DatabaseError as e:
         return ExecuteSQLResponse(
             result=f"Error: Database error occurred: {str(e)}.",
             success=False,
+            error=str(e),
         )
 
 
@@ -178,7 +182,7 @@ def execute_sql(sql: str, runtime: ToolRuntime[TaskData, CustomAgentState]) -> s
         The query results formatted as a table, or an error message.
     """
     response = execute_sql_impl(sql=sql, db_dsn=runtime.context.db_dsn)
-    return response.result
+    return response.model_dump_json()
 
 
 @tool
