@@ -190,32 +190,6 @@ def _save_record(response: dict, output_path_jsonl: Path):
     with output_path_jsonl.open("a", encoding="utf-8") as f:  # "a" = append line by line
         f.write(json.dumps(response, ensure_ascii=False) + "\n")
 
-    if 'error' not in response:
-        output_path_smaller = output_path_jsonl.parent / f"{output_path_jsonl.stem}_smaller.jsonl"
-        keep_vars = [
-            "config_predictor",
-            "config_user",
-            "config_pipeline",
-            "config_reader",
-            'instance_id', 'selected_database', 'amb_user_query', 'sql_query_conditions',
-            'not_ambiguos_query', 'gt_knowledge_base', 'category', 'initial_user_patience',
-            'updated_user_patience',
-            'total_cost',
-            'total_tokens',
-            'mean_prompt_tokens',
-            'mean_completion_tokens',
-            'tool_calls_in_order', 'messages',
-            'execution_accuracy',
-            'sol_sql',
-            'predicted_sql',
-            'ddl_database_schema',
-            'masked_agent_kb_linearized',
-            'user_query_ambiguity',
-        ]
-        smaller_response = {var: copy.deepcopy(response[var]) for var in keep_vars}
-        with output_path_smaller.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(smaller_response, ensure_ascii=False) + "\n")
-
 
 if __name__ == "__main__":
     _config_pipeline = ConfigPipeline()

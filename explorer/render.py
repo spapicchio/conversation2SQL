@@ -36,6 +36,14 @@ def render_conversation(record: dict) -> None:
         f"db: `{record.get('selected_database', '')}` · **{badge}**"
     )
 
+    # Questions
+    clean_q = record.get("not_ambiguos_query", "")
+    amb_q = record.get("amb_user_query", "")
+    if clean_q:
+        st.markdown(f"**Question:** {clean_q}")
+    if amb_q and amb_q != clean_q:
+        st.markdown(f"**Ambiguous question:** {amb_q}")
+
     col1, col2 = st.columns(2)
     with col1:
         with st.expander("Ground-truth SQL"):
@@ -47,16 +55,45 @@ def render_conversation(record: dict) -> None:
         with st.expander("Predicted SQL"):
             st.code(record.get("predicted_sql", "") or "", language="sql")
 
+    # Task context: schema, KB, column meanings
+    schema = record.get("ddl_database_schema", "")
+    # kb_linearized: dict = record.get("masked_agent_kb_linearized") or {}
+    kb_linearized: dict = {}
+    kb_raw: dict = record.get("masked_agent_kb") or {}
+    col_meanings: dict = record.get("column_meanings") or {}
+
+    ctx_cols = st.columns(3)
+    with ctx_cols[0]:
+        with st.expander("Schema (DDL)"):
+            with st.container(height=300):
+                st.code(schema or "(none)", language="sql")
+    with ctx_cols[1]:
+        with st.expander(f"Agent KB ({len(kb_linearized or kb_raw)} entries)"):
+            with st.container(height=300):
+                if kb_linearized:
+                    for name, text in kb_linearized.items():
+                        st.markdown(f"**{name}**")
+                        st.text(text)
+                elif kb_raw:
+                    st.json(kb_raw)
+                else:
+                    st.text("(none)")
+    with ctx_cols[2]:
+        with st.expander(f"Column meanings ({len(col_meanings)} entries)"):
+            with st.container(height=300):
+                if col_meanings:
+                    st.json(col_meanings)
+                else:
+                    st.text("(none)")
+
+    st.divider()
+
     for msg in record.get("messages", []):
         role = msg.get("role")
 
         if role in ("user", "system"):
-            with st.expander("System prompt — click to expand"):
+            with st.expander(f"{role.capitalize()} prompt — click to expand"):
                 st.text(msg.get("content", ""))
-
-        elif role == "human":
-            with st.chat_message("user"):
-                st.markdown(msg.get("content", ""))
 
         elif role == "ai":
             with st.chat_message("assistant"):
@@ -92,3 +129,5 @@ def render_conversation(record: dict) -> None:
                         st.json(content)
                     else:
                         st.text(str(content))
+        else:
+            raise ValueError(f"Unknown message role: {role}")

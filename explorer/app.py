@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pandas as pd
@@ -17,9 +16,15 @@ from render import render_conversation
 RESULTS_ROOT = Path("results")
 
 _GEN_PARAM_KEYS = (
-    "temperature", "top_p", "top_k", "min_p",
-    "presence_penalty", "repetition_penalty", "max_new_tokens",
-    "reasoning_effort", "enable_thinking",
+    "temperature",
+    "top_p",
+    "top_k",
+    "min_p",
+    "presence_penalty",
+    "repetition_penalty",
+    "max_new_tokens",
+    "reasoning_effort",
+    "enable_thinking",
 )
 
 
@@ -50,13 +55,12 @@ with st.sidebar:
     if not runs:
         st.error(f"No results found in `{RESULTS_ROOT.resolve()}`")
         st.stop()
-    baseline = st.selectbox("Baseline", list(runs.keys()))
-    dates = list(runs[baseline].keys())
+    dates = list(runs.keys())
     date = st.selectbox("Date", dates)
-    times = runs[baseline][date]
+    times = runs[date]
     time_key = st.selectbox("Time", times, index=0)
 
-run_path = RESULTS_ROOT / baseline / date / time_key
+run_path = RESULTS_ROOT / date / time_key
 run = _load_run_cached(str(run_path))
 
 with st.sidebar:
@@ -94,7 +98,10 @@ with chart_cols[0]:
 with chart_cols[1]:
     st.subheader("Error Distribution")
     err_df = pd.DataFrame(
-        [{"Error Class": k, "Count": v} for k, v in stats.error_distribution.most_common()]
+        [
+            {"Error Class": k, "Count": v}
+            for k, v in stats.error_distribution.most_common()
+        ]
     ).set_index("Error Class")
     st.bar_chart(err_df)
 
@@ -115,7 +122,9 @@ with f1:
     pass_filter = st.radio("Pass / Fail", ["All", "Passed", "Failed"], horizontal=True)
 with f2:
     all_error_classes = sorted({r.get("_error_class", "Other") for r in run.records})
-    error_filter = st.multiselect("Error Class", all_error_classes, default=all_error_classes)
+    error_filter = st.multiselect(
+        "Error Class", all_error_classes, default=all_error_classes
+    )
 with f3:
     search = st.text_input("Search question", placeholder="substring…")
 

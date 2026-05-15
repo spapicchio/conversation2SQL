@@ -45,7 +45,11 @@ def classify_submit_error(record: dict) -> str:
     content = last_msg.get("content", {})
     message = content.get("message", "") if isinstance(content, dict) else str(content)
     message_lower = message.lower()
-    if "empty query" in message_lower or "empty" in message_lower and "query" in message_lower:
+    if (
+        "empty query" in message_lower
+        or "empty" in message_lower
+        and "query" in message_lower
+    ):
         return "Empty Query"
     if re.search(r"syntax error", message_lower):
         return "Syntax Error"
@@ -62,9 +66,13 @@ def _compute_stats(records: list[dict]) -> RunStats:
     n_total = len(records)
     n_passed = sum(1 for r in records if r.get("execution_accuracy", False))
     avg_input = sum(r.get("mean_prompt_tokens") or 0 for r in records) / max(n_total, 1)
-    avg_output = sum(r.get("mean_completion_tokens") or 0 for r in records) / max(n_total, 1)
+    avg_output = sum(r.get("mean_completion_tokens") or 0 for r in records) / max(
+        n_total, 1
+    )
     avg_cost = sum(r.get("total_cost") or 0 for r in records) / max(n_total, 1)
-    avg_budget = sum(r.get("updated_user_patience") or 0 for r in records) / max(n_total, 1)
+    avg_budget = sum(r.get("updated_user_patience") or 0 for r in records) / max(
+        n_total, 1
+    )
 
     db_totals: dict[str, int] = {}
     db_passed: dict[str, int] = {}
@@ -74,8 +82,7 @@ def _compute_stats(records: list[dict]) -> RunStats:
         if r.get("execution_accuracy", False):
             db_passed[db] = db_passed.get(db, 0) + 1
     accuracy_by_database = {
-        db: db_passed.get(db, 0) / total
-        for db, total in db_totals.items()
+        db: db_passed.get(db, 0) / total for db, total in db_totals.items()
     }
 
     error_distribution: Counter[str] = Counter(
@@ -103,34 +110,26 @@ def _compute_stats(records: list[dict]) -> RunStats:
     )
 
 
-def list_runs(results_root: Path) -> dict[str, dict[str, list[str]]]:
-    """Return {baseline: {date: [time, ...]}} newest-first within each date."""
-    runs: dict[str, dict[str, list[str]]] = {}
+def list_runs(results_root: Path) -> dict[str, list[str]]:
+    """Return {date: [time, ...]} newest-first, scanning results/<date>/<time>/."""
+    runs: dict[str, list[str]] = {}
     if not results_root.exists():
         return runs
-    for baseline_dir in sorted(results_root.iterdir()):
-        if not baseline_dir.is_dir():
+    for date_dir in sorted(results_root.iterdir(), reverse=True):
+        if not date_dir.is_dir():
             continue
-        dates: dict[str, list[str]] = {}
-        for date_dir in sorted(baseline_dir.iterdir(), reverse=True):
-            if not date_dir.is_dir():
-                continue
-            times = sorted(
-                [d.name for d in date_dir.iterdir() if d.is_dir()],
-                reverse=True,
-            )
-            if times:
-                dates[date_dir.name] = times
-        if dates:
-            runs[baseline_dir.name] = dates
+        times = sorted(
+            [d.name for d in date_dir.iterdir() if d.is_dir()],
+            reverse=True,
+        )
+        if times:
+            runs[date_dir.name] = times
     return runs
 
 
 def load_run(path: Path) -> RunData:
     """Load records and config from results/<baseline>/<date>/<time>/."""
-    smaller = path / "results_smaller.jsonl"
-    full = path / "results.jsonl"
-    source = smaller if smaller.exists() else full
+    source = path / "results.jsonl"
 
     records: list[dict] = []
     malformed = 0
@@ -201,3 +200,9 @@ def join_runs(runs: dict[str, RunData]) -> "pd.DataFrame":
         rows.append(row)
 
     return pd.DataFrame(rows)
+
+
+if __name__ == "__main__":
+    # For testing
+    run_data = list_runs(Path("results"))
+    print(run_data)
