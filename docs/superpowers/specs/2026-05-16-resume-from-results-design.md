@@ -18,7 +18,7 @@ Behavior when set:
 
 1. Read the prior `results.jsonl` and the sibling `config.yaml`.
 2. Validate that the prior run's *identity fields* match the current configuration. On any mismatch, raise `ResumeConfigMismatchError` with a per-field diff and exit **before** loading any model.
-3. Copy the prior `results.jsonl` into the current run's `output_folder` (already timestamped under `<output_folder>/YYYY-MM-DD/HH-MM-SS/`).
+3. Copy the prior `results.jsonl` into the current run's `output_folder`. The caller is responsible for ensuring `output_folder` is distinct from the prior run's folder (the usual convention — timestamped subfolders set by the bash launcher — already guarantees this); `prepare_resume` enforces this defensively by refusing to overwrite a non-empty destination.
 4. Load the dataset, filter out any `TaskData` whose `instance_id` appears in the seeded file, and run the standard pipeline on the remainder.
 5. New records continue to append to the seeded `output_folder/results.jsonl`.
 
