@@ -10,7 +10,6 @@ class ConfigPipeline(BaseModel):
     debug: bool = True
     output_folder: str = "results"
     baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full'] = 'bird_full'
-    resume_from: str | None = None  # path to a prior results.jsonl to resume from
 
 
 # ---------------------------------------------------------------------------
@@ -23,11 +22,11 @@ class ConfigReader(BaseModel):
     filter_query_category: bool = True
     db_dsn_template: str = 'postgresql://root:123123@localhost:5432/{database}'  # DSN template; {database} is replaced with the per-sample database name
     user_patience_budget: int = 10
-    make_data_ambiguous: bool
+    make_data_ambiguous: bool = True
     database_schema_type: Literal['ddl', 'toon'] = 'ddl'  # Whether to use the original complex schema or a simplified version for better model understanding
-    is_kb_linearized: bool  # Whether to linearize the KB information into text format when providing it to the model, as opposed to a more structured format. This can help with model understanding but may lose some structural information.
-    read_only_gt_kb: bool  # Whether to only include the tables/columns that are actually used in the GT SQL query when providing the schema to the model
-    read_only_gt_tables: bool  # Whether to only include the tables that are actually used in the GT SQL query when providing the schema to the model   
+    read_only_gt_kb: bool = False  # Whether to only include the tables/columns that are actually used in the GT SQL query when providing the schema to the model
+    read_only_gt_tables: bool = False  # Whether to only include the tables that are actually used in the GT SQL query when providing the schema to the model   
+    is_kb_linearized: bool = False  # Whether to linearize the KB schema into text or provide it in a structured format (e.g., JSON); linearization may be easier for LLMs to understand but less faithful to the original structure
 # ---------------------------------------------------------------------------
 # Input Data for Predictor
 # ---------------------------------------------------------------------------

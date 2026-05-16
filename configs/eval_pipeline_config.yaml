@@ -26,7 +26,7 @@ reader:
   make_data_ambiguous: false # if set to False, the data is not made ambiguous (KG is not masked and the question does not contain ambiguity)
   read_only_gt_tables: false # if set to True, the schema linking is performed automatically (DB schema contains only relevant tables); if set to False, the agent read from all tables
   read_only_gt_kb: false # if set to True, the agent read from the GT KB (GT KB contains only relevant facts); if set to False, the agent read from the full KB
-
+  is_kb_linearized: false # Whether to linearize the KB schema into text or provide it in a structured format (e.g., JSON); linearization may be easier for LLMs to understand but less faithful to the original structure
 # ── Predictor ─────────────────────────────────────────────────────────────────
 predictor:
   model_name: 'Qwen/Qwen3.5-9B'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.

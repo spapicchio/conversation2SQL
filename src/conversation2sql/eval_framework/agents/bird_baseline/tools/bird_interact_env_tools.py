@@ -257,10 +257,13 @@ def get_all_external_knowledge_names(
     Returns:
         JSON list of knowledge entry names.
     """
+    kb = (
+        runtime.context.masked_agent_kb_linearized
+        if runtime.context.is_kb_linearized
+        else runtime.context.masked_agent_kb
+    )
     return json.dumps(
-        get_all_external_knowledge_names_impl(
-            masked_agent_kb=runtime.context.masked_agent_kb
-        ),
+        get_all_external_knowledge_names_impl(masked_agent_kb=kb),
         indent=2,
     )
 
@@ -280,6 +283,10 @@ def get_knowledge_definition(
         JSON string with the knowledge definition.
     """
     # Note that for Ambiguous query with KB ambiguity this is masked
+    if runtime.context.is_kb_linearized:
+        kb = runtime.context.masked_agent_kb_linearized
+        result = {"knowledge": kb[knowledge_name] if knowledge_name in kb else "Knowledge not found."}
+        return json.dumps(result, indent=2)
     return json.dumps(
         get_knowledge_definition_impl(
             knowledge_name=knowledge_name,
@@ -294,6 +301,9 @@ def get_all_knowledge_definitions(
         runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Return all external knowledge with definitions (cost: 1 patience)."""
+    if runtime.context.is_kb_linearized:
+        kb = runtime.context.masked_agent_kb_linearized
+        return json.dumps({"knowledge": list(kb.values())}, indent=2)
     return json.dumps(
         get_all_knowledge_definitions_impl(
             masked_agent_kb=runtime.context.masked_agent_kb

@@ -68,6 +68,7 @@ if [ -z "${2:-}" ]; then
     TIME_TAG=${TIME_TAG} \
     DATE_DIR=${DATE_DIR} \
     MY_SLURM_JOB_ID=${MY_SLURM_JOB_ID} \
+    CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1} \
     ${FAKE_JOB_PATH} 2>&1 | \
     stdbuf -oL tee -a ${LOG_FOLDER}/all.log | \
     stdbuf -oL tee >(stdbuf -oL grep 'WARNING' >> ${LOG_FOLDER}/warning.log) | \

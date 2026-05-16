@@ -120,7 +120,6 @@ def _extract_gt_sql_table_usage(
         else None
     )
 
-
     for idx, sql in enumerate(sql_list):
         usage, error = extract_table_in_gt_sql(
             sql,
@@ -263,6 +262,7 @@ def load_bird_interact_as_tasks(
     read_only_gt_tables: bool = False,
     read_only_gt_kb: bool = False,
     database_schema_type: str = "ddl",
+    is_kb_linearized: bool = False,
     *args,
     **kwargs,
 ) -> list[TaskData]:
@@ -363,6 +363,9 @@ def load_bird_interact_as_tasks(
                     line.get("instance_id"),
                     table_in_gt_sql_parse_error,
                 )
+            linearized_kb = linearize_kb(masked_agent_kb)
+            if is_kb_linearized:
+                masked_agent_kb = linearized_kb
 
             sample = TaskData(
                 instance_id=line.pop("instance_id"),
@@ -382,7 +385,7 @@ def load_bird_interact_as_tasks(
                 ddl_database_schema=schema,
                 full_knowledge_base=kb_full,
                 masked_agent_kb=masked_agent_kb,
-                masked_agent_kb_linearized=linearize_kb(masked_agent_kb),
+                masked_agent_kb_linearized=linearized_kb,
                 gt_knowledge_base=gt_knowledge_base,
                 column_meanings=column_meanings,
                 user_query_ambiguity=line.pop("user_query_ambiguity"),
@@ -393,6 +396,7 @@ def load_bird_interact_as_tasks(
                 sql_query_conditions=line.pop("conditions"),
                 table_in_gt_sql=table_in_gt_sql,
                 table_in_gt_sql_parse_error=table_in_gt_sql_parse_error,
+                is_kb_linearized=is_kb_linearized,
                 **line,
             )
             samples.append(sample)
