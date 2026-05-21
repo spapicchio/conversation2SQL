@@ -39,6 +39,10 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute
     _execute_query,
     _format_result,
 )
+from conversation2sql.eval_framework.agents.utils_kb_linearize import (
+    format_entry_line,
+    linearize_kb,
+)
 from conversation2sql.eval_framework.state import (
     ColumnMeaningEntry,
     ExternalKnowledgeEntry,
@@ -257,13 +261,8 @@ def get_all_external_knowledge_names(
     Returns:
         JSON list of knowledge entry names.
     """
-    kb = (
-        runtime.context.masked_agent_kb_linearized
-        if runtime.context.is_kb_linearized
-        else runtime.context.masked_agent_kb
-    )
     return json.dumps(
-        get_all_external_knowledge_names_impl(masked_agent_kb=kb),
+        get_all_external_knowledge_names_impl(masked_agent_kb=runtime.context.masked_agent_kb),
         indent=2,
     )
 
@@ -282,11 +281,9 @@ def get_knowledge_definition(
     Returns:
         JSON string with the knowledge definition.
     """
-    # Note that for Ambiguous query with KB ambiguity this is masked
     if runtime.context.is_kb_linearized:
-        kb = runtime.context.masked_agent_kb_linearized
-        result = {"knowledge": kb[knowledge_name] if knowledge_name in kb else "Knowledge not found."}
-        return json.dumps(result, indent=2)
+        line = format_entry_line(knowledge_name, runtime.context.masked_agent_kb)
+        return json.dumps({"knowledge": line}, indent=2)
     return json.dumps(
         get_knowledge_definition_impl(
             knowledge_name=knowledge_name,
@@ -302,11 +299,11 @@ def get_all_knowledge_definitions(
 ) -> str:
     """Return all external knowledge with definitions (cost: 1 patience)."""
     if runtime.context.is_kb_linearized:
-        kb = runtime.context.masked_agent_kb_linearized
-        return json.dumps({"knowledge": list(kb.values())}, indent=2)
+        flat = linearize_kb(runtime.context.masked_agent_kb)
+        return json.dumps({"knowledge": flat}, indent=2)
     return json.dumps(
         get_all_knowledge_definitions_impl(
-            masked_agent_kb=runtime.context.masked_agent_kb
+            masked_agent_kb=runtime.context.masked_agent_kb,
         ),
         indent=2,
     )
