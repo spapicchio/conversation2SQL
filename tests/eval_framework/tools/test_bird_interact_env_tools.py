@@ -410,19 +410,13 @@ def test_get_knowledge_definition_wrapper_returns_marker_for_missing(task_data):
 # Linearized branch — is_kb_linearized=True
 # ---------------------------------------------------------------------------
 
-def _task_data_linearized(task_data):
-    """Return a TaskData copy with is_kb_linearized=True."""
-    return task_data.model_copy(update={"is_kb_linearized": True})
-
-
-def test_get_knowledge_definition_linearized_returns_single_line(task_data):
+def test_get_knowledge_definition_linearized_returns_single_line(task_data_linearized):
     """With is_kb_linearized=True, the tool returns one formatted line for the entry,
     not a JSON-dumped ExternalKnowledgeEntry."""
-    ctx = _task_data_linearized(task_data)
     raw = _invoke_tool(
         env_tools.get_knowledge_definition,
         knowledge_name="active_user",
-        runtime=_Runtime(ctx),
+        runtime=_Runtime(task_data_linearized),
     )
     decoded = json.loads(raw)
     assert "knowledge" in decoded
@@ -431,35 +425,33 @@ def test_get_knowledge_definition_linearized_returns_single_line(task_data):
     assert "revenue" not in decoded["knowledge"].lower()
 
 
-def test_get_knowledge_definition_linearized_missing_returns_sentinel(task_data):
+def test_get_knowledge_definition_linearized_missing_returns_sentinel(task_data_linearized):
     """Missing name under is_kb_linearized=True -> same not-found sentinel."""
-    ctx = _task_data_linearized(task_data)
     raw = _invoke_tool(
         env_tools.get_knowledge_definition,
         knowledge_name="ghost",
-        runtime=_Runtime(ctx),
+        runtime=_Runtime(task_data_linearized),
     )
     assert json.loads(raw) == {"knowledge": "Knowledge not found."}
 
 
-def test_get_all_knowledge_definitions_linearized_returns_flat_string(task_data):
+def test_get_all_knowledge_definitions_linearized_returns_flat_string(task_data_linearized):
     """With is_kb_linearized=True, the tool returns a single flat string,
     not a list of per-entry JSON strings."""
-    ctx = _task_data_linearized(task_data)
     raw = _invoke_tool(
         env_tools.get_all_knowledge_definitions,
-        runtime=_Runtime(ctx),
+        runtime=_Runtime(task_data_linearized),
     )
     decoded = json.loads(raw)
     assert "knowledge" in decoded
     assert isinstance(decoded["knowledge"], str)
     assert "# Definitions" in decoded["knowledge"]
+    assert "active_user" in decoded["knowledge"]
 
 
-def test_get_all_external_knowledge_names_same_regardless_of_linearized_flag(task_data):
+def test_get_all_external_knowledge_names_same_regardless_of_linearized_flag(task_data, task_data_linearized):
     """Names are identical whether is_kb_linearized=True or False."""
-    ctx_true = _task_data_linearized(task_data)
     names_false = json.loads(_invoke_tool(env_tools.get_all_external_knowledge_names, runtime=_Runtime(task_data)))
-    names_true  = json.loads(_invoke_tool(env_tools.get_all_external_knowledge_names, runtime=_Runtime(ctx_true)))
+    names_true  = json.loads(_invoke_tool(env_tools.get_all_external_knowledge_names, runtime=_Runtime(task_data_linearized)))
     assert sorted(names_false["names"]) == sorted(names_true["names"])
 

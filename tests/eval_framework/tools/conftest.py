@@ -78,3 +78,9 @@ def make_chat_model():
         return model
 
     return _factory
+
+
+@pytest.fixture
+def task_data_linearized(task_data) -> TaskData:
+    """Return a TaskData copy with is_kb_linearized=True."""
+    return task_data.model_copy(update={"is_kb_linearized": True})
