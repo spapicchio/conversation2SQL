@@ -22,6 +22,15 @@ Shared helpers used by both agents:
 - `utils_process_agent_response` — walks message history, extracts token usage, cost, tool calls, and `execution_accuracy` from the last `submit_sql` result.
 - `utils_build_messages` / `utils_render_jinja` — Jinja2 prompt rendering helpers.
 
+## utils_kb_linearize.py
+
+Shared KB linearization helpers used by both agents when `is_kb_linearized=True`.
+
+- `linearize_kb(masked_agent_kb)` — Strategy-1 flat string: one `# Dependency edges` block (prereq → dependent triples) followed by all definitions in topological order (leaves first). Returns `""` for an empty KB.
+- `format_entry_line(name, masked_agent_kb)` — formats the single `[TOKEN] name - desc - formula: …` line for one entry. Returns `"Knowledge not found."` if the name is absent.
+
+Used by `bird_baseline/tools/bird_interact_env_tools.py` (KB tools when `is_kb_linearized=True`) and `no_tool_baseline/baseline_model.py` (prompt rendering when `is_kb_linearized=True`).
+
 ## Adding a new agent
 
 1. Create a new subdirectory package with `__init__.py`, an entry function, and prompts.
