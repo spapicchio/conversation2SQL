@@ -1,5 +1,5 @@
 """Tests for the Strategy-1 KB linearizer in agents/utils_kb_linearize.py."""
-import pytest
+from __future__ import annotations
 
 from conversation2sql.eval_framework.agents.utils_kb_linearize import (
     format_entry_line,

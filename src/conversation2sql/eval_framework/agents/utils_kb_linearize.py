@@ -131,7 +131,7 @@ def _process_braced_commands(s: str) -> str:
 def simplify_latex(definition: str) -> str:
     """Rewrite LaTeX formula into simple code-like notation (best-effort)."""
     if not definition:
-        return definition
+        return ""
     s = definition
     for old, new in _SIMPLE_LATEX_REPLACEMENTS:
         s = s.replace(old, new)
@@ -153,7 +153,6 @@ _TOKEN_RE = re.compile(r"\(([A-Za-z][A-Za-z0-9_]{0,15})\)\s*$")
 
 
 def _extract_token(knowledge: str) -> str:
-    """Return the trailing (ACRONYM) if present, else the whole name."""
     m = _TOKEN_RE.search(knowledge)
     return m.group(1) if m else knowledge.strip()
 
@@ -168,7 +167,6 @@ def _strip_token(knowledge: str) -> str:
 def _topological_sort(
     nodes: list[ExternalKnowledgeEntry],
 ) -> list[ExternalKnowledgeEntry]:
-    """Return nodes leaves-first. IDs within each ready layer are sorted for stability."""
     node_ids = {n.id for n in nodes}
     prereqs: dict[int, set[int]] = {
         n.id: {c for c in (n.children_knowledge or []) if c in node_ids}
