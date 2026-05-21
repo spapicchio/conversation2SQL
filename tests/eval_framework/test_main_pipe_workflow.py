@@ -53,7 +53,6 @@ def _fake_task():
         "gt_knowledge_base": [],
         "category": "easy",
         "ddl_database_schema": "CREATE TABLE t (id INT);",
-        "masked_agent_kb_linearized": {},
         "user_query_ambiguity": {},
     }
     return t
