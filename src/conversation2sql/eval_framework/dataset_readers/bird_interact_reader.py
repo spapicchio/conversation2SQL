@@ -17,7 +17,6 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute
 from conversation2sql.eval_framework.dataset_readers.sql_usage_extractor import (
     extract_table_in_gt_sql,
 )
-from conversation2sql.eval_framework.dataset_readers.utils_kb import linearize_kb
 from conversation2sql.eval_framework.state import (
     TaskData,
     ColumnMeaningEntry,
@@ -363,10 +362,6 @@ def load_bird_interact_as_tasks(
                     line.get("instance_id"),
                     table_in_gt_sql_parse_error,
                 )
-            linearized_kb = linearize_kb(masked_agent_kb)
-            if is_kb_linearized:
-                masked_agent_kb = linearized_kb
-
             sample = TaskData(
                 instance_id=line.pop("instance_id"),
                 selected_database=db_name,
@@ -385,7 +380,6 @@ def load_bird_interact_as_tasks(
                 ddl_database_schema=schema,
                 full_knowledge_base=kb_full,
                 masked_agent_kb=masked_agent_kb,
-                masked_agent_kb_linearized=linearized_kb,
                 gt_knowledge_base=gt_knowledge_base,
                 column_meanings=column_meanings,
                 user_query_ambiguity=line.pop("user_query_ambiguity"),
