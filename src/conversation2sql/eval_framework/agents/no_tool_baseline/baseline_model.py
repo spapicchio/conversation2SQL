@@ -2,6 +2,7 @@ from typing import Any
 from conversation2sql.eval_framework.agents.utils_extract_sql_from_response import (
     extract_sql_from_response,
 )
+from conversation2sql.eval_framework.agents.utils_kb_linearize import linearize_kb
 
 
 from langchain_core.language_models import BaseChatModel
@@ -25,18 +26,35 @@ def run_baseline_no_tool(
     single_task: TaskData,
     model_agent: BaseChatModel,
 ) -> dict[str, Any]:
+    kb_for_prompt = (
+        linearize_kb(single_task.masked_agent_kb)
+        if single_task.is_kb_linearized
+        else single_task.masked_agent_kb
+    )
     user_messages = build_omnisql_prompt(
         params={
             "schema": single_task.ddl_database_schema,
             "question": single_task.task_question,
-            "kb": single_task.masked_agent_kb,
+            "kb": kb_for_prompt,
         }
     )
 
     ai_msg: AIMessage = model_agent.invoke(user_messages)  # pyrefly: ignore
-    raw_text = utils_single_msg_to_str(ai_msg)
 
-    sql = extract_sql_from_response(raw_text)
+    # Extract the SQL from the Text block type (instead of the thinking block)
+    sql = None
+    if isinstance(ai_msg.content, list):
+        for content in ai_msg.content:
+            if content['type'] == 'text':
+                sql = extract_sql_from_response(content['text'])
+                if sql is not None:
+                    break
+
+    # If the SQL is still NONE, try to extract from the whole response content as a fallback
+    raw_text = utils_single_msg_to_str(ai_msg)
+    if sql is None:
+        sql = extract_sql_from_response(raw_text)
+    
     if sql is None:
         submit_outcome: dict = {
             "passed": False,
