@@ -443,12 +443,12 @@ if __name__ == "__main__":
         _user_patience,
         make_data_ambiguous=True,
         read_only_gt_tables=True,
-        read_only_gt_kb=True,
+        read_only_gt_kb=False,
         database_schema_type="toon",
+        is_kb_linearized=True,
     )
 
     print(f"Loaded {len(samples)} samples")
     print("Example sample:")
-    print(samples[0].table_in_gt_sql)
-    print(samples[0].sol_sql[0])
     print(samples[0].masked_agent_kb)
+    print(samples[0].full_knowledge_base)

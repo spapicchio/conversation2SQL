@@ -14,19 +14,21 @@ The app expects a `results/` directory in the working directory, laid out as:
 
 ```
 results/
-└── <baseline>/          # e.g. no_tool, bird_baseline
-    └── <YYYY_MM_DD>/
-        └── <HH_MM_SS>/
-            ├── results_smaller.jsonl   # loaded first if present
-            ├── results.jsonl           # fallback
-            └── config.yaml            # optional run config
+└── <YYYY_MM_DD>/
+    └── <HH_MM_SS>__<slug>/
+        ├── tmux_log               # directory with run info
+        ├── <bash_id>.sh           # the bash file used to launch the exp
+        ├── results.jsonl          # the result file
+        └── config.yaml            # optional run config
 ```
+
+The run folder name is generated automatically by the pipeline and encodes the key parameters that distinguish runs: model name, schema type (`ddl` or `toon`), and optional flags (`lin` = KB linearized, `gt-db` = GT tables only, `gt-kb` = GT KB only).
 
 ## Features
 
 | Panel | Description |
 |---|---|
-| **Sidebar** | Cascading selectors (baseline → date → time). Shows model name and generation params (collapsible). |
+| **Sidebar** | Cascading selectors (date → run). Shows model name and generation params (collapsible). |
 | **Metrics** | Accuracy, avg input/output tokens, avg cost, avg budget remaining. |
 | **Accuracy by Database** | Pass rate per database in the selected run. |
 | **Error Distribution** | Breakdown of why failed tasks failed (see below). |
@@ -46,6 +48,7 @@ Error classes are assigned by `classify_submit_error()` in `loader.py`. The func
 | `Column/Relation Not Found` | Message matches `does not exist` |
 | `Wrong SQL` | Message is *"Your SQL is not correct."* |
 | `DB Error` | Other `DatabaseError` |
+| `[TARGET ERROR]` | Target error executions |
 | `Other` | None of the above |
 
 To add a new class, add a branch in `classify_submit_error()` before the final `return "Other"` line.
@@ -56,7 +59,7 @@ Navigate to **Run Comparison** in the Streamlit sidebar to compare multiple runs
 
 | Panel | Description |
 |---|---|
-| **Sidebar** | Multi-select any number of runs (baseline / date / time). Requires ≥ 2. |
+| **Sidebar** | Multi-select any number of runs (date / run). Requires ≥ 2. |
 | **Stats** | Per-run metric cards: accuracy, avg tokens, avg cost, avg budget remaining. |
 | **Charts** | Accuracy by database, error distribution, and tool usage — one chart per run, aligned in columns. |
 | **Task table** | One row per `instance_id`, one column per run (✓ / ✗ / —). Filter by agreement, and search by question text. |

@@ -35,11 +35,10 @@ if not runs_tree:
     st.stop()
 
 all_run_labels: dict[str, Path] = {}
-for baseline, dates in runs_tree.items():
-    for date, times in dates.items():
-        for time_key in times:
-            label = f"{baseline} / {date} / {time_key}"
-            all_run_labels[label] = RESULTS_ROOT / baseline / date / time_key
+for date, run_names in runs_tree.items():
+    for run_key in run_names:
+        label = f"{date} / {run_key}"
+        all_run_labels[label] = RESULTS_ROOT / date / run_key
 
 with st.sidebar:
     st.header("Select Runs")
@@ -79,23 +78,41 @@ st.divider()
 
 # ── Charts ─────────────────────────────────────────────────────────────────────
 
+import altair as alt
+
 db_cols = st.columns(len(runs))
 for col, (_, run) in zip(db_cols, runs.items()):
     with col:
         st.subheader("Accuracy by Database")
         db_df = pd.DataFrame(
             [{"Database": k, "Pass Rate": v} for k, v in run.stats.accuracy_by_database.items()]
-        ).set_index("Database")
-        st.bar_chart(db_df)
+        ).sort_values("Database")
+        st.altair_chart(
+            alt.Chart(db_df).mark_bar().encode(
+                x=alt.X("Database:N", sort=None),
+                y=alt.Y("Pass Rate:Q", scale=alt.Scale(domain=[0, 1])),
+            ).properties(height=300),
+            use_container_width=True,
+        )
 
+max_err_count = max(
+    (sum(run.stats.error_distribution.values()) for run in runs.values()),
+    default=1,
+)
 err_cols = st.columns(len(runs))
 for col, (_, run) in zip(err_cols, runs.items()):
     with col:
         st.subheader("Error Distribution")
         err_df = pd.DataFrame(
-            [{"Error Class": k, "Count": v} for k, v in run.stats.error_distribution.most_common()]
-        ).set_index("Error Class")
-        st.bar_chart(err_df)
+            [{"Error Class": k, "Count": v} for k, v in run.stats.error_distribution.items()]
+        ).sort_values("Error Class")
+        st.altair_chart(
+            alt.Chart(err_df).mark_bar().encode(
+                x=alt.X("Error Class:N", sort=None),
+                y=alt.Y("Count:Q", scale=alt.Scale(domain=[0, max_err_count])),
+            ).properties(height=300),
+            use_container_width=True,
+        )
 
 has_tools = any(bool(run.stats.tool_usage) for run in runs.values())
 if has_tools:

@@ -20,6 +20,8 @@ The ``*_impl`` functions hold all the real logic and are unit-tested directly
 in ``tests/eval_framework/tools/`` without needing the LangGraph runtime.
 """
 
+from psycopg2.extensions import Column
+from psycopg2.extras import RealDictRow
 import json
 import re
 
@@ -28,7 +30,9 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 
-from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import (
+    CustomAgentState,
+)
 from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_user_prompt import (
     build_llm_as_a_parser_messages,
     build_llm_as_a_generator_messages,
@@ -143,6 +147,25 @@ def ask_user_impl(
     )
     return {"user_answer": generated}
 
+    # results: list[RealDictRow] | None,
+    # cursor_desc: tuple[Column],
+
+
+def _execute_sql_and_catch_errors(
+    sql: str, db_dsn: str
+) -> tuple[list[RealDictRow], tuple[Column, ...], str | None]:
+    result = []
+    desc = tuple()
+    message = None
+    try:
+        result, desc = _execute_query(query=sql, db_dsn=db_dsn)
+    except psycopg2.extensions.QueryCanceledError as e:
+        message = f"Submitted SQL execution timed out: {e}"
+    except psycopg2.DatabaseError as e:
+        message = f"DatabaseError executing submitted SQL: {e}"
+
+    return result, desc, message
+
 
 def submit_sql_impl(
     sql: str,
@@ -152,30 +175,32 @@ def submit_sql_impl(
 ) -> dict:
     pred_sql = remove_round(remove_distinct(remove_comments(sql)))
     target_sql = remove_round(remove_distinct(remove_comments(sol_sqls[0])))
-    target_result, target_desc = _execute_query(query=target_sql, db_dsn=db_dsn)
     passed = False
-    try:
-        pred_result, pred_desc = _execute_query(query=pred_sql, db_dsn=db_dsn)
+    target_result, target_desc, message = _execute_sql_and_catch_errors(
+        target_sql, db_dsn
+    )
+    if message is not None:
+        return {"passed": False, "message": f"[TARGET ERROR] {message}"}
 
-        pred_result = preprocess_results(pred_result, pred_desc)
-        target_result = preprocess_results(target_result, target_desc)
-        
-        if conditions and conditions.get("order", False):
-            if pred_result == target_result:
-                passed = True
-                message = ("Phase 1 correct!. Task finished.",)
-            else:
-                message = "Your SQL is not correct."
+    pred_result, pred_desc, message = _execute_sql_and_catch_errors(pred_sql, db_dsn)
+    if message is not None:
+        return {"passed": False, "message": f"[PREDICTION ERROR] {message}"}
+
+    pred_result = preprocess_results(pred_result, pred_desc)
+    target_result = preprocess_results(target_result, target_desc)
+
+    if conditions and conditions.get("order", False):
+        if pred_result == target_result:
+            passed = True
+            message = ("Phase 1 correct!. Task finished.",)
         else:
-            if set(pred_result) == set(target_result):
-                passed = True
-                message = ("Phase 1 correct! Task finished.",)
-            else:
-                message = "Your SQL is not correct."
-    except psycopg2.extensions.QueryCanceledError as e:
-        message = f"Submitted SQL execution timed out: {e}"
-    except psycopg2.DatabaseError as e:
-        message = f"DatabaseError executing submitted SQL: {e}"
+            message = "Your SQL is not correct."
+    else:
+        if set(pred_result) == set(target_result):
+            passed = True
+            message = ("Phase 1 correct! Task finished.",)
+        else:
+            message = "Your SQL is not correct."
 
     return {"passed": passed, "message": message}
 

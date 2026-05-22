@@ -1,3 +1,5 @@
+import threading
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -129,5 +131,60 @@ class TestDispatch:
 
         workflow_evaluation_pipeline(cp, cr, cpred, cu)
 
-        matches = list(Path(tmp_path).glob("tools_only/**/results.jsonl"))
+        matches = list(Path(tmp_path).glob("**/results.jsonl"))
         assert len(matches) == 1
+        assert "tools_only" in str(matches[0])
+
+
+class TestConcurrencyConfig:
+    def test_concurrency_defaults_to_1(self):
+        assert ConfigPipeline().concurrency == 1
+
+
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_agent_bird_baseline")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_baseline_no_tool")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.load_bird_interact_as_tasks")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.utils_create_model")
+class TestConcurrency:
+    def test_all_tasks_processed_with_concurrency(
+        self, mock_create, mock_load, mock_no_tool, mock_agent, configs
+    ):
+        cp, cr, cpred, cu = configs
+        cp = cp.model_copy(update={"baseline": "no_tool", "concurrency": 4})
+        mock_load.return_value = [_fake_task() for _ in range(4)]
+        mock_no_tool.return_value = _stub_response()
+        mock_create.return_value = MagicMock()
+
+        results = workflow_evaluation_pipeline(cp, cr, cpred, cu)
+
+        assert len(results) == 4
+        assert mock_no_tool.call_count == 4
+
+    def test_concurrent_tasks_run_in_parallel(
+        self, mock_create, mock_load, mock_no_tool, mock_agent, configs
+    ):
+        cp, cr, cpred, cu = configs
+        cp = cp.model_copy(update={"baseline": "no_tool", "concurrency": 4})
+
+        concurrent_count = 0
+        max_concurrent = 0
+        count_lock = threading.Lock()
+
+        def slow_runner(task, model_agent):
+            nonlocal concurrent_count, max_concurrent
+            with count_lock:
+                concurrent_count += 1
+                if concurrent_count > max_concurrent:
+                    max_concurrent = concurrent_count
+            time.sleep(0.05)
+            with count_lock:
+                concurrent_count -= 1
+            return _stub_response()
+
+        mock_load.return_value = [_fake_task() for _ in range(4)]
+        mock_no_tool.side_effect = slow_runner
+        mock_create.return_value = MagicMock()
+
+        workflow_evaluation_pipeline(cp, cr, cpred, cu)
+
+        assert max_concurrent > 1

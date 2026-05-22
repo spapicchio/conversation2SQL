@@ -108,26 +108,26 @@ class TestListRuns:
         assert list_runs(tmp_path / "nonexistent") == {}
 
     def test_single_run(self, tmp_path):
-        (tmp_path / "no_tool" / "2026_05_14" / "09_17_54").mkdir(parents=True)
-        assert list_runs(tmp_path) == {"no_tool": {"2026_05_14": ["09_17_54"]}}
+        (tmp_path / "2026_05_14" / "09_17_54__qwen-ddl").mkdir(parents=True)
+        assert list_runs(tmp_path) == {"2026_05_14": ["09_17_54__qwen-ddl"]}
 
     def test_multiple_times_newest_first(self, tmp_path):
-        for t in ["09_00_00", "10_00_00", "08_00_00"]:
-            (tmp_path / "no_tool" / "2026_05_14" / t).mkdir(parents=True)
-        times = list_runs(tmp_path)["no_tool"]["2026_05_14"]
-        assert times == ["10_00_00", "09_00_00", "08_00_00"]
+        for t in ["09_00_00__a", "10_00_00__b", "08_00_00__c"]:
+            (tmp_path / "2026_05_14" / t).mkdir(parents=True)
+        times = list_runs(tmp_path)["2026_05_14"]
+        assert times == ["10_00_00__b", "09_00_00__a", "08_00_00__c"]
 
     def test_dates_newest_first(self, tmp_path):
         for d in ["2026_05_12", "2026_05_14", "2026_05_13"]:
-            (tmp_path / "no_tool" / d / "09_00_00").mkdir(parents=True)
-        dates = list(list_runs(tmp_path)["no_tool"].keys())
+            (tmp_path / d / "09_00_00__slug").mkdir(parents=True)
+        dates = list(list_runs(tmp_path).keys())
         assert dates == ["2026_05_14", "2026_05_13", "2026_05_12"]
 
-    def test_skips_files_in_baseline_dir(self, tmp_path):
-        (tmp_path / "no_tool" / "2026_05_14" / "09_00_00").mkdir(parents=True)
-        (tmp_path / "no_tool" / "some_file.txt").write_text("noise")
+    def test_skips_files_in_date_dir(self, tmp_path):
+        (tmp_path / "2026_05_14" / "09_00_00__slug").mkdir(parents=True)
+        (tmp_path / "2026_05_14" / "some_file.txt").write_text("noise")
         result = list_runs(tmp_path)
-        assert "some_file.txt" not in result.get("no_tool", {})
+        assert "some_file.txt" not in result.get("2026_05_14", [])
 
 
 # ── load_run ───────────────────────────────────────────────────────────────────

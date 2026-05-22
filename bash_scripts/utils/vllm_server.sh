@@ -51,10 +51,13 @@ s.close()
     log_section "Starting VLLM server: ${model_name} on port ${VLLM_SERVER_PORT}" "${MY_SLURM_JOB_ID:-}"
 
     # Launch in its own process group so the cleanup trap can kill all workers.
+    # --enable-prefix-caching  if prompts share a system prompt — reduces KV recalculation
     setsid uv run vllm serve "$model_name" \
         --port "$VLLM_SERVER_PORT" \
         --max-model-len "$max_model_len" \
         --uvicorn-log-level warning \
+        --max-num-seqs 64 \
+        --enable-prefix-caching \
         "$@" &
 
     VLLM_PID=$!

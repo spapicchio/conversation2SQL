@@ -10,6 +10,7 @@ class ConfigPipeline(BaseModel):
     debug: bool = True
     output_folder: str = "results"
     baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full'] = 'bird_full'
+    concurrency: int = 1
 
 
 # ---------------------------------------------------------------------------

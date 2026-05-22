@@ -95,4 +95,7 @@ def remove_comments(sql: str) -> str:
 
 
 def remove_distinct(sql: str) -> str:
-    return " ".join(t for t in sql.split(" ") if t.lower() != "distinct")
+    # Preserve DISTINCT ON (...) — a PostgreSQL row-selection construct, not set deduplication.
+    # Removing it produces invalid SQL (SELECT ON ...).
+    return sql
+    # return re.sub(r"\bDISTINCT\b(?!\s+ON\b)", "", sql, flags=re.IGNORECASE)

@@ -29,7 +29,7 @@ class RunData:
     config: dict
     stats: RunStats
     malformed_count: int = 0
-    source_file: str = "results_smaller.jsonl"
+    source_file: str = "results.jsonl"
 
 
 def classify_submit_error(record: dict) -> str:
@@ -51,6 +51,9 @@ def classify_submit_error(record: dict) -> str:
         and "query" in message_lower
     ):
         return "Empty Query"
+    if "[TARGET ERROR]" in message:
+        return "Target Error"
+        
     if re.search(r"syntax error", message_lower):
         return "Syntax Error"
     if re.search(r"column .+ does not exist|does not exist", message_lower):
@@ -111,25 +114,31 @@ def _compute_stats(records: list[dict]) -> RunStats:
 
 
 def list_runs(results_root: Path) -> dict[str, list[str]]:
-    """Return {date: [time, ...]} newest-first, scanning results/<date>/<time>/."""
+    """Return {date: [run, ...]} newest-date-first, scanning results/<date>/<run>/."""
     runs: dict[str, list[str]] = {}
     if not results_root.exists():
         return runs
     for date_dir in sorted(results_root.iterdir(), reverse=True):
         if not date_dir.is_dir():
             continue
-        times = sorted(
+        run_names = sorted(
             [d.name for d in date_dir.iterdir() if d.is_dir()],
             reverse=True,
         )
-        if times:
-            runs[date_dir.name] = times
+        if run_names:
+            runs[date_dir.name] = run_names
     return runs
 
 
 def load_run(path: Path) -> RunData:
-    """Load records and config from results/<baseline>/<date>/<time>/."""
-    source = path / "results.jsonl"
+    """Load records and config from results/<baseline>/<date>/<run>/."""
+    # Prefer the smaller projection if it exists; fall back to the full file.
+    smaller = path / "results_smaller.jsonl"
+    full = path / "results.jsonl"
+    if smaller.exists():
+        source = smaller
+    else:
+        source = full
 
     records: list[dict] = []
     malformed = 0

@@ -9,7 +9,8 @@
 pipeline:
   debug: true
   output_folder: "results"  # Folder to save results and logs
-  baseline: "no_tool" # (e.g., "no_tool", "tools_only", "tools_user", "bird_full")   
+  baseline: "no_tool" # (e.g., "no_tool", "tools_only", "tools_user", "bird_full")
+  concurrency: 8  # Number of tasks processed concurrently; raise to e.g. 8 to saturate VLLM
 
 
 reader:
@@ -37,7 +38,7 @@ predictor:
   min_p: 0.0
   presence_penalty: 1.5
   repetition_penalty: 1.0
-  max_new_tokens: 2000
+  max_new_tokens: 20000
   predictor_vllm_api_base: 'http://localhost:8000/v1'
 
 

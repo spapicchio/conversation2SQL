@@ -284,23 +284,22 @@ class TestSubmitSqlImpl:
         assert result["passed"] is False
         assert "DatabaseError" in result["message"]
 
-    def test_target_database_error_propagates(self):
-        """If the *target* SQL fails, that's a dataset bug — silently
-        passing or failing the candidate would mislead the evaluation, so
-        the exception is re-raised to surface the broken sample."""
+    def test_target_database_error_is_caught(self):
+        """If the *target* SQL fails (e.g. remove_distinct mangling DISTINCT ON),
+        the error is caught and returned as a message rather than crashing the
+        pipeline and losing all subsequent tasks."""
         with patch.object(
             user_tools, "_execute_query",
             side_effect=psycopg2.DatabaseError("ground-truth blew up"),
         ):
-            # Note the asymmetry vs. the previous test: a candidate-side
-            # error is captured, but a target-side error must escape.
-            with pytest.raises(psycopg2.DatabaseError):
-                submit_sql_impl(
-                    sql="SELECT 1;",
-                    sol_sqls=["SELECT does_not_exist;"],
-                    db_dsn="dsn",
-                    conditions=None,
-                )
+            result = submit_sql_impl(
+                sql="SELECT 1;",
+                sol_sqls=["SELECT does_not_exist;"],
+                db_dsn="dsn",
+                conditions=None,
+            )
+        assert result["passed"] is False
+        assert "DatabaseError" in result["message"]
 
 
 # ---------------------------------------------------------------------------

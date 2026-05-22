@@ -26,7 +26,7 @@ log_section "Starting evaluation script" "${MY_SLURM_JOB_ID}"
 # Thinking mode (coding):  temperature=0.6, top_p=0.95, top_k=20, presence_penalty=0.0
 # Non-thinking (general):  temperature=1.0, top_p=0.95, top_k=20, presence_penalty=1.5
 MODEL_NAME="Qwen/Qwen3.5-9B"
-MAX_MODEL_LEN=32000
+MAX_MODEL_LEN=50000
 ENABLE_THINKING=true
 
 
@@ -46,7 +46,7 @@ else
     DEFAULT_PARAMS='{"enable_thinking": false}'
 fi
 
-OUTPUT_DIR="${DEST_DIR}"
+OUTPUT_DIR="${BASE_WORK}/results"
 DEBUG=false
 
 start_vllm_server "$MODEL_NAME" "$MAX_MODEL_LEN" \
@@ -70,7 +70,7 @@ run_suite "no_tool" \
     --database_schema_type "ddl" \
     --make_data_ambiguous false \
     --read_only_gt_tables true \
-    --read_only_gt_kb false \
+    --read_only_gt_kb true \
     --is_kb_linearized true \
     --output_folder "${OUTPUT_DIR}" \
     --debug $DEBUG

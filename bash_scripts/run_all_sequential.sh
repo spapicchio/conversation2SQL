@@ -20,12 +20,12 @@ export CUDA_VISIBLE_DEVICES="${1:-${CUDA_VISIBLE_DEVICES:-1}}"
 echo "[SEQUENTIAL] Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 
 EVAL_SCRIPTS=(
-    # "${SCRIPT_DIR}/evaluation_scripts/qwen_3.5_local_all_db_all_kb.sh"
-    # "${SCRIPT_DIR}/evaluation_scripts/qwen_3.5_local_all_db_all_kb_linearized.sh"
-    # "${SCRIPT_DIR}/evaluation_scripts/qwen_3.5_local_all_db_toon_all_kb.sh"
-    "${SCRIPT_DIR}/evaluation_scripts/qwen_3.5_local_all_db_toon_all_kb_linearized.sh"
-    "${SCRIPT_DIR}/evaluation_scripts/qwen_3.5_local_gt_db_all_kb_linearized.sh"
-    "${SCRIPT_DIR}/evaluation_scripts/qwen_3.5_local_gt_db_gt_kb_linearized.sh"
+    # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_all_kb.sh"
+    "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_all_kb_linearized.sh"
+    # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_toon_all_kb.sh"
+    # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_toon_all_kb_linearized.sh"
+    # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_gt_db_all_kb_linearized.sh"
+    # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_gt_db_gt_kb_linearized.sh"
 )
 
 POLL_INTERVAL=300   # seconds between tmux session presence checks

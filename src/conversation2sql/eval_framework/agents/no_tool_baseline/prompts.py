@@ -29,7 +29,7 @@ Instructions:
 
 Output Format:
 In your answer, please enclose the generated SQL query in a code block:
-```
+```sql
 -- Your SQL query
 ```
 

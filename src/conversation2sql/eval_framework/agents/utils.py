@@ -195,7 +195,7 @@ def utils_create_model(
 
     litellm_model = f"{model_provider}/{model_name}"
     # reasoning + result
-    model_kwargs: dict = {"max_completion_tokens": max_tokens + 2000}
+    model_kwargs: dict = {"max_completion_tokens": max_tokens}
     if reasoning_effort is not None:
         model_kwargs["reasoning_effort"] = reasoning_effort
 

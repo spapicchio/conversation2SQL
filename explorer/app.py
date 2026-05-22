@@ -48,19 +48,19 @@ def _question(r: dict) -> str:
 st.set_page_config(page_title="Results Explorer", layout="wide")
 st.title("Results Explorer")
 
-# Sidebar: cascading run selector
+# Sidebar: cascading run selector (date → run)
 with st.sidebar:
     st.header("Select Run")
-    runs = list_runs(RESULTS_ROOT)
-    if not runs:
+    runs_tree = list_runs(RESULTS_ROOT)
+    if not runs_tree:
         st.error(f"No results found in `{RESULTS_ROOT.resolve()}`")
         st.stop()
-    dates = list(runs.keys())
+    dates = list(runs_tree.keys())
     date = st.selectbox("Date", dates)
-    times = runs[date]
-    time_key = st.selectbox("Time", times, index=0)
+    run_names = runs_tree[date]
+    run_key = st.selectbox("Run", run_names, index=0)
 
-run_path = RESULTS_ROOT / date / time_key
+run_path = RESULTS_ROOT / date / run_key
 run = _load_run_cached(str(run_path))
 
 with st.sidebar:
@@ -97,22 +97,33 @@ with tab_results:
     has_tools = bool(stats.tool_usage)
     chart_cols = st.columns(3 if has_tools else 2)
 
+    import altair as alt
+
     with chart_cols[0]:
         st.subheader("Accuracy by Database")
         db_df = pd.DataFrame(
             [{"Database": k, "Pass Rate": v} for k, v in stats.accuracy_by_database.items()]
-        ).set_index("Database")
-        st.bar_chart(db_df)
+        ).sort_values("Database")
+        st.altair_chart(
+            alt.Chart(db_df).mark_bar().encode(
+                x=alt.X("Database:N", sort=None),
+                y=alt.Y("Pass Rate:Q", scale=alt.Scale(domain=[0, 1])),
+            ).properties(height=300),
+            use_container_width=True,
+        )
 
     with chart_cols[1]:
         st.subheader("Error Distribution")
         err_df = pd.DataFrame(
-            [
-                {"Error Class": k, "Count": v}
-                for k, v in stats.error_distribution.most_common()
-            ]
-        ).set_index("Error Class")
-        st.bar_chart(err_df)
+            [{"Error Class": k, "Count": v} for k, v in stats.error_distribution.items()]
+        ).sort_values("Error Class")
+        st.altair_chart(
+            alt.Chart(err_df).mark_bar().encode(
+                x=alt.X("Error Class:N", sort=None),
+                y=alt.Y("Count:Q", scale=alt.Scale(domain=[0, stats.n_total])),
+            ).properties(height=300),
+            use_container_width=True,
+        )
 
     if has_tools:
         with chart_cols[2]:

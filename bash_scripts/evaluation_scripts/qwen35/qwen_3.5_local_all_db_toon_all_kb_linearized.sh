@@ -15,7 +15,7 @@ set -Eeuo pipefail
 
 export BASE_WORK=/workspaces/conversation2SQL
 export MY_SLURM_JOB_ID="${MY_SLURM_JOB_ID:-local}"
-export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
+export CUDA_VISIBLE_DEVICES=1
 
 source "${BASE_WORK}/bash_scripts/evaluate.sh"
 source "${BASE_WORK}/bash_scripts/utils/vllm_server.sh"
@@ -26,7 +26,7 @@ log_section "Starting evaluation script" "${MY_SLURM_JOB_ID}"
 # Thinking mode (coding):  temperature=0.6, top_p=0.95, top_k=20, presence_penalty=0.0
 # Non-thinking (general):  temperature=1.0, top_p=0.95, top_k=20, presence_penalty=1.5
 MODEL_NAME="Qwen/Qwen3.5-9B"
-MAX_MODEL_LEN=32000
+MAX_MODEL_LEN=50000
 ENABLE_THINKING=true
 
 
@@ -46,7 +46,7 @@ else
     DEFAULT_PARAMS='{"enable_thinking": false}'
 fi
 
-OUTPUT_DIR="${DEST_DIR}"
+OUTPUT_DIR="${BASE_WORK}/results"
 DEBUG=false
 
 start_vllm_server "$MODEL_NAME" "$MAX_MODEL_LEN" \
@@ -67,10 +67,10 @@ run_suite "no_tool" \
     --predictor_presence_penalty "${PRESENCE_PENALTY}" \
     --predictor_repetition_penalty "${REPETITION_PENALTY}" \
     --predictor_enable_thinking "${ENABLE_THINKING}" \
-    --database_schema_type "ddl" \
+    --database_schema_type "toon" \
     --make_data_ambiguous false \
     --read_only_gt_tables false \
     --read_only_gt_kb false \
-    --is_kb_linearized false \
+    --is_kb_linearized true \
     --output_folder "${OUTPUT_DIR}" \
     --debug $DEBUG

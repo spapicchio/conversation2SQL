@@ -16,7 +16,7 @@ def _connect(db_dsn: str) -> psycopg2.extensions.connection:
     return conn
     
 
-def _execute_query(query: str, db_dsn: str) -> Any:
+def _execute_query(query: str, db_dsn: str) -> tuple[list[RealDictRow], tuple[Column]]:
     conn = _connect(db_dsn)
     cursor = conn.cursor()
     # set timeout to prevent hanging if the agent generates a bad query
@@ -37,7 +37,7 @@ def _execute_query(query: str, db_dsn: str) -> Any:
                 result = None
 
         desc = cursor.description
-        return result, desc
+        return result, desc # pyrefly: ignore
 
     except psycopg2.DatabaseError as e:
         conn.rollback()
@@ -80,12 +80,10 @@ def process_decimals_recursive(item, decimal_places: int):
 
 
 def preprocess_results(
-        results: list[RealDictRow] | None,
-        cursor_desc: tuple[Column],
+        results: list[RealDictRow],
+        cursor_desc: tuple[Column, ...],
         decimal_places: int = 2,
-):
-    if results is None:
-        return None
+) -> list[tuple[Any, ...]]:
     cols = [desc[0] for desc in cursor_desc]
 
     processed = []
@@ -105,7 +103,7 @@ def preprocess_results(
     return processed
 
 
-def _format_result(result: list, cursor_desc: tuple[Column], max_characters=100) -> str:
+def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters=100) -> str:
     """
     Output:
 
