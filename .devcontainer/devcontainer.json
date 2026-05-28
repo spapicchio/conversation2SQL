@@ -12,7 +12,14 @@
     "ghcr.io/jsburckhardt/devcontainer-features/uv:1": {}
   },
   "remoteEnv": {
-    "UV_PROJECT_ENVIRONMENT": "/workspaces/conversation2SQL/.venv"
+    "UV_PROJECT_ENVIRONMENT": "/workspaces/conversation2SQL/.venv",
+    "UV_CACHE_DIR":    "/mnt/data1/uv-cache",
+    "HF_HOME":         "/mnt/data1/huggingface",
+    "TORCH_HOME":      "/mnt/data1/torch",
+    "PIP_CACHE_DIR":   "/mnt/data1/pip-cache",
+    "WANDB_CACHE_DIR": "/mnt/data1/wandb-cache",
+    "TRITON_CACHE_DIR": "/mnt/data1/triton-cache",
+    "UV_LINK_MODE": "copy"
   },
   "customizations": {
     "vscode": {

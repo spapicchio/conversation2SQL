@@ -8,10 +8,22 @@ services:
     cap_add:
       - SYS_ADMIN
     runtime: nvidia
+    environment:
+      UV_CACHE_DIR:    /mnt/data1/uv-cache
+      HF_HOME:         /mnt/data1/huggingface
+      TORCH_HOME:      /mnt/data1/torch
+      PIP_CACHE_DIR:   /mnt/data1/pip-cache
+      WANDB_CACHE_DIR: /mnt/data1/wandb-cache
+      TRITON_CACHE_DIR: /mnt/data1/triton-cache
     volumes:
       - ..:/workspaces/conversation2SQL:cached
-      - ${HOME}/.cache/huggingface:/hf_cache
       - ${HOME}/data:/workspaces/conversation2SQL/data
+      - ${HF_HOME}:/mnt/data1/huggingface
+      - ${UV_CACHE_DIR}:/mnt/data1/uv-cache
+      - ${TORCH_HOME}:/mnt/data1/torch
+      - ${PIP_CACHE_DIR}:/mnt/data1/pip-cache
+      - ${WANDB_CACHE_DIR}:/mnt/data1/wandb-cache
+      - ${TRITON_CACHE_DIR}:/mnt/data1/triton-cache
     depends_on:
       - postgresql
       - postgresql_full
