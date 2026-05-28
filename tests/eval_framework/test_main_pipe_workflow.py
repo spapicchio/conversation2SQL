@@ -120,9 +120,11 @@ class TestDispatch:
         assert mock_agent.call_args.kwargs["enable_ask_user"] is False
         assert mock_create.call_count == 1
 
-    def test_output_path_includes_baseline(
+    def test_results_written_to_output_folder(
         self, mock_create, mock_load, mock_no_tool, mock_agent, configs, tmp_path,
     ):
+        # The slug/date are now constructed by the bash launch script; Python
+        # writes results.jsonl directly into the given output_folder.
         cp, cr, cpred, cu = configs
         cp.baseline = "tools_only"
         mock_load.return_value = [_fake_task()]
@@ -131,9 +133,7 @@ class TestDispatch:
 
         workflow_evaluation_pipeline(cp, cr, cpred, cu)
 
-        matches = list(Path(tmp_path).glob("**/results.jsonl"))
-        assert len(matches) == 1
-        assert "tools_only" in str(matches[0])
+        assert (tmp_path / "results.jsonl").exists()
 
 
 class TestConcurrencyConfig:

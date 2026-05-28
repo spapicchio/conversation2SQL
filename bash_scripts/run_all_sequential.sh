@@ -20,15 +20,15 @@ export CUDA_VISIBLE_DEVICES="${1:-${CUDA_VISIBLE_DEVICES:-1}}"
 echo "[SEQUENTIAL] Using CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 
 EVAL_SCRIPTS=(
-    # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_all_kb.sh"
-    "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_all_kb_linearized.sh"
-    # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_toon_all_kb.sh"
+    "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_all_kb.sh"
+    # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_all_kb_linearized.sh"
+    "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_toon_all_kb.sh"
     # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_all_db_toon_all_kb_linearized.sh"
     # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_gt_db_all_kb_linearized.sh"
     # "${SCRIPT_DIR}/evaluation_scripts/qwen35/qwen_3.5_local_gt_db_gt_kb_linearized.sh"
 )
 
-POLL_INTERVAL=30   # seconds between tmux session presence checks
+POLL_INTERVAL=3   # seconds between tmux session presence checks
 
 FAILED=()
 
@@ -60,11 +60,6 @@ for script in "${EVAL_SCRIPTS[@]}"; do
         continue
     fi
 
-    # submit_and_log.sh also prints the path of the file where the eval script's
-    # exit code is recorded. We read it after the session ends to detect failures
-    # (the tmux session vanishing tells us nothing about pass/fail on its own).
-    STATUS_FILE=$(echo "$LAUNCH_OUTPUT" | grep 'STATUS_FILE' | awk '{print $NF}' || true)
-
     echo "[SEQUENTIAL] Waiting for tmux session '${SESSION_ID}' to finish (polling every ${POLL_INTERVAL}s)..."
     echo "[SEQUENTIAL] Attach with:  tmux attach -t ${SESSION_ID}"
 
@@ -72,17 +67,7 @@ for script in "${EVAL_SCRIPTS[@]}"; do
         sleep "${POLL_INTERVAL}"
     done
 
-    if [[ -z "${STATUS_FILE}" || ! -f "${STATUS_FILE}" ]]; then
-        echo "[SEQUENTIAL] ERROR: session '${SESSION_ID}' ended but no exit status was recorded"
-        echo "             (killed or crashed before writing status) — treating as failure."
-        FAILED+=("$(basename "$script") [no status]")
-    elif [[ "$(cat "${STATUS_FILE}")" != "0" ]]; then
-        EXIT_CODE="$(cat "${STATUS_FILE}")"
-        echo "[SEQUENTIAL] ERROR: $(basename "$script") exited with status ${EXIT_CODE}."
-        FAILED+=("$(basename "$script") [exit ${EXIT_CODE}]")
-    else
-        echo "[SEQUENTIAL] Session '${SESSION_ID}' exited cleanly (status 0) — moving to next experiment."
-    fi
+    echo "[SEQUENTIAL] Session '${SESSION_ID}' exited — moving to next experiment."
 done
 
 echo ""

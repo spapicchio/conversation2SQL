@@ -1,8 +1,6 @@
 import asyncio
 import json
-import re
 import threading
-from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -27,30 +25,6 @@ from conversation2sql.logger import get_logger
 
 logger = get_logger(__name__)
 
-
-def _build_run_slug(
-    config_pipeline: ConfigPipeline,
-    config_reader: ConfigReader,
-    config_predictor: ConfigPredictor,
-) -> str:
-    """Build a short descriptive suffix from key config params for run folder naming.
-
-    Encodes model name, schema type, and enabled flags so each run folder is
-    self-documenting. Baseline is a separate directory level, not in the slug.
-    """
-    parts: list[str] = [str(config_pipeline.baseline)]
-    model_slug = re.sub(
-        r"[^A-Za-z0-9._-]", "-", config_predictor.model_name.split("/")[-1]
-    )
-    parts.append(model_slug)
-    parts.append(config_reader.database_schema_type)
-    if config_reader.is_kb_linearized:
-        parts.append("lin")
-    if config_reader.read_only_gt_tables:
-        parts.append("gt-db")
-    if config_reader.read_only_gt_kb:
-        parts.append("gt-kb")
-    return "__".join(parts)
 
 
 def _resolve_baseline_settings(baseline: str) -> tuple[bool, Callable, bool]:
@@ -98,19 +72,7 @@ def workflow_evaluation_pipeline(
         )
     config_reader = config_reader.model_copy(update={"make_data_ambiguous": forced_amb})
 
-    # Build output path: <base>/<baseline>/<YYYY_MM_DD>/<HH_MM_SS>__<slug>/
-    # This makes each run folder self-documenting without relying on the caller
-    # to embed timestamps or params in the path.
-    now = datetime.now()
-    slug = _build_run_slug(config_pipeline, config_reader, config_predictor)
-    output_folder = (
-        Path(config_pipeline.output_folder)
-        / now.strftime("%Y_%m_%d")
-        / f"{now.strftime('%H_%M_%S')}__{slug}"
-    )
-    config_pipeline = config_pipeline.model_copy(
-        update={"output_folder": str(output_folder)}
-    )
+    output_folder = Path(config_pipeline.output_folder)
 
     # save config in the output folder
     _save_configs_as_yaml(

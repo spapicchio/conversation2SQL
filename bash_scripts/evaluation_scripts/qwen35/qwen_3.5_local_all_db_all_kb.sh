@@ -46,7 +46,6 @@ else
     DEFAULT_PARAMS='{"enable_thinking": false}'
 fi
 
-OUTPUT_DIR="${BASE_WORK}/results"
 DEBUG=false
 
 start_vllm_server "$MODEL_NAME" "$MAX_MODEL_LEN" \
@@ -72,5 +71,4 @@ run_suite "no_tool" \
     --read_only_gt_tables false \
     --read_only_gt_kb false \
     --is_kb_linearized false \
-    --output_folder "${OUTPUT_DIR}" \
     --debug $DEBUG

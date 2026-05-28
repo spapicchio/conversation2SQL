@@ -40,7 +40,6 @@ else
 fi
 
 
-OUTPUT_DIR="${BASE_WORK}/results"
 DEBUG=true
 
 start_vllm_server "$MODEL_NAME" "$MAX_MODEL_LEN" \
@@ -66,5 +65,4 @@ run_suite "no_tool" \
     --make_data_ambiguous false \
     --read_only_gt_tables true \
     --read_only_gt_kb true \
-    --output_folder "${OUTPUT_DIR}" \
     --debug $DEBUG

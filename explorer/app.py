@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pandas as pd
@@ -13,7 +14,9 @@ from loader import list_runs
 from render import render_conversation
 
 
-RESULTS_ROOT = Path("results")
+# Reads RESULTS_ROOT env var (exported by evaluate.sh); falls back to ../results
+# relative to this file so the app works regardless of the working directory.
+RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", str(Path(__file__).parent.parent / "results")))
 
 _GEN_PARAM_KEYS = (
     "temperature",
