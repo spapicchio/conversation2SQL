@@ -58,9 +58,17 @@ chmod 770 "$FAKE_JOB_PATH"
 
 # Submit the job
 LOG_FOLDER="${DEST_DIR}/tmux_log"
+# A detached tmux session discards its command's exit status when it tears down,
+# so the launcher (run_all_sequential.sh) has no other way to learn pass/fail.
+# We persist the eval script's exit code here and the launcher reads it.
+STATUS_FILE="${DEST_DIR}/exit_status"
 if [ -z "${2:-}" ]; then
   log_section '[SUBMIT_AND_LOG]  NOT sending with sbatch' "${MY_SLURM_JOB_ID}"
   mkdir -p "${LOG_FOLDER}"
+  rm -f "${STATUS_FILE}"
+  # ${PIPESTATUS[0]} is the eval script's exit code (the first pipeline element).
+  # Without it the pipeline's status would be the trailing tee's, which is ~always 0.
+  # \${PIPESTATUS[0]} is escaped so the inner tmux shell evaluates it, not this one.
   tmux new-session -d -s "${MY_SLURM_JOB_ID}" \
     "BASE_WORK=${BASE_WORK} \
     JOB_NAME=${JOB_NAME} \
@@ -72,7 +80,9 @@ if [ -z "${2:-}" ]; then
     ${FAKE_JOB_PATH} 2>&1 | \
     stdbuf -oL tee -a ${LOG_FOLDER}/all.log | \
     stdbuf -oL tee >(stdbuf -oL grep 'WARNING' >> ${LOG_FOLDER}/warning.log) | \
-    stdbuf -oL tee >(stdbuf -oL grep 'ERROR' >> ${LOG_FOLDER}/error.log)"
+    stdbuf -oL tee >(stdbuf -oL grep 'ERROR' >> ${LOG_FOLDER}/error.log); \
+    echo \${PIPESTATUS[0]} > ${STATUS_FILE}"
+  log_section "[SUBMIT_AND_LOG] STATUS_FILE ${STATUS_FILE}" "${MY_SLURM_JOB_ID}"
 else
   JOB_OUTPUT=$(sbatch -J "$2" "${FAKE_JOB_PATH}")
   MY_SLURM_JOB_ID=$(echo "$JOB_OUTPUT" | awk '{print $4}')
