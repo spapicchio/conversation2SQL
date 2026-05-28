@@ -51,6 +51,10 @@
     // Installs the PostgreSQL client tools (psql, pg_isready) so they are available
     // directly in the dev container shell without needing docker exec.
     "postgresql_client": "apt-get update; apt-get install -y postgresql-client tmux",
+    // Installs the `just` command runner (single static binary) that drives the
+    // repo-root justfile (`just eval ...`). It is not packaged in apt, so we use
+    // the official installer to drop the binary on PATH at /usr/local/bin.
+    "install_just": "curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin",
     // Installs the Hugging Face Transfer tool. It is installed at system level so that it is available in the PATH.
     "install_hf_transfer": "uv pip install --system hf_transfer"
   }

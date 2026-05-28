@@ -84,6 +84,9 @@ class TestSystemTools(unittest.TestCase):
     def test_gpustat_available(self):
         self._assert_command(["gpustat", "--version"], "gpustat")
 
+    def test_just_available(self):
+        self._assert_command(["just", "--version"], "just")
+
 
 class TestPostgresLite(unittest.TestCase):
     """PostgreSQL lite instance (port 5432) must be reachable."""

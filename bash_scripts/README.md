@@ -1,92 +1,156 @@
 # bash_scripts
 
-Utility scripts for launching experiments locally (via tmux) or on a SLURM cluster.
+Scripts for launching evaluation experiments locally (tmux) or on a SLURM cluster.
+
+The entry point is the [`justfile`](../justfile) at the repo root. Recipes set a
+couple of `EVAL_*` environment variables and hand a single payload script
+(`eval_payload.sh`) to `submit_and_log.sh`, which runs it in a detached **tmux**
+session locally or submits it with **sbatch** under SLURM. The same payload file
+runs both ways — switching to SLURM is one environment variable.
+
+## Prerequisites
+
+- **`just`** — install the command runner (single static binary):
+  ```bash
+  curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+  ```
+  (or `cargo install just`, or your distro package). Verify with `just --version`.
+- A `.env` file at the repo root with secrets (`OPENAI_API_KEY`, `WANDB_API_KEY`, …).
+  It is sourced by `evaluate.sh`.
+- `uv` for the Python venv (see the top-level `CLAUDE.md`).
+
+## Quick start
+
+```bash
+just                              # list recipes
+just variants                     # list the valid variant keys
+just eval all_db_all_kb           # local run: qwen35, GPU 1
+just eval all_db_toon_all_kb 0,1  # local run on GPUs 0,1
+just eval gt_db_gt_kb 1 gemma4    # gemma4 profile instead of qwen35
+just dry all_db_all_kb            # print the resolved commands, launch nothing
+
+# back-to-back local runs (waits for each tmux session before the next)
+just sequential all_db_all_kb all_db_toon_all_kb
+```
+
+`just eval` prints a tmux session id; attach with `tmux attach -t <id>`. Logs are
+tee'd to `results/<date>/<time>/tmux_log/{all,warning,error}.log` and the vLLM
+server log to `tmux_log/vllm.log`.
+
+### `eval` arguments
+
+```
+just eval VARIANT [gpus=1] [model=qwen35] [debug=false]
+```
+
+- **VARIANT** — eval condition; one of the keys from `just variants`.
+- **gpus** — value for `CUDA_VISIBLE_DEVICES` (e.g. `1`, `0,1`).
+- **model** — model profile: `qwen35` or `gemma4`.
+- **debug** — `true` limits the run to a few tasks.
+
+## The two axes
+
+A run is a **model profile** × a **variant**. Both are resolved inside
+`eval_payload.sh`, replacing the former one-file-per-experiment leaf scripts.
+
+**Model profiles** set the model name, context length, sampling params, and vLLM
+server flags:
+
+| profile  | model                       | max-len | thinking |
+|----------|-----------------------------|---------|----------|
+| `qwen35` | `Qwen/Qwen3.5-9B`           | 50000   | true     |
+| `gemma4` | `google/gemma-4-26B-A4B-it` | 32000   | false    |
+
+**Variants** set the four `run_suite` condition flags:
+
+| variant                          | schema_type | gt_tables | gt_kb | kb_linearized |
+|----------------------------------|-------------|-----------|-------|---------------|
+| `all_db_all_kb`                  | ddl         | false     | false | false         |
+| `all_db_all_kb_linearized`       | ddl         | false     | false | true          |
+| `all_db_toon_all_kb`             | toon        | false     | false | false         |
+| `all_db_toon_all_kb_linearized`  | toon        | false     | false | true          |
+| `gt_db_all_kb_linearized`        | ddl         | true      | false | true          |
+| `gt_db_gt_kb_linearized`         | ddl         | true      | true  | true          |
+| `gt_db_gt_kb`                    | ddl         | true      | true  | false         |
 
 ## Directory layout
 
 ```
 bash_scripts/
-├── submit_and_log.sh          # Entry point — wraps any job script for local or SLURM execution
-├── evaluate.sh                # Shared evaluation library: defines run_suite() used by evaluation_scripts/
-├── grpo.sh                    # GRPO RL training (local)
-├── sft.sh                     # SFT training (SLURM)
-├── evaluation_scripts/        # Per-model evaluation scripts; each sources evaluate.sh and calls run_suite()
-│   └── qwen_3.5_local.sh      # Qwen3.5-9B: spins up a vLLM server and runs the no_tool baseline
-├── slurm/                     # SLURM-specific multi-GPU / multi-node training scripts
+├── eval_payload.sh        # The single SLURM-submittable payload (carries #SBATCH headers).
+│                          #   Resolves EVAL_MODEL + EVAL_VARIANT, starts vLLM, runs run_suite.
+├── evaluate.sh            # Sourced library: global exports + build_run_slug() + run_suite().
+├── submit_and_log.sh      # Dispatcher: tmux locally, or sbatch when given a 2nd (job-name) arg.
+├── evaluation_scripts/
+│   └── gemma4/
+│       └── tool_chat_template_gemma4.jinja   # referenced by the gemma4 profile
+├── slurm/                 # Standalone multi-GPU / multi-node training scripts (separate workflow).
 └── utils/
-    ├── utils.sh                   # Shared functions: log_section, launch_vllm, cp_files
-    ├── slurm_job_requeue.sh       # USR1 trap for SLURM preemption requeue
-    ├── utils_clenup_vllm_if_crash.sh  # EXIT/ERR trap to kill vLLM on crash
-    ├── get_num_generations.py     # Computes num_generations from GPU/batch config
-    └── get_model_path_hf_cache.py # Resolves a model ID to its HF cache path
+    ├── utils.sh                  # log_section, setup_idris, cp_files
+    ├── vllm_server.sh            # start_vllm_server() + EXIT-trap cleanup
+    ├── slurm_job_requeue.sh      # USR1 trap for SLURM preemption requeue
+    ├── get_num_generations.py    # computes num_generations from GPU/batch config
+    └── get_model_path_hf_cache.py# resolves a model id to its HF cache path
 ```
 
-## Prerequisites
+## How a run flows
 
-- `BASE_WORK` is set automatically by `submit_and_log.sh`: from `${SCRATCH}/conversation2SQL` when running under SLURM, or derived from the script's own path otherwise. You do not need to set it manually.
-- A `.env` file at `${BASE_WORK}/.env` with secrets (e.g. `WANDB_API_KEY`, API keys).
-
-## How to launch an experiment
-
-### Local (tmux)
-
-```bash
-bash bash_scripts/submit_and_log.sh bash_scripts/evaluation_scripts/qwen_3.5_local.sh
+```
+just eval VARIANT ...                       (justfile, repo root)
+  └─ exports EVAL_MODEL / EVAL_VARIANT / CUDA_VISIBLE_DEVICES / DEBUG
+     └─ submit_and_log.sh eval_payload.sh [job-name]
+          ├─ no job-name  → tmux session  (local)
+          └─ job-name     → sbatch        (SLURM)
+               └─ eval_payload.sh
+                    ├─ source evaluate.sh        (exports + run_suite)
+                    ├─ source utils/vllm_server.sh (start_vllm_server)
+                    ├─ start a vLLM server on a free port
+                    ├─ run_suite → `uv run conv2sql run …`
+                    └─ copy results to $WORK   (SLURM only)
 ```
 
-`submit_and_log.sh` will:
-1. Generate a short job ID from the current timestamp (`FAKE_JOB_ID`).
-2. Copy the job script to `bash_scripts/launched/<date>/`.
-3. Spawn a detached tmux session named after the job ID.
-4. Tee all output to `tmux_log/<date>/<id>/all.log`, with separate `warning.log` and `error.log` filters.
+`submit_and_log.sh` forwards `EVAL_MODEL`, `EVAL_VARIANT`, `EVAL_BASELINE`,
+`ENABLE_THINKING`, and `DEBUG` into the tmux session, and uses `sbatch --export=ALL`
+so the same variables reach a SLURM job.
 
-Attach to the running session:
+## How to switch to SLURM
 
-```bash
-tmux attach -t <FAKE_JOB_ID>
-```
+The payload is already SLURM-ready — the only difference between a local and a
+cluster run is the launcher.
 
-### SLURM
+1. **Flip the runner.** Set `RUNNER=slurm` so `submit_and_log.sh` takes its
+   `sbatch` branch instead of tmux:
+   ```bash
+   RUNNER=slurm just eval all_db_all_kb
+   RUNNER=slurm just sequential all_db_all_kb all_db_toon_all_kb   # submits all; sbatch queues them
+   ```
+   (Locally `sequential` waits for each tmux session; under SLURM it just submits.)
 
-Pass a second argument (the SLURM job name) to trigger `sbatch`:
+2. **Set your allocation.** The `#SBATCH` directives live at the top of
+   `eval_payload.sh` (`-A`, `-C`, `--gpus-per-node`, `--qos`, `--time`, …). Edit
+   them once for your project, or override per-submission on the command line —
+   `sbatch` CLI flags win over the in-file `#SBATCH` directives. To override
+   without editing the file, set `SBATCH_ARGS` style flags by adjusting the
+   `sbatch` call in `submit_and_log.sh`, or just keep the headers correct.
 
-```bash
-bash bash_scripts/submit_and_log.sh bash_scripts/evaluation_scripts/qwen_3.5_local.sh my_job_name
-```
+3. **Environment reaches the job.** `submit_and_log.sh` submits with
+   `sbatch --export=ALL`, so the `EVAL_*` variables exported by the recipe are
+   visible inside the job. On clusters that restrict env propagation, confirm the
+   variables survive (`env | grep EVAL_` early in the job log).
 
-The script will `sbatch` the copied job file, symlink SLURM's `.out` log into `tmux_log/`, and record the submission in `log_sbatch.log`.
+4. **Paths / offline mode.** Under SLURM, `submit_and_log.sh` derives `BASE_WORK`
+   from `$SCRATCH` and calls `setup_idris` (offline HF/W&B, multi-node addressing).
+   Results are copied to `$WORK/evaluation_results` after the run when `$WORK` is set.
 
-## How evaluation scripts work
+5. **Multi-node training** lives separately under `slurm/` (`train_grpo*.sh`); it
+   is its own workflow and is not driven by the justfile.
 
-Each script under `evaluation_scripts/` follows the same pattern:
+## Extending
 
-1. Source `evaluate.sh` (defines the `run_suite` helper and shared env).
-2. Start a vLLM server in the background on a free port.
-3. Wait up to 60 s for the server to become healthy.
-4. Call `run_suite <baseline> <predictor_api_base> <user_simulator_api_base> <temperature> <top_p> <top_k> <presence_penalty> <repetition_penalty> <enable_thinking>`.
-
-`run_suite` invokes `uv run conv2sql run` with the config at `${BASE_WORK}/config/config_evaluate.yaml` and the provided sampling parameters.
-
-### Adding a new model
-
-1. Copy an existing script from `evaluation_scripts/` as a template (e.g. `qwen_3.5_local.sh`).
-2. Set `MODEL_NAME`, `MAX_MODEL_LEN`, `ENABLE_THINKING`, and the corresponding sampling parameters.
-3. Adjust `--tensor-parallel-size` / `--data-parallel-size` and `CUDA_VISIBLE_DEVICES` to match your GPU allocation.
-4. Run via `submit_and_log.sh` (local) or submit with `sbatch`.
-
-## Key environment variables
-
-| Variable | Default | Description |
-|---|---|---|
-| `BASE_WORK` | auto-detected by `submit_and_log.sh` | Project root (set from `SCRATCH` or script path) |
-| `SCRATCH` | — | HPC scratch dir (set by SLURM env) |
-| `WORK` | — | HPC long-term storage dir (optional; enables result copy-out) |
-| `CUDA_VISIBLE_DEVICES` | `1,2` | GPUs for the job (local runs) |
-| `MY_SLURM_JOB_ID` | auto | Injected by `submit_and_log.sh`; used as folder/run name |
-
-## Adding a non-evaluation experiment (training, etc.)
-
-1. Copy an existing script (`grpo.sh`, `sft.sh`) as a template.
-2. Set the `#SBATCH` headers if you plan to use SLURM.
-3. Source `${BASE_WORK}/bash_scripts/utils/utils.sh` for `log_section` and related helpers.
-4. Launch via `submit_and_log.sh` (local tmux) or with a second argument for `sbatch`.
+- **New variant** — add a `case` arm in `eval_payload.sh` (set `SCHEMA_TYPE`,
+  `GT_DB`, `GT_KB`, `IS_LIN`) and list the key in the `variants` recipe.
+- **New model profile** — add a `case` arm under "Model profile" in
+  `eval_payload.sh` (set `MODEL_NAME`, `MAX_MODEL_LEN`, sampling params, and the
+  `SERVER_ARGS` array), then run `just eval <variant> <gpus> <profile>`.
+- **Check before launching** — `just dry <variant> [model]` prints the exact
+  `vllm serve` and `run_suite` commands without starting anything.

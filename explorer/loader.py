@@ -113,20 +113,37 @@ def _compute_stats(records: list[dict]) -> RunStats:
     )
 
 
+def _has_results(d: Path) -> bool:
+    return (d / "results.jsonl").exists() or (d / "results_smaller.jsonl").exists()
+
+
 def list_runs(results_root: Path) -> dict[str, list[str]]:
-    """Return {date: [run, ...]} newest-date-first, scanning results/<date>/<run>/."""
+    """Return {date: [run_key, ...]} newest-date-first.
+
+    run_key is either:
+      - "HH-MM-SS/slug"  (new layout: time dir contains slug subdirs)
+      - "HH-MM-SS__slug" (old layout: slug dir sits directly under date)
+    """
     runs: dict[str, list[str]] = {}
     if not results_root.exists():
         return runs
     for date_dir in sorted(results_root.iterdir(), reverse=True):
         if not date_dir.is_dir():
             continue
-        run_names = sorted(
-            [d.name for d in date_dir.iterdir() if d.is_dir()],
-            reverse=True,
-        )
-        if run_names:
-            runs[date_dir.name] = run_names
+        run_keys: list[str] = []
+        for subdir in sorted(date_dir.iterdir(), reverse=True):
+            if not subdir.is_dir():
+                continue
+            if _has_results(subdir):
+                # Old flat layout: results.jsonl sits directly in this dir.
+                run_keys.append(subdir.name)
+            else:
+                # New layout: subdir is a time dir; look one level deeper for slugs.
+                for slug_dir in sorted(subdir.iterdir(), reverse=True):
+                    if slug_dir.is_dir() and _has_results(slug_dir):
+                        run_keys.append(f"{subdir.name}/{slug_dir.name}")
+        if run_keys:
+            runs[date_dir.name] = run_keys
     return runs
 
 

@@ -69,12 +69,18 @@ if [ -z "${2:-}" ]; then
     DATE_DIR=${DATE_DIR} \
     MY_SLURM_JOB_ID=${MY_SLURM_JOB_ID} \
     CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1} \
+    EVAL_MODEL=${EVAL_MODEL:-} \
+    EVAL_VARIANT=${EVAL_VARIANT:-} \
+    EVAL_BASELINE=${EVAL_BASELINE:-} \
+    ENABLE_THINKING=${ENABLE_THINKING:-} \
+    DEBUG=${DEBUG:-} \
     ${FAKE_JOB_PATH} 2>&1 | \
     stdbuf -oL tee -a ${LOG_FOLDER}/all.log | \
     stdbuf -oL tee >(stdbuf -oL grep 'WARNING' >> ${LOG_FOLDER}/warning.log) | \
     stdbuf -oL tee >(stdbuf -oL grep 'ERROR' >> ${LOG_FOLDER}/error.log)"
 else
-  JOB_OUTPUT=$(sbatch -J "$2" "${FAKE_JOB_PATH}")
+  # --export=ALL propagates the current env (EVAL_MODEL/EVAL_VARIANT/DEBUG/...) to the job.
+  JOB_OUTPUT=$(sbatch --export=ALL -J "$2" "${FAKE_JOB_PATH}")
   MY_SLURM_JOB_ID=$(echo "$JOB_OUTPUT" | awk '{print $4}')
   log_section "[SUBMIT_AND_LOG] Submitted job with JOB Name: $2 and SLURM Job ID: ${MY_SLURM_JOB_ID}" "${MY_SLURM_JOB_ID}"
   

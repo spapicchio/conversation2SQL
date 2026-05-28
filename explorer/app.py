@@ -58,10 +58,18 @@ with st.sidebar:
     if not runs_tree:
         st.error(f"No results found in `{RESULTS_ROOT.resolve()}`")
         st.stop()
+    def _fmt_run(key: str) -> str:
+        # "16-23-07/no_tool__Qwen3.5-9B__ddl" → "16:23:07  no_tool__Qwen3.5-9B__ddl"
+        # "16_23_07__no_tool__Qwen3.5-9B__ddl" → kept as-is (old layout)
+        if "/" in key:
+            time_part, slug = key.split("/", 1)
+            return f"{time_part.replace('-', ':')}  {slug}"
+        return key
+
     dates = list(runs_tree.keys())
     date = st.selectbox("Date", dates)
     run_names = runs_tree[date]
-    run_key = st.selectbox("Run", run_names, index=0)
+    run_key = st.selectbox("Run", run_names, index=0, format_func=_fmt_run)
 
 run_path = RESULTS_ROOT / date / run_key
 run = _load_run_cached(str(run_path))

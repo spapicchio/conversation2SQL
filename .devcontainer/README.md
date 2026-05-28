@@ -35,6 +35,7 @@ After the container is created, `postCreateCommand` in `devcontainer.json` autom
 - VeRL — editable install from `./verl` submodule
 - `flashinfer-cubin` + `flashinfer-jit-cache` — optimized CUDA kernels for inference
 - `postgresql-client` — PostgreSQL client tools (`psql`, `pg_isready`) for querying the databases directly from the dev container shell
+- `just` — the command runner that drives the repo-root `justfile` (`just eval ...`); installed to `/usr/local/bin`
 
 ### `postgresql` — BIRD-Interact Lite Database
 

@@ -1,15 +1,8 @@
 #!/bin/bash
-#SBATCH -A vno@h100
-#SBATCH -C h100
-#SBATCH --ntasks-per-node=1
-#SBATCH --gpus-per-node=2
-#SBATCH --output=./logs/rl/%j.out
-#SBATCH --nodes=1
-#SBATCH --qos=qos_gpu_h100-t3
-#SBATCH --time=05:00:00
-#SBATCH --cpus-per-task=100
-#SBATCH --signal=B:USR1@30   # send USR1 30 s before wall-time so the requeue handler can checkpoint
-#SBATCH --open-mode=append
+# Shared evaluation library. SOURCED by bash_scripts/eval_payload.sh — not run or
+# submitted directly. SLURM #SBATCH headers live in eval_payload.sh, not here.
+#
+# Provides: global path/env exports, build_run_slug(), run_suite().
 
 # --- robust shell settings ---
 # -E: ERR trap inherited by functions/subshells
@@ -122,10 +115,18 @@ run_suite() {
   slug=$(build_run_slug "${baseline}" "$@")
 
   # Build and create the output directory for this specific run.
-  local date_dir time_tag run_dir
-  date_dir="$(date +%Y_%m_%d)"
-  time_tag="$(date +%H_%M_%S)"
-  run_dir="${RESULTS_ROOT}/${date_dir}/${time_tag}__${slug}"
+  # When launched via submit_and_log.sh, DEST_DIR is already set to the
+  # timestamped directory that also holds tmux_log/ — use it directly so
+  # results and logs are co-located.  Fall back to a fresh dated dir otherwise.
+  local run_dir
+  if [[ -n "${DEST_DIR:-}" ]]; then
+    run_dir="${DEST_DIR}/${slug}"
+  else
+    local date_dir time_tag
+    date_dir="$(date +%Y_%m_%d)"
+    time_tag="$(date +%H_%M_%S)"
+    run_dir="${RESULTS_ROOT}/${date_dir}/${time_tag}__${slug}"
+  fi
   mkdir -p "${run_dir}"
 
   log_section "Running suite: ${baseline} → ${run_dir}" "${MY_SLURM_JOB_ID:-}"
@@ -147,15 +148,3 @@ run_suite() {
 
   log_section "=== Done ${baseline} ===" "${MY_SLURM_JOB_ID:-}"
 }
-
-
-# ---------------------------------------------------------------------------
-# Post-run: copy results to WORK (Jean Zay persistent storage), SLURM only
-# ---------------------------------------------------------------------------
-if [[ -n "${WORK:-}" ]]; then
-    log_section "Moving file into WORK: ${WORK}" "${MY_SLURM_JOB_ID:-}"
-    DEST="${WORK}/evaluation_results"
-    cp_files "${DEST}" "${RESULTS_ROOT}" "${MY_SLURM_JOB_ID:-}"
-else
-    log_section "WORK is not set; skipping move" "${MY_SLURM_JOB_ID:-}"
-fi

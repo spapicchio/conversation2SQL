@@ -20,8 +20,14 @@
 VLLM_PID=""
 cleanup() {
     if [ -n "$VLLM_PID" ] && kill -0 "$VLLM_PID" 2>/dev/null; then
-        echo "Killing VLLM server (PID $VLLM_PID)..."
-        kill "$VLLM_PID"
+        echo "Killing VLLM server (PID $VLLM_PID, PGID ${VLLM_PGID:-$VLLM_PID})..."
+        # Kill the entire process group created by setsid so worker subprocesses
+        # (tensor-parallel workers, async engine) don't outlive the launcher.
+        if [ -n "${VLLM_PGID:-}" ]; then
+            kill -- -"$VLLM_PGID" 2>/dev/null || kill "$VLLM_PID"
+        else
+            kill "$VLLM_PID"
+        fi
         wait "$VLLM_PID" 2>/dev/null || true
     fi
 }
