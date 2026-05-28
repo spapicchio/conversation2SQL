@@ -186,6 +186,43 @@ def _topological_sort(
 
 
 # ---------------------------------------------------------------------------
+# Connected-component decomposition
+# ---------------------------------------------------------------------------
+def _find_connected_components(
+    nodes: list[ExternalKnowledgeEntry],
+) -> list[list[ExternalKnowledgeEntry]]:
+    """Return connected components sorted by minimum node id (undirected view of DAG)."""
+    node_by_id = {n.id: n for n in nodes}
+    id_set = set(node_by_id)
+
+    neighbors: dict[int, set[int]] = {n.id: set() for n in nodes}
+    for n in nodes:
+        for child_id in (n.children_knowledge or []):
+            if child_id in id_set:
+                neighbors[n.id].add(child_id)
+                neighbors[child_id].add(n.id)
+
+    visited: set[int] = set()
+    components: list[list[ExternalKnowledgeEntry]] = []
+    for n in sorted(nodes, key=lambda e: e.id):
+        if n.id in visited:
+            continue
+        queue = [n.id]
+        component_ids: list[int] = []
+        while queue:
+            curr = queue.pop()
+            if curr in visited:
+                continue
+            visited.add(curr)
+            component_ids.append(curr)
+            queue.extend(neighbors[curr] - visited)
+        components.append([node_by_id[nid] for nid in component_ids])
+
+    components.sort(key=lambda comp: min(e.id for e in comp))
+    return components
+
+
+# ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
 def _format_line(entry: ExternalKnowledgeEntry, token: str) -> str:
@@ -204,32 +241,38 @@ def linearize_kb(masked_agent_kb: dict[str, ExternalKnowledgeEntry]) -> str:
     """Strategy 1: single flat string for the whole (masked) KB.
 
     Empty KB -> "".
-    No-edge KB -> just the # Definitions block.
+    Each connected component gets its own # Subgraph N section.
     """
     if not masked_agent_kb:
         return ""
 
     entries = list(masked_agent_kb.values())
-    ordered = _topological_sort(entries)
-    in_kb = {n.id for n in ordered}
-    token_of = {n.id: _extract_token(n.knowledge) for n in ordered}
+    components = _find_connected_components(entries)
 
-    edges = [
-        (token_of[child_id], token_of[n.id])
-        for n in ordered
-        for child_id in (n.children_knowledge or [])
-        if child_id in in_kb
-    ]
+    sections: list[str] = []
+    for idx, component in enumerate(components, start=1):
+        ordered = _topological_sort(component)
+        in_kb = {n.id for n in ordered}
+        token_of = {n.id: _extract_token(n.knowledge) for n in ordered}
 
-    lines: list[str] = []
-    if edges:
-        lines.append("# Dependency edges (prerequisite -> dependent)")
-        lines.extend(f"({a}, prerequisite_of, {b})" for a, b in edges)
-        lines.append("")
-    lines.append("# Definitions (topological order: leaves first)")
-    for n in ordered:
-        lines.append(_format_line(n, token_of[n.id]))
-    return "\n".join(lines)
+        edges = [
+            (token_of[child_id], token_of[n.id])
+            for n in ordered
+            for child_id in (n.children_knowledge or [])
+            if child_id in in_kb
+        ]
+
+        lines: list[str] = [f"# Subgraph {idx}"]
+        if edges:
+            lines.append("# Dependency edges (prerequisite -> dependent)")
+            lines.extend(f"({a}, prerequisite_of, {b})" for a, b in edges)
+            lines.append("")
+        lines.append("# Definitions (topological order: leaves first)")
+        for n in ordered:
+            lines.append(_format_line(n, token_of[n.id]))
+        sections.append("\n".join(lines))
+
+    return "\n\n".join(sections)
 
 
 def format_entry_line(

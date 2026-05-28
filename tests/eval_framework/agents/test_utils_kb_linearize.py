@@ -98,3 +98,59 @@ def test_format_entry_line_no_subgraph_context():
     line = format_entry_line("Derived (D)", kb)
     assert "[B]" not in line
     assert "[D]" in line
+
+
+# ---------------------------------------------------------------------------
+# Per-subgraph (connected-component) format
+# ---------------------------------------------------------------------------
+
+def test_single_entry_has_subgraph_1_header():
+    """Even a single-entry KB must start with # Subgraph 1."""
+    kb = {"Foo (F)": _entry(1, "Foo (F)", description="the foo")}
+    result = linearize_kb(kb)
+    assert result.startswith("# Subgraph 1")
+
+
+def test_two_disconnected_entries_produce_two_subgraphs():
+    """Two entries with no edge between them → two separate subgraph sections."""
+    a = _entry(1, "Alpha (A)", description="first")
+    b = _entry(2, "Beta (B)", description="second")
+    kb = {"Alpha (A)": a, "Beta (B)": b}
+    result = linearize_kb(kb)
+    assert "# Subgraph 1" in result
+    assert "# Subgraph 2" in result
+    # Neither entry appears in the other's subgraph
+    parts = result.split("# Subgraph 2")
+    assert "[A]" not in parts[1]  # A belongs to subgraph 1, not 2
+
+
+def test_two_components_each_with_edges():
+    """Two separate chains each emit their own edges + definitions blocks."""
+    # Component 1: X → Y
+    x = _entry(1, "X (X)", description="base x")
+    y = _entry(2, "Y (Y)", description="uses x", children=[1])
+    # Component 2: P → Q
+    p = _entry(3, "P (P)", description="base p")
+    q = _entry(4, "Q (Q)", description="uses p", children=[3])
+    kb = {"X (X)": x, "Y (Y)": y, "P (P)": p, "Q (Q)": q}
+    result = linearize_kb(kb)
+    assert "# Subgraph 1" in result
+    assert "# Subgraph 2" in result
+    # Each component has its own edge triple
+    assert "(X, prerequisite_of, Y)" in result
+    assert "(P, prerequisite_of, Q)" in result
+    # Edges from component 1 don't bleed into component 2's section
+    sub2 = result.split("# Subgraph 2")[1]
+    assert "(X, prerequisite_of, Y)" not in sub2
+
+
+def test_subgraph_ordering_by_min_node_id():
+    """Subgraphs are ordered by the smallest node id in each component."""
+    # Component with min id=5 and component with min id=1
+    high = _entry(5, "High (H)", description="high id")
+    low  = _entry(1, "Low (L)", description="low id")
+    kb = {"High (H)": high, "Low (L)": low}
+    result = linearize_kb(kb)
+    # Subgraph 1 should contain the entry with id=1 (Low)
+    sub1 = result.split("# Subgraph 2")[0]
+    assert "[L]" in sub1
