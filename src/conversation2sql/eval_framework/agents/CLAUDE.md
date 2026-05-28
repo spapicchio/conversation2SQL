@@ -26,7 +26,7 @@ Shared helpers used by both agents:
 
 Shared KB linearization helpers used by both agents when `is_kb_linearized=True`.
 
-- `linearize_kb(masked_agent_kb)` — Strategy-1 flat string: one `# Dependency edges` block (prereq → dependent triples) followed by all definitions in topological order (leaves first). Returns `""` for an empty KB.
+- `linearize_kb(masked_agent_kb)` — emits one `# Subgraph N` section per connected component of the KB DAG. Each section has a `# Dependency edges` block (if that component has edges) and a `# Definitions` block in topological order (leaves first). Returns `""` for an empty KB.
 - `format_entry_line(name, masked_agent_kb)` — formats the single `[TOKEN] name - desc - formula: …` line for one entry. Returns `"Knowledge not found."` if the name is absent.
 
 Used by `bird_baseline/tools/bird_interact_env_tools.py` (KB tools when `is_kb_linearized=True`) and `no_tool_baseline/baseline_model.py` (prompt rendering when `is_kb_linearized=True`).

@@ -1,8 +1,8 @@
-"""Strategy-1 KB linearizer: single flat string for the entire KB DAG.
+"""Strategy-1 KB linearizer: per-subgraph sections for the KB DAG.
 
 Public interface
 ----------------
-linearize_kb(masked_agent_kb)      -> str   (whole KB as one formatted block)
+linearize_kb(masked_agent_kb)           -> str   (one # Subgraph N section per connected component)
 format_entry_line(name, masked_agent_kb) -> str  (one definition line, or not-found sentinel)
 """
 from __future__ import annotations
@@ -191,7 +191,7 @@ def _topological_sort(
 def _find_connected_components(
     nodes: list[ExternalKnowledgeEntry],
 ) -> list[list[ExternalKnowledgeEntry]]:
-    """Return connected components sorted by minimum node id (undirected view of DAG)."""
+    """Return connected components (DFS traversal) sorted by minimum node id (undirected view of DAG)."""
     node_by_id = {n.id: n for n in nodes}
     id_set = set(node_by_id)
 
@@ -207,18 +207,18 @@ def _find_connected_components(
     for n in sorted(nodes, key=lambda e: e.id):
         if n.id in visited:
             continue
-        queue = [n.id]
+        stack = [n.id]
         component_ids: list[int] = []
-        while queue:
-            curr = queue.pop()
+        while stack:
+            curr = stack.pop()
             if curr in visited:
                 continue
             visited.add(curr)
             component_ids.append(curr)
-            queue.extend(neighbors[curr] - visited)
+            stack.extend(neighbors[curr] - visited)
         components.append([node_by_id[nid] for nid in component_ids])
 
-    components.sort(key=lambda comp: min(e.id for e in comp))
+    # components are already in min-id order (outer loop iterates nodes ascending)
     return components
 
 
@@ -238,10 +238,10 @@ def _format_line(entry: ExternalKnowledgeEntry, token: str) -> str:
 # Public API
 # ---------------------------------------------------------------------------
 def linearize_kb(masked_agent_kb: dict[str, ExternalKnowledgeEntry]) -> str:
-    """Strategy 1: single flat string for the whole (masked) KB.
+    """Strategy 1: one # Subgraph N section per connected component of the (masked) KB.
 
     Empty KB -> "".
-    Each connected component gets its own # Subgraph N section.
+    Single component -> one section. Multiple disconnected components -> multiple sections.
     """
     if not masked_agent_kb:
         return ""
