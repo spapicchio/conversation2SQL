@@ -74,10 +74,8 @@ coros = [
     for iteration in range(num_iterations)
     for task in dataset
 ]
-return list(
-    await tqdm.asyncio.tqdm.gather(
-        *coros, desc=f"Inference with {baseline} x{num_iterations}"
-    )
+await tqdm.asyncio.tqdm.gather(
+    *coros, desc=f"Inference with {baseline} x{num_iterations}"
 )
 ```
 
@@ -88,7 +86,24 @@ before the next starts. Models are built once (`_init_models`) and the dataset i
 `_process_one` gains an `iteration: int` argument. It:
 - runs the agent exactly as today (via `asyncio.to_thread(runner, ...)`),
 - adds `"iteration": iteration` to `task_output`,
-- writes the record to that iteration's file (section 4).
+- writes the record to that iteration's file (section 4),
+- **returns `None`** (see "Memory" below) — the full record is already on disk.
+
+#### Memory: lightweight return
+
+`gather` retains whatever each coroutine returns, so returning the full `task_output` would
+hold all N×T record dicts (each carrying the complete message history) in memory at once.
+Nothing consumes them: records are streamed to disk by `_save_record`, and
+`workflow_evaluation_pipeline`'s return value is ignored by `main_launch_eval`.
+
+Therefore `_process_one` returns `None` and `_run_tasks_concurrently` no longer builds a
+result list — it just awaits the `gather` for its side effects (disk writes). Peak memory is
+then bounded by `concurrency` in-flight agent runs, independent of N and T.
+`workflow_evaluation_pipeline` accordingly returns `None` instead of `list[dict]`.
+
+**Verify during implementation:** confirm no test or caller relies on the return value of
+`workflow_evaluation_pipeline` / `_run_tasks_concurrently`. If one does, return a tiny
+summary (e.g. count of records written) rather than the full dicts.
 
 #### Approaches considered
 
@@ -140,6 +155,9 @@ data is self-describing even independent of filename.
 
 - **Filename rename** is a breaking change for anything reading `results.jsonl`; the
   explorer app and any analysis scripts must be pointed at `results_iter*.jsonl`.
-- **Memory:** `gather` holds N×T coroutines; for large datasets and large N the result list
-  is N×T dicts in memory. This matches the current single-iteration behavior scaled by N and
-  is acceptable for the intended dataset sizes.
+- **Memory:** addressed by the lightweight-return design (section 3, "Memory") — coroutines
+  return `None`, so peak memory is bounded by `concurrency` in-flight runs, not N×T record
+  dicts. The N×T *coroutine objects* themselves are still created up front; they are
+  lightweight, but for very large sweeps a worker-pool / `asyncio.Queue` pattern (drained by
+  `concurrency` workers) would bound that too. Deferred — adopt only if large sweeps prove it
+  necessary.
