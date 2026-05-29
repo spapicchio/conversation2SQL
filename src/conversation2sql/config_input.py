@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
@@ -11,6 +11,7 @@ class ConfigPipeline(BaseModel):
     output_folder: str = "results"
     baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full'] = 'bird_full'
     concurrency: int = 1
+    num_iterations: int = Field(default=1, ge=1)  # repeat the dataset N times for statistical relevance
 
 
 # ---------------------------------------------------------------------------

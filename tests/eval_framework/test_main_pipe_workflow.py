@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from conversation2sql.eval_framework.main_pipe_workflow import (
     _resolve_baseline_settings,
@@ -139,6 +140,13 @@ class TestDispatch:
 class TestConcurrencyConfig:
     def test_concurrency_defaults_to_1(self):
         assert ConfigPipeline().concurrency == 1
+
+    def test_num_iterations_defaults_to_1(self):
+        assert ConfigPipeline().num_iterations == 1
+
+    def test_num_iterations_rejects_zero(self):
+        with pytest.raises(ValidationError):
+            ConfigPipeline(num_iterations=0)
 
 
 @patch("conversation2sql.eval_framework.main_pipe_workflow.run_agent_bird_baseline")
