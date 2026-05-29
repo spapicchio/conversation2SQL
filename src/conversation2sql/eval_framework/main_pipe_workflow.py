@@ -48,6 +48,23 @@ def _resolve_baseline_settings(baseline: str) -> tuple[bool, Callable, bool]:
     return table[baseline]
 
 
+def _resolve_iterations(num_iterations: int, predictor_temperature: float) -> int:
+    """Collapse to a single iteration when the predictor is deterministic.
+
+    With temperature <= 0 the agent's output is deterministic, so repeating the
+    dataset adds no information — we run it once regardless of num_iterations.
+    """
+    if predictor_temperature <= 0 and num_iterations > 1:
+        logger.warning(
+            "predictor temperature=%s; iterations are deterministic — "
+            "collapsing num_iterations=%s to 1",
+            predictor_temperature,
+            num_iterations,
+        )
+        return 1
+    return num_iterations
+
+
 def workflow_evaluation_pipeline(
     config_pipeline: ConfigPipeline,
     config_reader: ConfigReader,

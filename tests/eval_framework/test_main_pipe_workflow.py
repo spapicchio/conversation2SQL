@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from conversation2sql.eval_framework.main_pipe_workflow import (
     _resolve_baseline_settings,
+    _resolve_iterations,
     workflow_evaluation_pipeline,
 )
 from conversation2sql.config_input import (
@@ -31,6 +32,20 @@ class TestResolveBaselineSettings:
     def test_unknown_baseline_raises(self):
         with pytest.raises(ValueError):
             _resolve_baseline_settings("nonsense")
+
+
+class TestResolveIterations:
+    def test_passthrough_when_temperature_positive(self):
+        assert _resolve_iterations(5, 0.7) == 5
+
+    def test_collapses_to_one_when_temperature_zero(self):
+        assert _resolve_iterations(5, 0.0) == 1
+
+    def test_single_iteration_stays_one_when_temperature_zero(self):
+        assert _resolve_iterations(1, 0.0) == 1
+
+    def test_collapses_when_temperature_negative(self):
+        assert _resolve_iterations(3, -0.1) == 1
 
 
 @pytest.fixture
