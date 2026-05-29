@@ -30,10 +30,12 @@ def test_baseline_runs_one_task_and_emits_expected_shape(baseline, tmp_path):
     cpred = ConfigPredictor()
     cu = ConfigUserSimulator()
 
-    results = workflow_evaluation_pipeline(cp, cr, cpred, cu)
+    workflow_evaluation_pipeline(cp, cr, cpred, cu)
 
-    assert len(results) == 1
-    record = results[0]
+    import json
+    lines = (tmp_path / "results_iter0.jsonl").read_text().splitlines()
+    assert len(lines) == 1
+    record = json.loads(lines[0])
     missing = REQUIRED_KEYS - record.keys()
     assert not missing, f"Missing keys for {baseline}: {missing}"
     assert isinstance(record["execution_accuracy"], bool)
