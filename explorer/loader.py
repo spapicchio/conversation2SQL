@@ -235,8 +235,9 @@ def load_run(path: Path) -> RunData:
 def join_runs(runs: dict[str, RunData]) -> "pd.DataFrame":
     """Merge N RunData objects on instance_id into a comparison DataFrame.
 
-    Columns: instance_id, database, Question, then one column per run label
-    with values ✓ (passed), ✗ (failed), or — (task absent in that run).
+    Columns: instance_id, database, Question, then one column per run label with
+    values "c/n" (c passes out of n samples for that instance) or "—" (task
+    absent in that run).
     """
     all_ids: dict[str, dict] = {}
     for run_data in runs.values():
@@ -250,23 +251,16 @@ def join_runs(runs: dict[str, RunData]) -> "pd.DataFrame":
                     "Question": (q[:80] + "…") if len(q) > 80 else q,
                 }
 
-    id_to_records: dict[str, dict[str, dict]] = {}
-    for label, run_data in runs.items():
-        for r in run_data.records:
-            iid = r.get("instance_id", "")
-            id_to_records.setdefault(iid, {})[label] = r
-
     rows = []
     for iid, base in all_ids.items():
         row = dict(base)
-        for label in runs:
-            record = id_to_records.get(iid, {}).get(label)
-            if record is None:
+        for label, run_data in runs.items():
+            group = run_data.groups.get(iid)
+            if not group:
                 row[label] = "—"
-            elif record.get("execution_accuracy"):
-                row[label] = "✓"
             else:
-                row[label] = "✗"
+                c = sum(1 for r in group if r.get("execution_accuracy"))
+                row[label] = f"{c}/{len(group)}"
         rows.append(row)
 
     return pd.DataFrame(rows)
