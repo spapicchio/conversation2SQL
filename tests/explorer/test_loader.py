@@ -108,18 +108,24 @@ class TestListRuns:
         assert list_runs(tmp_path / "nonexistent") == {}
 
     def test_single_run(self, tmp_path):
-        (tmp_path / "2026_05_14" / "09_17_54__qwen-ddl").mkdir(parents=True)
+        run_dir = tmp_path / "2026_05_14" / "09_17_54__qwen-ddl"
+        run_dir.mkdir(parents=True)
+        (run_dir / "results.jsonl").write_text("{}\n", encoding="utf-8")
         assert list_runs(tmp_path) == {"2026_05_14": ["09_17_54__qwen-ddl"]}
 
     def test_multiple_times_newest_first(self, tmp_path):
         for t in ["09_00_00__a", "10_00_00__b", "08_00_00__c"]:
-            (tmp_path / "2026_05_14" / t).mkdir(parents=True)
+            run_dir = tmp_path / "2026_05_14" / t
+            run_dir.mkdir(parents=True)
+            (run_dir / "results.jsonl").write_text("{}\n", encoding="utf-8")
         times = list_runs(tmp_path)["2026_05_14"]
         assert times == ["10_00_00__b", "09_00_00__a", "08_00_00__c"]
 
     def test_dates_newest_first(self, tmp_path):
         for d in ["2026_05_12", "2026_05_14", "2026_05_13"]:
-            (tmp_path / d / "09_00_00__slug").mkdir(parents=True)
+            run_dir = tmp_path / d / "09_00_00__slug"
+            run_dir.mkdir(parents=True)
+            (run_dir / "results.jsonl").write_text("{}\n", encoding="utf-8")
         dates = list(list_runs(tmp_path).keys())
         assert dates == ["2026_05_14", "2026_05_13", "2026_05_12"]
 
