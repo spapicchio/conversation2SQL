@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 from pathlib import Path
@@ -139,8 +140,7 @@ class TestDispatch:
     def test_results_written_to_output_folder(
         self, mock_create, mock_load, mock_no_tool, mock_agent, configs, tmp_path,
     ):
-        # The slug/date are now constructed by the bash launch script; Python
-        # writes results.jsonl directly into the given output_folder.
+        # Python writes results_iter{i}.jsonl directly into the given output_folder.
         cp, cr, cpred, cu = configs
         cp.baseline = "tools_only"
         mock_load.return_value = [_fake_task()]
@@ -149,7 +149,7 @@ class TestDispatch:
 
         workflow_evaluation_pipeline(cp, cr, cpred, cu)
 
-        assert (tmp_path / "results.jsonl").exists()
+        assert (tmp_path / "results_iter0.jsonl").exists()
 
 
 class TestConcurrencyConfig:
@@ -178,10 +178,11 @@ class TestConcurrency:
         mock_no_tool.return_value = _stub_response()
         mock_create.return_value = MagicMock()
 
-        results = workflow_evaluation_pipeline(cp, cr, cpred, cu)
+        workflow_evaluation_pipeline(cp, cr, cpred, cu)
 
-        assert len(results) == 4
         assert mock_no_tool.call_count == 4
+        lines = (Path(cp.output_folder) / "results_iter0.jsonl").read_text().splitlines()
+        assert len(lines) == 4
 
     def test_concurrent_tasks_run_in_parallel(
         self, mock_create, mock_load, mock_no_tool, mock_agent, configs
@@ -211,3 +212,46 @@ class TestConcurrency:
         workflow_evaluation_pipeline(cp, cr, cpred, cu)
 
         assert max_concurrent > 1
+
+
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_agent_bird_baseline")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_baseline_no_tool")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.load_bird_interact_as_tasks")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.utils_create_model")
+class TestIterations:
+    def test_n_iterations_write_one_file_each_when_temperature_positive(
+        self, mock_create, mock_load, mock_no_tool, mock_agent, configs
+    ):
+        cp, cr, cpred, cu = configs
+        cp = cp.model_copy(update={"baseline": "no_tool", "num_iterations": 3})
+        cpred = cpred.model_copy(update={"temperature": 0.7})
+        mock_load.return_value = [_fake_task() for _ in range(2)]
+        mock_no_tool.return_value = _stub_response()
+        mock_create.return_value = MagicMock()
+
+        workflow_evaluation_pipeline(cp, cr, cpred, cu)
+
+        assert mock_no_tool.call_count == 6
+        out = Path(cp.output_folder)
+        for i in range(3):
+            lines = (out / f"results_iter{i}.jsonl").read_text().splitlines()
+            assert len(lines) == 2
+            record = json.loads(lines[0])
+            assert record["iteration"] == i
+
+    def test_temperature_zero_collapses_to_single_iteration(
+        self, mock_create, mock_load, mock_no_tool, mock_agent, configs
+    ):
+        cp, cr, cpred, cu = configs
+        cp = cp.model_copy(update={"baseline": "no_tool", "num_iterations": 3})
+        # cpred.temperature defaults to 0.0
+        mock_load.return_value = [_fake_task() for _ in range(2)]
+        mock_no_tool.return_value = _stub_response()
+        mock_create.return_value = MagicMock()
+
+        workflow_evaluation_pipeline(cp, cr, cpred, cu)
+
+        assert mock_no_tool.call_count == 2
+        out = Path(cp.output_folder)
+        assert (out / "results_iter0.jsonl").exists()
+        assert not (out / "results_iter1.jsonl").exists()
