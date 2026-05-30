@@ -48,12 +48,29 @@ def _resolve_baseline_settings(baseline: str) -> tuple[bool, Callable, bool]:
     return table[baseline]
 
 
+def _resolve_iterations(num_iterations: int, predictor_temperature: float) -> int:
+    """Collapse to a single iteration when the predictor is deterministic.
+
+    With temperature <= 0 the agent's output is deterministic, so repeating the
+    dataset adds no information — we run it once regardless of num_iterations.
+    """
+    if predictor_temperature <= 0 and num_iterations > 1:
+        logger.warning(
+            "predictor temperature=%s; iterations are deterministic — "
+            "collapsing num_iterations=%s to 1",
+            predictor_temperature,
+            num_iterations,
+        )
+        return 1
+    return num_iterations
+
+
 def workflow_evaluation_pipeline(
     config_pipeline: ConfigPipeline,
     config_reader: ConfigReader,
     config_predictor: ConfigPredictor,
     config_user: ConfigUserSimulator,
-) -> list[dict]:
+) -> None:
     logger.info(f"config_pipeline: {config_pipeline}")
     logger.info(f"config_reader: {config_reader}")
     logger.info(f"config_predictor: {config_predictor}")
@@ -83,13 +100,15 @@ def workflow_evaluation_pipeline(
         config_user=config_user,
     )
 
-    file_result = output_folder / "results.jsonl"
-
     # initialize models (API based)
     model_agent, (model_user_parsing, model_user_generator) = _init_models(
         config_predictor,
         config_user,
         needs_user_sim=needs_user_sim,
+    )
+
+    effective_iterations = _resolve_iterations(
+        config_pipeline.num_iterations, config_predictor.temperature
     )
 
     # read dataset
@@ -100,7 +119,7 @@ def workflow_evaluation_pipeline(
         logger.info("Debug mode is ON - using only the first 10 tasks from the dataset")
 
     try:
-        result = asyncio.run(
+        asyncio.run(
             _run_tasks_concurrently(
                 dataset=dataset,
                 runner=runner,
@@ -112,19 +131,18 @@ def workflow_evaluation_pipeline(
                 config_user=config_user,
                 config_pipeline=config_pipeline,
                 config_reader=config_reader,
-                file_result=file_result,
+                output_folder=output_folder,
                 concurrency=config_pipeline.concurrency,
+                num_iterations=effective_iterations,
             )
         )
     except Exception as e:
         logger.error(f"Error occurred: {e}")
         response_error = {"error": str(e)}
-        output = file_result.parent / f"{file_result.stem}_error.jsonl"
+        output = output_folder / "results_error.jsonl"
         _save_record(response=response_error, output_path_jsonl=output)
         logger.info(f"Saved ERROR to {output}")
         raise e
-
-    return result
 
 
 async def _run_tasks_concurrently(
@@ -138,13 +156,14 @@ async def _run_tasks_concurrently(
     config_user: ConfigUserSimulator,
     config_pipeline: ConfigPipeline,
     config_reader: ConfigReader,
-    file_result: Path,
+    output_folder: Path,
     concurrency: int,
-) -> list[dict]:
+    num_iterations: int,
+) -> None:
     sem = asyncio.Semaphore(concurrency)
     file_lock = threading.Lock()
 
-    async def _process_one(task: TaskData) -> dict:
+    async def _process_one(task: TaskData, iteration: int) -> None:
         async with sem:
             if baseline == "no_tool":
                 response = await asyncio.to_thread(runner, task, model_agent)
@@ -164,15 +183,24 @@ async def _run_tasks_concurrently(
             "config_reader": config_reader.model_dump(),
             **task.model_dump(),
             **response,
+            "iteration": iteration,
         }
+        file_result = output_folder / f"results_iter{iteration}.jsonl"
         with file_lock:
             _save_record(response=task_output, output_path_jsonl=file_result)
-        logger.info(f"Saved response for task_id={task.instance_id} to {file_result}")
-        return task_output
+        logger.info(
+            f"Saved response for task_id={task.instance_id} iteration={iteration} to {file_result}"
+        )
 
-    coros = [_process_one(task) for task in dataset]
-    return list(
-        await tqdm.asyncio.tqdm.gather(*coros, desc=f"Inference with {baseline}")
+    # Flatten all (iteration, task) pairs into one shared semaphore-bounded gather
+    # so the concurrency pool stays saturated across iteration boundaries.
+    coros = [
+        _process_one(task, iteration)
+        for iteration in range(num_iterations)
+        for task in dataset
+    ]
+    await tqdm.asyncio.tqdm.gather(
+        *coros, desc=f"Inference with {baseline} x{num_iterations}"
     )
 
 

@@ -108,18 +108,24 @@ class TestListRuns:
         assert list_runs(tmp_path / "nonexistent") == {}
 
     def test_single_run(self, tmp_path):
-        (tmp_path / "2026_05_14" / "09_17_54__qwen-ddl").mkdir(parents=True)
+        run_dir = tmp_path / "2026_05_14" / "09_17_54__qwen-ddl"
+        run_dir.mkdir(parents=True)
+        (run_dir / "results.jsonl").write_text("{}\n", encoding="utf-8")
         assert list_runs(tmp_path) == {"2026_05_14": ["09_17_54__qwen-ddl"]}
 
     def test_multiple_times_newest_first(self, tmp_path):
         for t in ["09_00_00__a", "10_00_00__b", "08_00_00__c"]:
-            (tmp_path / "2026_05_14" / t).mkdir(parents=True)
+            run_dir = tmp_path / "2026_05_14" / t
+            run_dir.mkdir(parents=True)
+            (run_dir / "results.jsonl").write_text("{}\n", encoding="utf-8")
         times = list_runs(tmp_path)["2026_05_14"]
         assert times == ["10_00_00__b", "09_00_00__a", "08_00_00__c"]
 
     def test_dates_newest_first(self, tmp_path):
         for d in ["2026_05_12", "2026_05_14", "2026_05_13"]:
-            (tmp_path / d / "09_00_00__slug").mkdir(parents=True)
+            run_dir = tmp_path / d / "09_00_00__slug"
+            run_dir.mkdir(parents=True)
+            (run_dir / "results.jsonl").write_text("{}\n", encoding="utf-8")
         dates = list(list_runs(tmp_path).keys())
         assert dates == ["2026_05_14", "2026_05_13", "2026_05_12"]
 
@@ -197,6 +203,9 @@ class TestLoadRun:
 
 def _make_run_data(records: list[dict]) -> RunData:
     from collections import Counter
+    groups: dict[str, list[dict]] = {}
+    for r in records:
+        groups.setdefault(r.get("instance_id", ""), []).append(r)
     return RunData(
         records=records,
         config={},
@@ -212,6 +221,8 @@ def _make_run_data(records: list[dict]) -> RunData:
             tool_usage=Counter(),
         ),
         malformed_count=0,
+        groups=groups,
+        n_iterations=1,
     )
 
 
@@ -222,8 +233,8 @@ class TestJoinRuns:
         runs = {"run_a": _make_run_data([r_a]), "run_b": _make_run_data([r_b])}
         df = join_runs(runs)
         assert len(df) == 1
-        assert df.iloc[0]["run_a"] == "✓"
-        assert df.iloc[0]["run_b"] == "✗"
+        assert df.iloc[0]["run_a"] == "1/1"
+        assert df.iloc[0]["run_b"] == "0/1"
 
     def test_task_absent_in_one_run_shows_dash(self):
         r_a = make_record(instance_id="t1", execution_accuracy=True, selected_database="db1")
@@ -233,10 +244,10 @@ class TestJoinRuns:
         assert len(df) == 2
         t1 = df[df["instance_id"] == "t1"].iloc[0]
         t2 = df[df["instance_id"] == "t2"].iloc[0]
-        assert t1["run_a"] == "✓"
+        assert t1["run_a"] == "1/1"
         assert t1["run_b"] == "—"
         assert t2["run_a"] == "—"
-        assert t2["run_b"] == "✗"
+        assert t2["run_b"] == "0/1"
 
     def test_question_truncated_at_80_chars(self):
         long_q = "A" * 100
@@ -280,3 +291,12 @@ class TestJoinRuns:
         assert "alpha" in df.columns
         assert "beta" in df.columns
         assert "gamma" in df.columns
+
+    def test_cell_shows_pass_count_over_samples(self):
+        g = [
+            make_record(instance_id="t1", execution_accuracy=True, selected_database="db1"),
+            make_record(instance_id="t1", execution_accuracy=False, selected_database="db1"),
+        ]
+        runs = {"run_a": _make_run_data(g)}
+        df = join_runs(runs)
+        assert df.iloc[0]["run_a"] == "1/2"

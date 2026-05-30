@@ -73,6 +73,14 @@ for col, (label, run) in zip(stat_cols, runs.items()):
         st.metric("Avg Output Tokens", f"{stats.avg_output_tokens:,.0f}")
         st.metric("Avg Cost", f"${stats.avg_cost:.5f}")
         st.metric("Avg Budget Remaining", f"{stats.avg_budget_remaining:.1f}")
+        if run.n_iterations >= 2 and run.stats.reliability is not None:
+            rel = run.stats.reliability
+            st.metric("Average P̄", f"{rel.avg_performance * 100:.1f}%")
+            st.metric("Aptitude A⁹⁰", f"{rel.aptitude * 100:.1f}%")
+            st.metric("Unreliability U₁₀⁹⁰", f"{rel.unreliability * 100:.1f}%")
+            st.metric("Reliability R", f"{rel.reliability * 100:.1f}%")
+            if rel.passk:
+                st.metric("pass@N", f"{rel.passk[max(rel.passk)] * 100:.1f}%")
 
 st.divider()
 
@@ -146,23 +154,30 @@ with f2:
 task_df = join_runs(runs)
 
 
-def _is_pass(val: str) -> bool | None:
-    if val == "✓":
-        return True
-    if val == "✗":
-        return False
-    return None
+def _cell_state(val: str) -> str | None:
+    """Map a 'c/n' cell to 'pass' (c==n), 'fail' (c==0), 'partial', or None for '—'."""
+    if val == "—":
+        return None
+    c_str, n_str = val.split("/")
+    c, n = int(c_str), int(n_str)
+    if c == n:
+        return "pass"
+    if c == 0:
+        return "fail"
+    return "partial"
 
 
 if agreement_filter == "Disagreement only":
     def _disagrees(row: pd.Series) -> bool:
-        outcomes = [_is_pass(row[c]) for c in run_labels if _is_pass(row[c]) is not None]
-        return len(set(outcomes)) > 1 if outcomes else False
+        states = [s for c in run_labels if (s := _cell_state(row[c])) is not None]
+        return len(set(states)) > 1 if states else False
     task_df = task_df[task_df.apply(_disagrees, axis=1)]
 elif agreement_filter == "All Passed":
-    task_df = task_df[task_df[run_labels].apply(lambda row: all(v == "✓" for v in row), axis=1)]
+    task_df = task_df[task_df[run_labels].apply(
+        lambda row: all(_cell_state(v) == "pass" for v in row), axis=1)]
 elif agreement_filter == "All Failed":
-    task_df = task_df[task_df[run_labels].apply(lambda row: all(v == "✗" for v in row), axis=1)]
+    task_df = task_df[task_df[run_labels].apply(
+        lambda row: all(_cell_state(v) == "fail" for v in row), axis=1)]
 
 if search:
     task_df = task_df[task_df["Question"].str.lower().str.contains(search.lower(), na=False)]
@@ -205,11 +220,19 @@ conv_cols = st.columns(2)
 for col, label in zip(conv_cols, [run_a_label, run_b_label]):
     with col:
         st.markdown(f"**{label}**")
-        record = next(
-            (r for r in runs[label].records if r.get("instance_id") == selected_instance_id),
-            None,
-        )
-        if record is None:
+        group = runs[label].groups.get(selected_instance_id, [])
+        if not group:
             st.info("Task not found in this run.")
+            continue
+        if len(group) > 1:
+            iters = [r.get("iteration", 0) for r in group]
+            chosen = st.selectbox(
+                "Iteration",
+                iters,
+                format_func=lambda i: f"iteration {i}",
+                key=f"iter_{label}",
+            )
+            record = next(r for r in group if r.get("iteration", 0) == chosen)
         else:
-            render_conversation(record)
+            record = group[0]
+        render_conversation(record)

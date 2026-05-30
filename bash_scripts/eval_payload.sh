@@ -14,20 +14,21 @@
 # ---------------------------------------------------------------------------
 # Single SLURM-submittable evaluation payload.
 #
-# Three orthogonal axes are selected via environment variables:
-#   EVAL_MODEL    – model profile: qwen35 | gemma4            (default: qwen35)
-#   EVAL_VARIANT  – eval condition (the 4 run_suite flags)    (required)
-#   EVAL_PROVIDER – LiteLLM provider passed as --predictor_model_provider
-#                   hosted_vllm (default) | openai | openrouter | together_ai
-#                   When NOT hosted_vllm the local vLLM server is skipped entirely;
-#                   make sure the matching API key env var is exported beforehand
-#                   (e.g. OPENAI_API_KEY, OPENROUTER_API_KEY, TOGETHER_API_KEY).
+# Input axes (set via environment variables, all have defaults):
+#   MODEL                    – model profile: qwen35 | gemma4           (default: qwen35)
+#   VARIANT                  – eval condition key (run 'just variants')  (required)
+#   BASELINE                 – evaluation mode: no_tool | …             (default: no_tool)
+#   PREDICTOR_MODEL_PROVIDER – LiteLLM provider                         (default: hosted_vllm)
+#   CONCURRENCY              – concurrent tasks in the Python pipeline  (default: 16)
+#   NUM_ITERATIONS           – repeat dataset N times                   (default: 1)
+#   DEBUG                    – debug logging                            (default: false)
 #
-# Launch through `just eval ...`, which sets these and dispatches via
-# submit_and_log.sh (tmux locally, sbatch under SLURM). Runnable standalone too.
+# After resolving the model profile and variant, all sampling params and
+# schema flags are exported as Python-compatible env vars so PydanticParser
+# reads them directly — no CLI flag translation needed in run_suite.
 #
-# Set DRY_RUN=1 to print the resolved vLLM + run_suite commands and exit without
-# starting a server — used to verify the variant->flag mapping without GPUs.
+# Launch via `just eval ...`, which sets these and dispatches through
+# submit_and_log.sh.  Set DRY_RUN=1 to print the resolved config and exit.
 # ---------------------------------------------------------------------------
 
 set -Eeuo pipefail
@@ -36,21 +37,19 @@ export BASE_WORK="${BASE_WORK:-/workspaces/conversation2SQL}"
 export MY_SLURM_JOB_ID="${MY_SLURM_JOB_ID:-local}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-1}"
 
-EVAL_MODEL="${EVAL_MODEL:-qwen35}"
-EVAL_VARIANT="${EVAL_VARIANT:?set EVAL_VARIANT (run 'just variants' to list valid keys)}"
-EVAL_BASELINE="${EVAL_BASELINE:-no_tool}"
-# LiteLLM provider string forwarded to --predictor_model_provider.
-# hosted_vllm → start a local vLLM server; anything else → skip server, use external API.
-EVAL_PROVIDER="${EVAL_PROVIDER:-hosted_vllm}"
-# Number of tasks processed concurrently by the Python pipeline.
-EVAL_CONCURRENCY="${EVAL_CONCURRENCY:-16}"
+MODEL="${MODEL:-qwen35}"
+VARIANT="${VARIANT:?set VARIANT (run 'just variants' to list valid keys)}"
+BASELINE="${BASELINE:-no_tool}"
+PREDICTOR_MODEL_PROVIDER="${PREDICTOR_MODEL_PROVIDER:-hosted_vllm}"
+CONCURRENCY="${CONCURRENCY:-16}"
+NUM_ITERATIONS="${NUM_ITERATIONS:-1}"
 DEBUG="${DEBUG:-false}"
 
 
 # ---------------------------------------------------------------------------
 # Model profile -> model name, context length, sampling, vLLM server flags.
 # ---------------------------------------------------------------------------
-case "$EVAL_MODEL" in
+case "$MODEL" in
   qwen35)
     # https://huggingface.co/Qwen/Qwen3.5-9B
     # Thinking (coding):  temp=0.6 top_p=0.95 top_k=20 presence=0.0
@@ -94,20 +93,31 @@ case "$EVAL_MODEL" in
     )
     ;;
   *)
-    echo "[eval_payload] Unknown EVAL_MODEL='$EVAL_MODEL' (expected: qwen35 | gemma4)" >&2
+    echo "[eval_payload] Unknown MODEL='$MODEL' (expected: qwen35 | gemma4)" >&2
     exit 1
     ;;
 esac
 
+# Export predictor params with the names PydanticParser expects from the env.
+# Ambiguous fields (shared with ConfigUserSimulator) get the section prefix.
+export PREDICTOR_MODEL_NAME="${MODEL_NAME}"
+export PREDICTOR_MODEL_PROVIDER="${PREDICTOR_MODEL_PROVIDER}"
+export PREDICTOR_TEMPERATURE="${TEMPERATURE}"
+export PREDICTOR_TOP_P="${TOP_P}"
+export PREDICTOR_TOP_K="${TOP_K}"
+export PREDICTOR_PRESENCE_PENALTY="${PRESENCE_PENALTY}"
+export PREDICTOR_REPETITION_PENALTY="${REPETITION_PENALTY}"
+export PREDICTOR_ENABLE_THINKING="${ENABLE_THINKING}"
+
 
 # ---------------------------------------------------------------------------
 # Variant -> the 4 run_suite condition flags.
-#   *_toon_*       -> --database_schema_type toon (else ddl)
-#   gt_db_*        -> --read_only_gt_tables true   (else false)
-#   *_gt_kb*       -> --read_only_gt_kb true        (else false)
-#   *_linearized   -> --is_kb_linearized true       (else false)
+#   *_toon_*       -> DATABASE_SCHEMA_TYPE=toon  (else ddl)
+#   gt_db_*        -> READ_ONLY_GT_TABLES=true   (else false)
+#   *_gt_kb*       -> READ_ONLY_GT_KB=true        (else false)
+#   *_linearized   -> IS_KB_LINEARIZED=true       (else false)
 # ---------------------------------------------------------------------------
-case "$EVAL_VARIANT" in
+case "$VARIANT" in
   all_db_all_kb)                 SCHEMA_TYPE=ddl;  GT_DB=false; GT_KB=false; IS_LIN=false ;;
   all_db_all_kb_linearized)      SCHEMA_TYPE=ddl;  GT_DB=false; GT_KB=false; IS_LIN=true  ;;
   all_db_toon_all_kb)            SCHEMA_TYPE=toon; GT_DB=false; GT_KB=false; IS_LIN=false ;;
@@ -116,44 +126,33 @@ case "$EVAL_VARIANT" in
   gt_db_gt_kb_linearized)        SCHEMA_TYPE=ddl;  GT_DB=true;  GT_KB=true;  IS_LIN=true  ;;
   gt_db_gt_kb)                   SCHEMA_TYPE=ddl;  GT_DB=true;  GT_KB=true;  IS_LIN=false ;;
   *)
-    echo "[eval_payload] Unknown EVAL_VARIANT='$EVAL_VARIANT'." >&2
+    echo "[eval_payload] Unknown VARIANT='$VARIANT'." >&2
     echo "Valid: all_db_all_kb all_db_all_kb_linearized all_db_toon_all_kb all_db_toon_all_kb_linearized gt_db_all_kb_linearized gt_db_gt_kb_linearized gt_db_gt_kb" >&2
     exit 1
     ;;
 esac
 
+# Export reader params with the names PydanticParser expects from the env.
+export DATABASE_SCHEMA_TYPE="${SCHEMA_TYPE}"
+export READ_ONLY_GT_TABLES="${GT_DB}"
+export READ_ONLY_GT_KB="${GT_KB}"
+export IS_KB_LINEARIZED="${IS_LIN}"
 
-# ---------------------------------------------------------------------------
-# Assemble the run_suite flags (everything after baseline + the two api bases).
-# ---------------------------------------------------------------------------
-RUN_SUITE_ARGS=(
-  --predictor_model_provider "${EVAL_PROVIDER}"
-  --predictor_model_name "${MODEL_NAME}"
-  --predictor_temperature "${TEMPERATURE}"
-  --predictor_top_p "${TOP_P}"
-  --predictor_top_k "${TOP_K}"
-  --predictor_presence_penalty "${PRESENCE_PENALTY}"
-  --predictor_repetition_penalty "${REPETITION_PENALTY}"
-  --predictor_enable_thinking "${ENABLE_THINKING}"
-  --database_schema_type "${SCHEMA_TYPE}"
-  --make_data_ambiguous false
-  --read_only_gt_tables "${GT_DB}"
-  --read_only_gt_kb "${GT_KB}"
-  --is_kb_linearized "${IS_LIN}"
-  --concurrency "${EVAL_CONCURRENCY}"
-  --debug "${DEBUG}"
-)
+# Export pipeline params (all unique fields, no section prefix needed).
+export BASELINE="${BASELINE}"
+export CONCURRENCY="${CONCURRENCY}"
+export NUM_ITERATIONS="${NUM_ITERATIONS}"
+export DEBUG="${DEBUG}"
 
 
 # ---------------------------------------------------------------------------
-# Dry run: print the resolved commands and exit before any heavy setup.
+# Dry run: print the resolved config and exit before any heavy setup.
 # ---------------------------------------------------------------------------
 if [ "${DRY_RUN:-0}" = "1" ]; then
-  echo "[DRY-RUN] model=${EVAL_MODEL} variant=${EVAL_VARIANT} baseline=${EVAL_BASELINE} provider=${EVAL_PROVIDER} concurrency=${EVAL_CONCURRENCY} gpus=${CUDA_VISIBLE_DEVICES}"
+  echo "[DRY-RUN] model=${MODEL} variant=${VARIANT} baseline=${BASELINE} provider=${PREDICTOR_MODEL_PROVIDER} concurrency=${CONCURRENCY} num_iterations=${NUM_ITERATIONS} gpus=${CUDA_VISIBLE_DEVICES}"
   printf '[DRY-RUN] vllm serve %q --max-model-len %q' "${MODEL_NAME}" "${MAX_MODEL_LEN}"
   printf ' %q' "${SERVER_ARGS[@]}"; printf '\n'
-  printf '[DRY-RUN] run_suite %q' "${EVAL_BASELINE}"
-  printf ' %q' "${RUN_SUITE_ARGS[@]}"; printf '\n'
+  echo "[DRY-RUN] conv2sql run --config configs/eval_pipeline_config.yaml  (all params read from env)"
   exit 0
 fi
 
@@ -163,27 +162,20 @@ fi
 # ---------------------------------------------------------------------------
 source "${BASE_WORK}/bash_scripts/utils/utils_evaluate.sh"          # exports + run_suite()
 
-log_section "Starting evaluation: model=${EVAL_MODEL} variant=${EVAL_VARIANT} provider=${EVAL_PROVIDER}" "${MY_SLURM_JOB_ID}"
+log_section "Starting evaluation: model=${MODEL} variant=${VARIANT} provider=${PREDICTOR_MODEL_PROVIDER}" "${MY_SLURM_JOB_ID}"
 
-if [ "${EVAL_PROVIDER}" = "hosted_vllm" ]; then
+if [ "${PREDICTOR_MODEL_PROVIDER}" = "hosted_vllm" ]; then
   # Local vLLM server: source the helper (registers cleanup trap) then start it.
   source "${BASE_WORK}/bash_scripts/utils/vllm_server.sh"
   start_vllm_server "$MODEL_NAME" "$MAX_MODEL_LEN" "${SERVER_ARGS[@]}"
+  # PREDICTOR_VLLM_API_BASE is exported by vllm_server.sh after the server is up.
 else
-  # External API (openai / openrouter / together_ai / …): no local server needed.
-  # The Python pipeline uses EVAL_PROVIDER + the model name via LiteLLM directly.
-  # Ensure the matching API key is exported before calling this script, e.g.:
-  #   export OPENAI_API_KEY=sk-...
-  #   export OPENROUTER_API_KEY=sk-...
-  #   export TOGETHER_API_KEY=...
-  PREDICTOR_VLLM_API_BASE=""
-  USER_SIMULATOR_VLLM_API_BASE=""
+  # External API: unset api-base vars so Python gets None (not "").
+  unset PREDICTOR_VLLM_API_BASE       || true
+  unset USER_SIMULATOR_VLLM_API_BASE  || true
 fi
 
-run_suite "$EVAL_BASELINE" \
-  "$PREDICTOR_VLLM_API_BASE" \
-  "$USER_SIMULATOR_VLLM_API_BASE" \
-  "${RUN_SUITE_ARGS[@]}"
+run_suite
 
 
 # ---------------------------------------------------------------------------

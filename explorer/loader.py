@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
 import yaml
+
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from metrics import ReliabilityStats, reliability_metrics
+except ModuleNotFoundError:
+    from explorer.metrics import ReliabilityStats, reliability_metrics
 
 
 @dataclass
@@ -21,6 +26,7 @@ class RunStats:
     accuracy_by_database: dict[str, float]  # database -> pass rate
     error_distribution: Counter[str]  # error_class -> count
     tool_usage: Counter[str]  # tool_name -> total calls
+    reliability: ReliabilityStats | None = None
 
 
 @dataclass
@@ -30,6 +36,8 @@ class RunData:
     stats: RunStats
     malformed_count: int = 0
     source_file: str = "results.jsonl"
+    groups: dict[str, list[dict]] = field(default_factory=dict)
+    n_iterations: int = 0
 
 
 def classify_submit_error(record: dict) -> str:
@@ -65,7 +73,7 @@ def classify_submit_error(record: dict) -> str:
     return "Other"
 
 
-def _compute_stats(records: list[dict]) -> RunStats:
+def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = None) -> RunStats:
     n_total = len(records)
     n_passed = sum(1 for r in records if r.get("execution_accuracy", False))
     avg_input = sum(r.get("mean_prompt_tokens") or 0 for r in records) / max(n_total, 1)
@@ -110,11 +118,16 @@ def _compute_stats(records: list[dict]) -> RunStats:
         accuracy_by_database=accuracy_by_database,
         error_distribution=error_distribution,
         tool_usage=tool_usage,
+        reliability=reliability_metrics(groups or {}),
     )
 
 
 def _has_results(d: Path) -> bool:
-    return (d / "results.jsonl").exists() or (d / "results_smaller.jsonl").exists()
+    return (
+        bool(list(d.glob("results_iter*.jsonl")))
+        or (d / "results.jsonl").exists()
+        or (d / "results_smaller.jsonl").exists()
+    )
 
 
 def list_runs(results_root: Path) -> dict[str, list[str]]:
@@ -147,31 +160,60 @@ def list_runs(results_root: Path) -> dict[str, list[str]]:
     return runs
 
 
-def load_run(path: Path) -> RunData:
-    """Load records and config from results/<baseline>/<date>/<run>/."""
-    # Prefer the smaller projection if it exists; fall back to the full file.
-    smaller = path / "results_smaller.jsonl"
-    full = path / "results.jsonl"
-    if smaller.exists():
-        source = smaller
-    else:
-        source = full
+def _iter_num(p: Path) -> int:
+    """Extract the iteration index from a results_iter{N}.jsonl filename."""
+    m = re.search(r"results_iter(\d+)", p.name)
+    return int(m.group(1)) if m else 0
 
+
+def _read_jsonl(source: Path) -> tuple[list[dict], int]:
     records: list[dict] = []
     malformed = 0
-    if source.exists():
-        with source.open(encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    malformed += 1
+    with source.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                malformed += 1
+    return records, malformed
+
+
+def load_run(path: Path) -> RunData:
+    """Load records and config from results/<baseline>/<date>/<run>/.
+
+    Prefers per-iteration files (results_iter*.jsonl). Falls back to the legacy
+    single file (results_smaller.jsonl, then results.jsonl), treated as iteration 0.
+    """
+    iter_files = sorted(path.glob("results_iter*.jsonl"), key=_iter_num)
+    records: list[dict] = []
+    malformed = 0
+    if iter_files:
+        for f in iter_files:
+            recs, m = _read_jsonl(f)
+            records.extend(recs)
+            malformed += m
+        source_file = f"results_iter*.jsonl ({len(iter_files)} files)"
+    else:
+        smaller = path / "results_smaller.jsonl"
+        full = path / "results.jsonl"
+        source = smaller if smaller.exists() else full
+        if source.exists():
+            records, malformed = _read_jsonl(source)
+        source_file = source.name
 
     for r in records:
         r["_error_class"] = classify_submit_error(r)
+        r.setdefault("iteration", 0)
+
+    groups: dict[str, list[dict]] = {}
+    for r in records:
+        groups.setdefault(r.get("instance_id", ""), []).append(r)
+    for g in groups.values():
+        g.sort(key=lambda r: r.get("iteration", 0))
+    n_iterations = len({r.get("iteration", 0) for r in records}) if records else 0
 
     config: dict = {}
     config_path = path / "config.yaml"
@@ -182,17 +224,20 @@ def load_run(path: Path) -> RunData:
     return RunData(
         records=records,
         config=config,
-        stats=_compute_stats(records),
+        stats=_compute_stats(records, groups),
         malformed_count=malformed,
-        source_file=source.name,
+        source_file=source_file,
+        groups=groups,
+        n_iterations=n_iterations,
     )
 
 
 def join_runs(runs: dict[str, RunData]) -> "pd.DataFrame":
     """Merge N RunData objects on instance_id into a comparison DataFrame.
 
-    Columns: instance_id, database, Question, then one column per run label
-    with values ✓ (passed), ✗ (failed), or — (task absent in that run).
+    Columns: instance_id, database, Question, then one column per run label with
+    values "c/n" (c passes out of n samples for that instance) or "—" (task
+    absent in that run).
     """
     all_ids: dict[str, dict] = {}
     for run_data in runs.values():
@@ -206,23 +251,16 @@ def join_runs(runs: dict[str, RunData]) -> "pd.DataFrame":
                     "Question": (q[:80] + "…") if len(q) > 80 else q,
                 }
 
-    id_to_records: dict[str, dict[str, dict]] = {}
-    for label, run_data in runs.items():
-        for r in run_data.records:
-            iid = r.get("instance_id", "")
-            id_to_records.setdefault(iid, {})[label] = r
-
     rows = []
     for iid, base in all_ids.items():
         row = dict(base)
-        for label in runs:
-            record = id_to_records.get(iid, {}).get(label)
-            if record is None:
+        for label, run_data in runs.items():
+            group = run_data.groups.get(iid)
+            if not group:
                 row[label] = "—"
-            elif record.get("execution_accuracy"):
-                row[label] = "✓"
             else:
-                row[label] = "✗"
+                c = sum(1 for r in group if r.get("execution_accuracy"))
+                row[label] = f"{c}/{len(group)}"
         rows.append(row)
 
     return pd.DataFrame(rows)

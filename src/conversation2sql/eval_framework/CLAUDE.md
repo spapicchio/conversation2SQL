@@ -4,7 +4,7 @@ Orchestrates the full evaluation pipeline and defines shared state types.
 
 ## Key files
 
-- `main_pipe_workflow.py` — `workflow_evaluation_pipeline` is the top-level entry point called from `main.py`. It initialises models, loads tasks, runs the agent per task, and writes JSONL output. Results land in `<output_dir>/results.jsonl` (full) and `results_smaller.jsonl` (projected subset of fields).
+- `main_pipe_workflow.py` — `workflow_evaluation_pipeline` is the top-level entry point called from `cli.py`/`main.py`. It initialises models, loads tasks, runs the agent for every (iteration, task) pair, and writes JSONL output. It runs `num_iterations` passes of the dataset (collapsed to 1 when predictor `temperature <= 0`) and writes one file per iteration: `<output_dir>/results_iter{i}.jsonl`. Returns `None` — records are streamed to disk, not accumulated in memory.
 - `state.py` — all shared Pydantic types: `TaskData` (one evaluation task), `ColumnMeaningEntry`, `ExternalKnowledgeEntry`, `FollowUpPayload`, `EvaluationMetrics`, `EvaluationOutput`.
 
 ## TaskData
@@ -18,7 +18,7 @@ Orchestrates the full evaluation pipeline and defines shared state types.
 
 ## Output records
 
-`_save_record` appends one JSON line per task. The `_smaller.jsonl` projection keeps only the fields listed in `keep_vars` (see `main_pipe_workflow.py`). `execution_accuracy` comes from `submit_sql`'s `passed` field.
+`_save_record` appends one JSON line per (task, iteration). Each record carries an `iteration` field (0..num_iterations-1) and lands in `results_iter{iteration}.jsonl`. Aggregation across iterations (mean/std, pass@k, etc.) is done downstream in the explorer app, not in the pipeline. `execution_accuracy` comes from the last `submit_sql` ToolMessage's `passed` field.
 
 ## Gotchas
 

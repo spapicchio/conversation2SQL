@@ -56,24 +56,26 @@ FAKE_JOB_PATH="${DEST_DIR}/${MY_SLURM_JOB_ID}.sh"
 cp "$JOB_SCRIPT" "$FAKE_JOB_PATH"
 chmod 770 "$FAKE_JOB_PATH"
 
+# Snapshot the full exported environment so eval_payload.sh runs with
+# exactly the same vars that were set by `just eval`.  Using `export -p`
+# (bash built-in) produces `declare -x VAR=value` lines that are safe to
+# source — no whitelist needed, so adding new params never requires touching
+# this file.
+ENV_SNAPSHOT="${DEST_DIR}/job_env.sh"
+{
+  export -p
+  # Override session-specific vars that were set after export -p was captured.
+  printf 'export DEST_DIR=%q\n'         "${DEST_DIR}"
+  printf 'export MY_SLURM_JOB_ID=%q\n' "${MY_SLURM_JOB_ID}"
+} > "${ENV_SNAPSHOT}"
+
 # Submit the job
 LOG_FOLDER="${DEST_DIR}/tmux_log"
 if [ -z "${2:-}" ]; then
   log_section '[SUBMIT_AND_LOG]  NOT sending with sbatch' "${MY_SLURM_JOB_ID}"
   mkdir -p "${LOG_FOLDER}"
   tmux new-session -d -s "${MY_SLURM_JOB_ID}" \
-    "BASE_WORK=${BASE_WORK} \
-    JOB_NAME=${JOB_NAME} \
-    DEST_DIR=${DEST_DIR} \
-    TIME_TAG=${TIME_TAG} \
-    DATE_DIR=${DATE_DIR} \
-    MY_SLURM_JOB_ID=${MY_SLURM_JOB_ID} \
-    CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1} \
-    EVAL_MODEL=${EVAL_MODEL:-} \
-    EVAL_VARIANT=${EVAL_VARIANT:-} \
-    EVAL_BASELINE=${EVAL_BASELINE:-} \
-    ENABLE_THINKING=${ENABLE_THINKING:-} \
-    DEBUG=${DEBUG:-} \
+    "source ${ENV_SNAPSHOT} && \
     ${FAKE_JOB_PATH} 2>&1 | \
     stdbuf -oL tee -a ${LOG_FOLDER}/all.log | \
     stdbuf -oL tee >(stdbuf -oL grep 'WARNING' >> ${LOG_FOLDER}/warning.log) | \

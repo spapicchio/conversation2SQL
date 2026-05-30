@@ -11,7 +11,7 @@ pipeline:
   output_folder: "results"  # Folder to save results and logs
   baseline: "no_tool" # (e.g., "no_tool", "tools_only", "tools_user", "bird_full")
   concurrency: 16  # Number of tasks processed concurrently; raise to e.g. 8 to saturate VLLM
-
+  num_iterations: 1  # repeat the dataset N times for statistical relevance
 
 reader:
   # dataset_name_jsonl: 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'

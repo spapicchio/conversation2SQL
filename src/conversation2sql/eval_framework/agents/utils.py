@@ -6,6 +6,10 @@ from jinja2 import Template
 from langchain_core.messages import BaseMessage, AIMessage, ToolMessage
 from langchain_litellm import ChatLiteLLM
 
+from conversation2sql.eval_framework.agents.utils_extract_sql_from_response import (
+    extract_sql_from_response,
+)
+
 
 def utils_single_msg_to_str(message: BaseMessage) -> str:
     """Convert a single LangChain `BaseMessage` to a human-readable string.
@@ -34,7 +38,23 @@ def utils_single_msg_to_str(message: BaseMessage) -> str:
         raw_text = str(message.content)
 
     return raw_text
-    
+
+
+def utils_extract_sql_from_ai_message(message: AIMessage) -> str | None:
+    """Extract a SQL block from an `AIMessage`.
+
+    Reasoning models emit `content` as a list of blocks; prefer the `text`
+    block over the `thinking` block so we parse the answer rather than the
+    chain-of-thought, then fall back to the whole stringified content so
+    non-reasoning models still work.
+    """
+    if isinstance(message.content, list):
+        for block in message.content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                sql = extract_sql_from_response(block["text"])
+                if sql is not None:
+                    return sql
+    return extract_sql_from_response(utils_single_msg_to_str(message))
 
 
 def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:

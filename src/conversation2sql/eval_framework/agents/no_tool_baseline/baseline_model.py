@@ -14,6 +14,7 @@ from conversation2sql.eval_framework.agents.no_tool_baseline.prompts import (
 )
 from conversation2sql.eval_framework.agents.utils import (
     utils_extract_ai_metadata,
+    utils_extract_sql_from_ai_message,
     utils_single_msg_to_str,
 )
 from conversation2sql.eval_framework.state import TaskData
@@ -41,20 +42,9 @@ def run_baseline_no_tool(
 
     ai_msg: AIMessage = model_agent.invoke(user_messages)  # pyrefly: ignore
 
-    # Extract the SQL from the Text block type (instead of the thinking block)
-    sql = None
-    if isinstance(ai_msg.content, list):
-        for content in ai_msg.content:
-            if content['type'] == 'text':
-                sql = extract_sql_from_response(content['text'])
-                if sql is not None:
-                    break
-
-    # If the SQL is still NONE, try to extract from the whole response content as a fallback
+    sql = utils_extract_sql_from_ai_message(ai_msg)
     raw_text = utils_single_msg_to_str(ai_msg)
-    if sql is None:
-        sql = extract_sql_from_response(raw_text)
-    
+
     if sql is None:
         submit_outcome: dict = {
             "passed": False,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -104,11 +105,32 @@ with tab_results:
     c4.metric("Avg Cost", f"${stats.avg_cost:.5f}")
     c5.metric("Avg Budget Remaining", f"{stats.avg_budget_remaining:.1f}")
 
+    # Reliability metrics (multi-iteration runs only)
+    if run.n_iterations >= 2 and stats.reliability is not None:
+        rel = stats.reliability
+        st.subheader(f"Reliability ({run.n_iterations} iterations)")
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("Average P̄", f"{rel.avg_performance * 100:.1f}%")
+        r2.metric("Aptitude A⁹⁰", f"{rel.aptitude * 100:.1f}%")
+        r3.metric("Unreliability U₁₀⁹⁰", f"{rel.unreliability * 100:.1f}%")
+        r4.metric("Reliability R", f"{rel.reliability * 100:.1f}%")
+        if rel.passk:
+            passk_df = pd.DataFrame(
+                [{"k": k, "pass@k": v} for k, v in sorted(rel.passk.items())]
+            )
+            st.altair_chart(
+                alt.Chart(passk_df).mark_line(point=True).encode(
+                    x=alt.X("k:Q", scale=alt.Scale(nice=False)),
+                    y=alt.Y("pass@k:Q", scale=alt.Scale(domain=[0, 1])),
+                ).properties(height=250, title="pass@k"),
+                use_container_width=True,
+            )
+    elif run.n_iterations == 1:
+        st.caption("Single-iteration run — reliability metrics not applicable.")
+
     # Charts: accuracy by database + error distribution + tool usage (hidden for no_tool baseline)
     has_tools = bool(stats.tool_usage)
     chart_cols = st.columns(3 if has_tools else 2)
-
-    import altair as alt
 
     with chart_cols[0]:
         st.subheader("Accuracy by Database")
@@ -146,63 +168,136 @@ with tab_results:
 
     st.divider()
 
-    # Task list with filters
     st.subheader("Tasks")
-    f1, f2, f3 = st.columns([1, 2, 3])
-    with f1:
-        pass_filter = st.radio("Pass / Fail", ["All", "Passed", "Failed"], horizontal=True)
-    with f2:
-        all_error_classes = sorted({r.get("_error_class", "Other") for r in run.records})
-        error_filter = st.multiselect(
-            "Error Class", all_error_classes, default=all_error_classes
+
+    if run.n_iterations >= 2:
+        # ── Per-instance view (multi-iteration) ──────────────────────────────
+        f1, f2 = st.columns([1, 3])
+        with f1:
+            pass_filter = st.radio(
+                "Pass / Fail", ["All", "All Passed", "All Failed"], horizontal=True
+            )
+        with f2:
+            search = st.text_input("Search question", placeholder="substring…")
+
+        instance_rows = []
+        for iid, group in run.groups.items():
+            n = len(group)
+            c = sum(1 for r in group if r.get("execution_accuracy"))
+            q = _question(group[0])
+            instance_rows.append(
+                {
+                    "instance_id": iid,
+                    "database": group[0].get("selected_database", ""),
+                    "Question": (q[:80] + "…") if len(q) > 80 else q,
+                    "pass_rate": f"{c}/{n}",
+                    "_c": c,
+                    "_n": n,
+                    "avg_cost": sum(r.get("total_cost") or 0 for r in group) / n,
+                }
+            )
+
+        if pass_filter == "All Passed":
+            instance_rows = [r for r in instance_rows if r["_c"] == r["_n"]]
+        elif pass_filter == "All Failed":
+            instance_rows = [r for r in instance_rows if r["_c"] == 0]
+        if search:
+            instance_rows = [
+                r for r in instance_rows if search.lower() in r["Question"].lower()
+            ]
+
+        if not instance_rows:
+            st.info("No tasks match the current filters.")
+            st.stop()
+
+        df = pd.DataFrame(
+            [
+                {
+                    "#": i + 1,
+                    "instance_id": r["instance_id"],
+                    "database": r["database"],
+                    "Question": r["Question"],
+                    "pass_rate": r["pass_rate"],
+                    "avg_cost": r["avg_cost"],
+                }
+                for i, r in enumerate(instance_rows)
+            ]
         )
-    with f3:
-        search = st.text_input("Search question", placeholder="substring…")
+        event = st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+        )
+        selected_indices = event.selection.rows
+        if not selected_indices:
+            st.stop()
 
-    filtered = run.records
-    if pass_filter == "Passed":
-        filtered = [r for r in filtered if r.get("execution_accuracy")]
-    elif pass_filter == "Failed":
-        filtered = [r for r in filtered if not r.get("execution_accuracy")]
-    if error_filter:
-        filtered = [r for r in filtered if r.get("_error_class", "Other") in error_filter]
-    if search:
-        filtered = [r for r in filtered if search.lower() in _question(r).lower()]
+        selected_iid = instance_rows[selected_indices[0]]["instance_id"]
+        group = run.groups[selected_iid]
+        st.divider()
+        iters = [r.get("iteration", 0) for r in group]
+        chosen = st.selectbox("Iteration", iters, format_func=lambda i: f"iteration {i}")
+        selected_record = next(r for r in group if r.get("iteration", 0) == chosen)
+        render_conversation(selected_record)
+    else:
+        # ── Per-record view (single iteration) — unchanged behavior ──────────
+        f1, f2, f3 = st.columns([1, 2, 3])
+        with f1:
+            pass_filter = st.radio("Pass / Fail", ["All", "Passed", "Failed"], horizontal=True)
+        with f2:
+            all_error_classes = sorted({r.get("_error_class", "Other") for r in run.records})
+            error_filter = st.multiselect(
+                "Error Class", all_error_classes, default=all_error_classes
+            )
+        with f3:
+            search = st.text_input("Search question", placeholder="substring…")
 
-    if not filtered:
-        st.info("No tasks match the current filters.")
-        st.stop()
+        filtered = run.records
+        if pass_filter == "Passed":
+            filtered = [r for r in filtered if r.get("execution_accuracy")]
+        elif pass_filter == "Failed":
+            filtered = [r for r in filtered if not r.get("execution_accuracy")]
+        if error_filter:
+            filtered = [r for r in filtered if r.get("_error_class", "Other") in error_filter]
+        if search:
+            filtered = [r for r in filtered if search.lower() in _question(r).lower()]
 
-    rows = []
-    for i, r in enumerate(filtered):
-        q = _question(r)
-        rows.append(
-            {
-                "#": i + 1,
-                "instance_id": r.get("instance_id", ""),
-                "database": r.get("selected_database", ""),
-                "Question": (q[:80] + "…") if len(q) > 80 else q,
-                "error_class": r.get("_error_class", ""),
-                "Accuracy": "✓" if r.get("execution_accuracy") else "✗",
-                "input_tokens": r.get("mean_prompt_tokens", 0),
-                "output_tokens": r.get("mean_completion_tokens", 0),
-                "cost": r.get("total_cost", 0.0),
-            }
+        if not filtered:
+            st.info("No tasks match the current filters.")
+            st.stop()
+
+        rows = []
+        for i, r in enumerate(filtered):
+            q = _question(r)
+            rows.append(
+                {
+                    "#": i + 1,
+                    "instance_id": r.get("instance_id", ""),
+                    "database": r.get("selected_database", ""),
+                    "Question": (q[:80] + "…") if len(q) > 80 else q,
+                    "error_class": r.get("_error_class", ""),
+                    "Accuracy": "✓" if r.get("execution_accuracy") else "✗",
+                    "input_tokens": r.get("mean_prompt_tokens", 0),
+                    "output_tokens": r.get("mean_completion_tokens", 0),
+                    "cost": r.get("total_cost", 0.0),
+                }
+            )
+
+        df = pd.DataFrame(rows)
+        event = st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
         )
 
-    df = pd.DataFrame(rows)
-    event = st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        on_select="rerun",
-        selection_mode="single-row",
-    )
+        selected_indices = event.selection.rows
+        if not selected_indices:
+            st.stop()
 
-    selected_indices = event.selection.rows
-    if not selected_indices:
-        st.stop()
-
-    selected_record = filtered[selected_indices[0]]
-    st.divider()
-    render_conversation(selected_record)
+        selected_record = filtered[selected_indices[0]]
+        st.divider()
+        render_conversation(selected_record)
