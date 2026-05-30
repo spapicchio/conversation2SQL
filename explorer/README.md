@@ -18,9 +18,13 @@ results/
     └── <HH_MM_SS>__<slug>/
         ├── tmux_log               # directory with run info
         ├── <bash_id>.sh           # the bash file used to launch the exp
-        ├── results.jsonl          # the result file
+        ├── results_iter*.jsonl    # one file per iteration (or legacy results.jsonl)
         └── config.yaml            # optional run config
 ```
+
+Runs with `num_iterations > 1` produce one `results_iter{i}.jsonl` per iteration; the
+explorer groups them by `instance_id` to compute reliability metrics. Legacy single-file
+runs (`results.jsonl` / `results_smaller.jsonl`) load as a single iteration.
 
 The run folder name is generated automatically by the pipeline and encodes the key parameters that distinguish runs: model name, schema type (`ddl` or `toon`), and optional flags (`lin` = KB linearized, `gt-db` = GT tables only, `gt-kb` = GT KB only).
 
@@ -30,6 +34,7 @@ The run folder name is generated automatically by the pipeline and encodes the k
 |---|---|
 | **Sidebar** | Cascading selectors (date → run). Shows model name and generation params (collapsible). |
 | **Metrics** | Accuracy, avg input/output tokens, avg cost, avg budget remaining. |
+| **Reliability** | For multi-iteration runs (`results_iter*.jsonl`): Average P̄, Aptitude A⁹⁰, Unreliability U₁₀⁹⁰, Reliability R, and a pass@k curve. Hidden for single-iteration runs. |
 | **Accuracy by Database** | Pass rate per database in the selected run. |
 | **Error Distribution** | Breakdown of why failed tasks failed (see below). |
 | **Tool Usage** | Per-tool call counts (hidden for baselines with no tools). |
@@ -61,6 +66,7 @@ Navigate to **Run Comparison** in the Streamlit sidebar to compare multiple runs
 |---|---|
 | **Sidebar** | Multi-select any number of runs (date / run). Requires ≥ 2. |
 | **Stats** | Per-run metric cards: accuracy, avg tokens, avg cost, avg budget remaining. |
+| **Reliability** | Per-run P̄, Aptitude, Unreliability, Reliability, and pass@N (multi-iteration runs only). |
 | **Charts** | Accuracy by database, error distribution, and tool usage — one chart per run, aligned in columns. |
-| **Task table** | One row per `instance_id`, one column per run (✓ / ✗ / —). Filter by agreement, and search by question text. |
-| **Conversation viewer** | Click a row to view conversations side by side. With > 2 runs, two dropdowns let you choose which pair to compare. |
+| **Task table** | One row per `instance_id`, one column per run showing pass count `c/n` (or — when absent). Filter by agreement, and search by question text. |
+| **Conversation viewer** | Click a row to view conversations side by side; an iteration selector appears per pane for multi-iteration runs. With > 2 runs, two dropdowns let you choose which pair to compare. |

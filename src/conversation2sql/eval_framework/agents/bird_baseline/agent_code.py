@@ -1,6 +1,8 @@
-from conversation2sql.eval_framework.agents.utils_extract_sql_from_response import extract_sql_from_response
 from typing import Any
-from conversation2sql.eval_framework.agents.utils import utils_process_single_msg
+from conversation2sql.eval_framework.agents.utils import (
+    utils_extract_sql_from_ai_message,
+    utils_process_single_msg,
+)
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     ToolCallLimitMiddleware,
@@ -9,6 +11,7 @@ from langchain.agents.middleware import (
     ToolRetryMiddleware,
 )
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_callback import (
     tool_wrapper_patience_and_submit,
@@ -104,10 +107,33 @@ def run_agent_bird_baseline(
     }
 
     response: CustomAgentState = agent.invoke(agent_state, context=single_task)  # pyrefly: ignore
+    # Recover the predicted SQL from the raw messages *before* utils_process_agent_response
+    # pops "messages" off the state.
+    predicted_sql = _extract_predicted_sql(response["messages"])  # pyrefly: ignore
     output = utils_process_agent_response(response, tool_costs=TOOL_COSTS)
-    raw_text = response["messages"][-1]["content"] if response["messages"] else ""  # pyrefly: ignore
-    output['predicted_sql'] = extract_sql_from_response(raw_text)
+    output["predicted_sql"] = predicted_sql
     return output
+
+
+def _extract_predicted_sql(messages: list[BaseMessage]) -> str | None:
+    """Recover the SQL the agent settled on.
+
+    Prefers the `sql` argument of the last `submit_sql` tool call (the SQL the
+    agent actually submitted for evaluation). Falls back to parsing the last
+    AIMessage's text when the agent never submitted (e.g. budget exhausted).
+    """
+    for message in reversed(messages):
+        for tool_call in getattr(message, "tool_calls", None) or []:
+            if tool_call.get("name") == "submit_sql":
+                sql = (tool_call.get("args") or {}).get("sql")
+                if sql:
+                    return sql
+    for message in reversed(messages):
+        if isinstance(message, AIMessage):
+            sql = utils_extract_sql_from_ai_message(message)
+            if sql is not None:
+                return sql
+    return None
 
 
 def utils_process_agent_response(

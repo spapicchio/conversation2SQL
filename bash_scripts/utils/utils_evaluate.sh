@@ -49,38 +49,22 @@ export OMP_NUM_THREADS=50   # limit OpenMP threads to avoid CPU oversubscription
 
 
 # ---------------------------------------------------------------------------
-# build_run_slug <baseline> "$@"   (remaining flags forwarded from run_suite)
+# build_run_slug
 #
 # Prints a short identifier for the run, e.g.:
 #   no_tool__Qwen3.5-9B__ddl__lin__gt-db
 #
-# Components (separated by "__"):
-#   1. baseline name        – what evaluation mode is used
-#   2. model basename       – last path component of --predictor_model_name,
-#                             with any characters outside [A-Za-z0-9._-] replaced by "-"
-#   3. schema type          – value of --database_schema_type (default: ddl)
-#   4. optional suffixes    – "lin"   if --is_kb_linearized true
-#                             "gt-db" if --read_only_gt_tables true
-#                             "gt-kb" if --read_only_gt_kb     true
+# Reads from the Python-compatible env vars set by eval_payload.sh:
+#   BASELINE, PREDICTOR_MODEL_NAME, DATABASE_SCHEMA_TYPE,
+#   IS_KB_LINEARIZED, READ_ONLY_GT_TABLES, READ_ONLY_GT_KB
 # ---------------------------------------------------------------------------
 build_run_slug() {
-  local baseline="$1"
-  shift
-
-  # Walk the remaining flag-value pairs and capture the ones we care about.
-  # We scan by index so we can safely skip the value after each matched flag.
-  local model_name="" schema_type="ddl" is_lin="false" gt_db="false" gt_kb="false"
-  local args=("$@")
-  local i
-  for ((i = 0; i < ${#args[@]}; i++)); do
-    case "${args[$i]}" in
-      --predictor_model_name)  model_name="${args[$((i+1))]}";  i=$((i+1)) ;;
-      --database_schema_type)  schema_type="${args[$((i+1))]}"; i=$((i+1)) ;;
-      --is_kb_linearized)      is_lin="${args[$((i+1))]}";      i=$((i+1)) ;;
-      --read_only_gt_tables)   gt_db="${args[$((i+1))]}";       i=$((i+1)) ;;
-      --read_only_gt_kb)       gt_kb="${args[$((i+1))]}";       i=$((i+1)) ;;
-    esac
-  done
+  local baseline="${BASELINE:-no_tool}"
+  local model_name="${PREDICTOR_MODEL_NAME:-}"
+  local schema_type="${DATABASE_SCHEMA_TYPE:-ddl}"
+  local is_lin="${IS_KB_LINEARIZED:-false}"
+  local gt_db="${READ_ONLY_GT_TABLES:-false}"
+  local gt_kb="${READ_ONLY_GT_KB:-false}"
 
   # Take only the last component of the model path (e.g. "Qwen/Qwen3.5-9B" → "Qwen3.5-9B"),
   # then replace any character that is not alphanumeric / dot / underscore / hyphen with "-",
@@ -98,21 +82,18 @@ build_run_slug() {
 
 
 # ---------------------------------------------------------------------------
-# run_suite <baseline> <predictor_api_base> <user_sim_api_base> [extra flags...]
+# run_suite
 #
-# Creates a dated output directory under RESULTS_ROOT, then launches the
-# evaluation pipeline pointing at it.  Directory layout:
+# Reads all run parameters from env vars (set by eval_payload.sh) so no
+# CLI flag translation is needed.  Creates a dated output directory under
+# RESULTS_ROOT, exports OUTPUT_FOLDER, then launches the Python pipeline.
+#
+# Directory layout:
 #   RESULTS_ROOT/<YYYY_MM_DD>/<HH_MM_SS>__<slug>/
 # ---------------------------------------------------------------------------
 run_suite() {
-  local baseline="$1"
-  local predictor_vllm_api_base="$2"
-  local user_simulator_vllm_api_base="$3"
-  shift 3
-
-  # Derive the human-readable slug from the flags that follow.
   local slug
-  slug=$(build_run_slug "${baseline}" "$@")
+  slug=$(build_run_slug)
 
   # Build and create the output directory for this specific run.
   # When launched via submit_and_log.sh, DEST_DIR is already set to the
@@ -129,22 +110,18 @@ run_suite() {
   fi
   mkdir -p "${run_dir}"
 
-  log_section "Running suite: ${baseline} → ${run_dir}" "${MY_SLURM_JOB_ID:-}"
+  log_section "Running suite: ${BASELINE:-no_tool} → ${run_dir}" "${MY_SLURM_JOB_ID:-}"
 
-  local launcher=(
-    uv run conv2sql run
-    --config "${BASE_WORK}/configs/eval_pipeline_config.yaml"
-    --baseline "${baseline}"
-    --predictor_vllm_api_base "${predictor_vllm_api_base}"
-    --user_simulator_vllm_api_base "${user_simulator_vllm_api_base}"
-    --output_folder "${run_dir}"   # Python writes results.jsonl directly here
-  )
-
+  # All model, schema, and pipeline params are already in the environment as
+  # Python-compatible var names (PREDICTOR_*, DATABASE_SCHEMA_TYPE, etc.).
+  # PydanticParser reads them directly — only the output folder needs a flag
+  # because it is determined here, not by the caller.
   CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
   TOKENIZERS_PARALLELISM=true \
   VLLM_WORKER_MULTIPROC_METHOD=spawn \
-  "${launcher[@]}" \
-  "$@"   # forward all remaining flags (model params, schema type, debug, …) to Python
+  OUTPUT_FOLDER="${run_dir}" \
+  uv run conv2sql run \
+    --config "${BASE_WORK}/configs/eval_pipeline_config.yaml"
 
-  log_section "=== Done ${baseline} ===" "${MY_SLURM_JOB_ID:-}"
+  log_section "=== Done ${BASELINE:-no_tool} ===" "${MY_SLURM_JOB_ID:-}"
 }
