@@ -6,8 +6,6 @@ def _extract_tables_from_ddl_format(schema_string, table_names):
     Extracts tables, sample data, foreign keys, and indexes.
     Filters FKs and Indexes to ensure they only reference the selected tables.
     """
-    # Normalize inputs for case-insensitive matching
-    target_tables_lower = [t.lower() for t in table_names]
     extracted_sections = []
     found_tables = []
 

@@ -9,7 +9,7 @@ Loads and prepares BIRD-Interact tasks from JSONL + per-DB asset files.
 ## Per-DB asset structure
 
 For each `db_name` the reader expects under `dataset_path/`:
-- `{db_name}/{db_name}_schema.txt` — DDL schema
+- `{db_name}/{db_name}_{database_schema_type}.txt` — schema file; `database_schema_type` defaults to `"ddl"`, so the default file is `{db_name}_ddl.txt`
 - `{db_name}/{db_name}_column_meaning_base.json` — column meanings
 - `{db_name}/{db_name}_kb.jsonl` — external knowledge base
 
@@ -28,7 +28,7 @@ where `m_amb = len(critical_ambiguity) + len(knowledge_ambiguity)` for each task
 
 ## Skipped instances
 
-Six hard-coded `instance_id` values are always skipped (`skipped_instance_id` set in `load_bird_interact_as_tasks`) due to known dataset issues. Do not remove them without verifying those tasks are fixed upstream.
+Twelve hard-coded `instance_id` values are always skipped (`skipped_instance_id` set in `load_bird_interact_as_tasks` — 6 from DB FULL, 6 from DB LITE) due to known dataset issues. Do not remove them without verifying those tasks are fixed upstream.
 
 ## Full dataset (bird-interact-full)
 

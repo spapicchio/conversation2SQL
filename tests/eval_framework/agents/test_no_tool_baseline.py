@@ -1,6 +1,6 @@
 import pytest
 
-from conversation2sql.eval_framework.agents.no_tool_baseline.baseline_model import (
+from conversation2sql.eval_framework.agents.utils_extract_sql_from_response import (
     extract_sql_from_response,
 )
 

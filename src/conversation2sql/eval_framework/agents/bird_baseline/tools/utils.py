@@ -3,8 +3,6 @@ import re
 from sqlglot import tokenize
 from sqlglot.tokens import TokenType
 
-MAX_RESULT_LENGTH = 500
-
 _CLAUSE_KEYWORDS = {
     TokenType.SELECT: "SELECT",
     TokenType.FROM: "FROM",

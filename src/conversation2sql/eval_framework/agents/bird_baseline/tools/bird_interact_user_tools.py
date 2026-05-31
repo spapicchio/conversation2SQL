@@ -66,14 +66,33 @@ def _extract_group_in_tag_pattern(content: str, pattern_tag: str = "s") -> str |
     return None
 
 
-def stage_1_parse_action(
-    clarification_question, task: TaskData, model_user_parsing: BaseChatModel
-) -> str:
-    """Stage 1: Action Parser — maps clarification question to action (AMB/LOC/UNA)."""
+def _flatten_content(content) -> str:
+    """Flatten an LLM response's content (str or list of blocks) into one string."""
+    if isinstance(content, list):
+        return "\n".join(
+            msg if isinstance(msg, str) else msg[msg["type"]] for msg in content
+        )
+    return content
 
-    sql_segments = "\n===\n".join(
-        _segment_sql_and_parse_in_str(sql) for sql in task.sol_sql
-    )
+
+def _segment_sol_sqls(task: TaskData) -> str:
+    """Render all ground-truth SQLs as clause-segmented text for the user-sim prompts."""
+    return "\n===\n".join(_segment_sql_and_parse_in_str(sql) for sql in task.sol_sql)
+
+
+def stage_1_parse_action(
+    clarification_question,
+    task: TaskData,
+    model_user_parsing: BaseChatModel,
+    sql_segments: str | None = None,
+) -> str:
+    """Stage 1: Action Parser — maps clarification question to action (AMB/LOC/UNA).
+
+    ``sql_segments`` is precomputed by ``ask_user_impl`` to avoid re-segmenting
+    the ground-truth SQL twice; it is derived from ``task`` when omitted.
+    """
+    if sql_segments is None:
+        sql_segments = _segment_sol_sqls(task)
 
     messages = build_llm_as_a_parser_messages(
         {
@@ -83,12 +102,7 @@ def stage_1_parse_action(
         }
     )
 
-    content = model_user_parsing.invoke(messages).content
-
-    if isinstance(content, list):
-        content = "\n".join(
-            [msg if isinstance(msg, str) else msg[msg["type"]] for msg in content]
-        )
+    content = _flatten_content(model_user_parsing.invoke(messages).content)
 
     parsed_content = _extract_group_in_tag_pattern(content, "s")
     return (
@@ -99,11 +113,14 @@ def stage_1_parse_action(
 
 
 def stage_2_generator(
-    action, clarification_question, task: TaskData, model_user_generator: BaseChatModel
+    action,
+    clarification_question,
+    task: TaskData,
+    model_user_generator: BaseChatModel,
+    sql_segments: str | None = None,
 ) -> str:
-    sql_segments = "\n===\n".join(
-        _segment_sql_and_parse_in_str(sql) for sql in task.sol_sql
-    )
+    if sql_segments is None:
+        sql_segments = _segment_sol_sqls(task)
 
     messages = build_llm_as_a_generator_messages(
         {
@@ -117,12 +134,7 @@ def stage_2_generator(
         }
     )
 
-    content = model_user_generator.invoke(messages).content
-
-    if isinstance(content, list):
-        content = "\n".join(
-            [msg if isinstance(msg, str) else msg[msg["type"]] for msg in content]
-        )
+    content = _flatten_content(model_user_generator.invoke(messages).content)
 
     parsed_content = _extract_group_in_tag_pattern(content, "s")
     return (
@@ -141,9 +153,13 @@ def ask_user_impl(
     model_user_parsing: BaseChatModel,
     model_user_generator: BaseChatModel,
 ) -> dict:
-    action = stage_1_parse_action(clarification_question, task, model_user_parsing)
+    # Segment the ground-truth SQLs once and reuse across both user-sim stages.
+    sql_segments = _segment_sol_sqls(task)
+    action = stage_1_parse_action(
+        clarification_question, task, model_user_parsing, sql_segments
+    )
     generated = stage_2_generator(
-        action, clarification_question, task, model_user_generator
+        action, clarification_question, task, model_user_generator, sql_segments
     )
     return {"user_answer": generated}
 
@@ -266,29 +282,3 @@ def submit_sql(
         ),
         indent=2,
     )
-
-
-if __name__ == "__main__":
-    # content = 'The AI collaborator is asking about our meaning of “downtime score,” which is an existing labeled ambiguity point. So we select that term.\n\n<s>labeled("downtime score")</s>'
-    # output = _extract_group_in_tag_pattern(
-    #     content=content,
-    #     # pattern_tag=pattern_tag,
-    # )
-
-    # print(output)
-    # sql = "SELECT \n    p.sitelabel,\n    om.mtbfh,\n    om.mttrh,\n    CASE \n        WHEN om.mtbfh IS NOT NULL AND (om.mtbfh + om.mttrh) > 0 \n        THEN om.mttrh / (om.mtbfh + om.mttrh)\n        ELSE NULL\n    END AS downtime_score\nFROM plants p\nJOIN plant_record pr ON p.sitekey = pr.sitetie\nJOIN operational_metrics om ON pr.snapkey = om.snapops\nWHERE p.sitelabel = 'Solar Plant West Davidport';"
-    sol_sqls = [
-        """SELECT om.mttrh / (om.mtbfh + om.mttrh) AS downtime_score\nFROM plant_record pr\nJOIN operational_metrics om ON pr.snapkey = om.snapops\nJOIN plants p ON pr.sitetie = p.sitekey\nWHERE p.sitelabel = 'Solar Plant West Davidport';"""
-    ]
-    sql = 'SELECT ROUND(CAST(om."mttrh" / (om."mtbfh" + om."mttrh") AS numeric), 4)\nFROM operational_metrics om\nJOIN plant_record pr ON om."snapops" = pr."snapkey"\nJOIN plants p ON pr."sitetie" = p."sitekey"\nWHERE LOWER(p."sitelabel") = \'solar plant west davidport\'\nLIMIT 1;'
-
-    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
-
-    output = submit_sql_impl(
-        sql=sql,
-        sol_sqls=sol_sqls,
-        db_dsn=db_dsn,
-        conditions=None,
-    )
-
-    print(output)

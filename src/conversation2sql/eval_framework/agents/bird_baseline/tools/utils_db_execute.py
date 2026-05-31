@@ -58,25 +58,28 @@ def process_decimals_recursive(item, decimal_places: int):
     - Fallthrough — anything else (str, None, dates, bool) passes through unchanged.
     """
 
-    # Build the rounding step as a Decimal (e.g. decimal_places=2 -> Decimal("0.01")).
-    # Using Decimal here keeps the precision exact, which matters for `quantize` below.
+    # Build the rounding step as a Decimal (e.g. decimal_places=2 -> Decimal("0.01")) once
+    # per top-level call. Using Decimal here keeps the precision exact for `quantize` below;
+    # the inner recursion reuses this quantizer rather than rebuilding it at every level.
     quantizer = Decimal(1).scaleb(-decimal_places)
-    if isinstance(item, Decimal):
-        # psycopg2 returns NUMERIC columns as Decimal — quantize for exact, banker-safe rounding.
-        return item.quantize(quantizer, rounding=ROUND_HALF_UP)
-    elif isinstance(item, float):
-        # Plain floats can't use Decimal.quantize; fall back to builtin round().
-        return round(item, decimal_places)
-    elif isinstance(item, (list, tuple)):
-        # Recurse into sequences and rebuild with the same container type (list stays list, tuple stays tuple).
-        return type(item)(process_decimals_recursive(x, decimal_places) for x in item)
-    elif isinstance(item, dict):
-        # Recurse into dict values; keys are left untouched since they aren't numeric payload.
-        return {
-            k: process_decimals_recursive(v, decimal_places) for k, v in item.items()
-        }
-    # Non-numeric, non-container values (str, None, bool, dates, ...) pass through unchanged.
-    return item
+
+    def _process(node):
+        if isinstance(node, Decimal):
+            # psycopg2 returns NUMERIC columns as Decimal — quantize for exact, banker-safe rounding.
+            return node.quantize(quantizer, rounding=ROUND_HALF_UP)
+        elif isinstance(node, float):
+            # Plain floats can't use Decimal.quantize; fall back to builtin round().
+            return round(node, decimal_places)
+        elif isinstance(node, (list, tuple)):
+            # Recurse into sequences and rebuild with the same container type (list stays list, tuple stays tuple).
+            return type(node)(_process(x) for x in node)
+        elif isinstance(node, dict):
+            # Recurse into dict values; keys are left untouched since they aren't numeric payload.
+            return {k: _process(v) for k, v in node.items()}
+        # Non-numeric, non-container values (str, None, bool, dates, ...) pass through unchanged.
+        return node
+
+    return _process(item)
 
 
 def preprocess_results(
@@ -143,11 +146,3 @@ def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters
 
     separator = "-" * min(max(len(header), *(len(r) for r in rows)), 200)
     return "\n".join([header, separator, *rows])
-
-
-if __name__ == "__main__":
-    sql = 'SELECT ROUND(CAST(om."mttrh" / (om."mtbfh" + om."mttrh") AS numeric), 4)\nFROM operational_metrics om\nJOIN plant_record pr ON om."snapops" = pr."snapkey"\nJOIN plants p ON pr."sitetie" = p."sitekey"\nWHERE LOWER(p."sitelabel") = \'solar plant west davidport\'\nLIMIT 1;'
-    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
-    exec_query, cur = _execute_query(sql, db_dsn)
-    # formatted = _format_result(exec_query, cur)
-    print(exec_query[0][cur[0][0]] is None)  # print the value of the first column in the first row

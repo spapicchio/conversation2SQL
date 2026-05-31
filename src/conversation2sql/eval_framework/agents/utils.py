@@ -212,8 +212,13 @@ def utils_create_model(
 
     # LiteLLM uses "{provider}/{model}" format
     # https://docs.litellm.ai/docs/providers
-
-    litellm_model = f"{model_provider}/{model_name}"
+    # When an api_base is given we target a local vLLM OpenAI-compatible server,
+    # which LiteLLM routes via the "hosted_vllm/" prefix instead of the provider.
+    litellm_model = (
+        f"hosted_vllm/{model_name}"
+        if api_base is not None
+        else f"{model_provider}/{model_name}"
+    )
     # reasoning + result
     model_kwargs: dict = {"max_completion_tokens": max_tokens}
     if reasoning_effort is not None:
@@ -238,7 +243,6 @@ def utils_create_model(
     if top_k is not None:
         kwargs["top_k"] = top_k
     if api_base is not None:
-        litellm_model = f"hosted_vllm/{model_name}"
         kwargs["api_base"] = api_base
 
     return ChatLiteLLM(**kwargs)

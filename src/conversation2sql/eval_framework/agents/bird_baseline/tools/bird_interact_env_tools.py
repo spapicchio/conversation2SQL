@@ -27,7 +27,6 @@ Cost summary (mirrors the original prompt):
 """
 
 import json
-import re
 
 import psycopg2
 from langchain_core.tools import tool
@@ -35,6 +34,7 @@ from langgraph.prebuilt import ToolRuntime
 from pydantic import BaseModel
 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents.bird_baseline.tools.utils import remove_comments
 from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute import (
     _execute_query,
     _format_result,
@@ -77,9 +77,7 @@ class ExecuteSQLResponse(BaseModel):
 # Pure implementation functions (testable without LangGraph runtime)
 # ---------------------------------------------------------------------------
 def execute_sql_impl(sql: str, db_dsn: str) -> ExecuteSQLResponse:
-    sql_cleaned = re.sub(r"--.*$", "", sql, flags=re.MULTILINE)
-    sql_cleaned = re.sub(r"/\*.*?\*/", "", sql_cleaned, flags=re.DOTALL)
-    sql_upper = sql_cleaned.strip().upper()
+    sql_upper = remove_comments(sql).upper()
     if not sql_upper.startswith(("SELECT", "WITH", "EXPLAIN")):
         return ExecuteSQLResponse(
             result="",
@@ -307,18 +305,3 @@ def get_all_knowledge_definitions(
         ),
         indent=2,
     )
-
-
-if __name__ == "__main__":
-    sql = "SELECT pr.snapkey, pr.sitetie, om.mtbfh, om.mttrh\nFROM plant_record pr\nJOIN plants p ON pr.sitetie = p.sitekey\nJOIN operational_metrics om ON pr.snapkey = om.snapops\nWHERE p.sitelabel = 'Solar Plant West Davidport';"
-    sql = "SELECT a.snapalrt, a.alrtstate, a.alrtc, a.maintprio, a.replprio\nFROM alert a\nJOIN plant_record pr ON a.snapalrt = pr.snapkey\nJOIN plants p ON pr.sitetie = p.sitekey\nWHERE p.sitelabel = 'Solar Plant West Davidport'"
-    sql = "SELECT i.inspectmode, i.inspectres, i.inspectdt, i.maintsched, i.dqscore\nFROM inspection i\nWHERE i.inspectmode IN (SELECT pr.snapkey FROM plant_record pr JOIN plants p ON pr.sitetie = p.sitekey WHERE p.sitelabel = 'Solar Plant West Davidport')"
-    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
-    response = execute_sql_impl(sql, db_dsn=db_dsn)
-    print(response.result)
-
-    result, desc = _execute_query(query=sql, db_dsn=db_dsn)
-    print()
-    print(result)
-    print()
-    print(desc)

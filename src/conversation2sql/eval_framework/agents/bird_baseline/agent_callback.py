@@ -40,33 +40,33 @@ def wrap_model_append_tool_message(
     if not tool_called_patience:
         response = handler(request)
         return ExtendedModelResponse(model_response=response)
-    else:
-        initial_user_patience = request.state["initial_user_patience"]  # pyrefly: ignore
-        updated_user_patience = request.state["updated_user_patience"]  # pyrefly: ignore
-        updated_user_patience = max(
-            updated_user_patience - sum(tool_called_patience), -1
-        )
-        # update user_patience and tool called patience
-        command = Command(
-            update={
-                "updated_user_patience": updated_user_patience,
-                "tool_called_patience": Overwrite([]),
-            }
-        )
-        message = request.messages[-1]
-        # this must be a tool call
-        if isinstance(message, ToolMessage):
-            modified_content = (
-                f"{message.content}"
-                f"\n\n[SYSTEM NOTE: Remaining budget: {updated_user_patience:.1f}/{initial_user_patience:.1f}]"
-            )
-            request.messages[-1].content = modified_content
 
-        response = handler(request)
-        return ExtendedModelResponse(
-            model_response=response,
-            command=command,
+    initial_user_patience = request.state["initial_user_patience"]  # pyrefly: ignore
+    updated_user_patience = request.state["updated_user_patience"]  # pyrefly: ignore
+    updated_user_patience = max(
+        updated_user_patience - sum(tool_called_patience), -1
+    )
+    # update user_patience and tool called patience
+    command = Command(
+        update={
+            "updated_user_patience": updated_user_patience,
+            "tool_called_patience": Overwrite([]),
+        }
+    )
+    message = request.messages[-1]
+    # this must be a tool call
+    if isinstance(message, ToolMessage):
+        modified_content = (
+            f"{message.content}"
+            f"\n\n[SYSTEM NOTE: Remaining budget: {updated_user_patience:.1f}/{initial_user_patience:.1f}]"
         )
+        request.messages[-1].content = modified_content
+
+    response = handler(request)
+    return ExtendedModelResponse(
+        model_response=response,
+        command=command,
+    )
 
 
 @wrap_tool_call

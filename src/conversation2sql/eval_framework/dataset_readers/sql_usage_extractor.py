@@ -243,6 +243,17 @@ def _build_scope(
     return Scope(alias_to_source=alias_to_source, source_columns=source_columns)
 
 
+def _iter_using_identifiers(using) -> list:
+    """Normalize a ``JOIN ... USING`` clause into a flat list of identifier nodes."""
+    if using is None:
+        return []
+    if isinstance(using, list):
+        return using
+    if hasattr(using, "expressions"):
+        return using.expressions
+    return [using]
+
+
 def _iter_from_sources(select: exp.Select) -> Iterable[exp.Expression]:
     from_expr = select.args.get("from_")
     if from_expr:
@@ -281,16 +292,7 @@ def _analyze_select(
         _record_column_usage(column, scope, usage, cte_columns, join_hints)
 
     for join in select.args.get("joins") or []:
-        using = join.args.get("using")
-        if using is None:
-            continue
-        if isinstance(using, list):
-            identifiers = using
-        elif hasattr(using, "expressions"):
-            identifiers = using.expressions
-        else:
-            identifiers = [using]
-        for identifier in identifiers:
+        for identifier in _iter_using_identifiers(join.args.get("using")):
             name = _safe_lower(getattr(identifier, "name", None))
             if name:
                 _record_unqualified_column(name, scope, usage, cte_columns, join_hints)
@@ -440,16 +442,7 @@ def _collect_join_column_hints(
                 if source in scope.source_columns or source in cte_columns:
                     hints[column_name].add(source)
 
-        using = join.args.get("using")
-        if using is None:
-            continue
-        if isinstance(using, list):
-            identifiers = using
-        elif hasattr(using, "expressions"):
-            identifiers = using.expressions
-        else:
-            identifiers = [using]
-        for identifier in identifiers:
+        for identifier in _iter_using_identifiers(join.args.get("using")):
             name = _safe_lower(getattr(identifier, "name", None))
             if not name:
                 continue

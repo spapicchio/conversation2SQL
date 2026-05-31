@@ -168,29 +168,18 @@ def print_summary_tables(summary: AnalysisSummary, output: Path) -> None:
     def _pct(n: int) -> str:
         return f"{100 * n / total_turns:.1f}%" if total_turns else "0%"
 
-    l2_table = Table(title="L2 Category Distribution")
-    l2_table.add_column("category", justify="left")
-    l2_table.add_column("count", justify="right")
-    l2_table.add_column("%", justify="right")
-    for cat, count in sorted(summary.l2_counts.items(), key=lambda x: -x[1]):
-        l2_table.add_row(cat, str(count), _pct(count))
-    console.print(l2_table)
-
-    l1_table = Table(title="L1 Category Distribution")
-    l1_table.add_column("category", justify="left")
-    l1_table.add_column("count", justify="right")
-    l1_table.add_column("%", justify="right")
-    for cat, count in sorted(summary.l1_counts.items(), key=lambda x: -x[1]):
-        l1_table.add_row(cat, str(count), _pct(count))
-    console.print(l1_table)
-
-    conf_table = Table(title="Confidence Distribution")
-    conf_table.add_column("level", justify="left")
-    conf_table.add_column("count", justify="right")
-    conf_table.add_column("%", justify="right")
-    for level, count in sorted(summary.confidence_counts.items(), key=lambda x: -x[1]):
-        conf_table.add_row(level, str(count), _pct(count))
-    console.print(conf_table)
+    for title, first_col, counts in [
+        ("L2 Category Distribution", "category", summary.l2_counts),
+        ("L1 Category Distribution", "category", summary.l1_counts),
+        ("Confidence Distribution", "level", summary.confidence_counts),
+    ]:
+        table = Table(title=title)
+        table.add_column(first_col, justify="left")
+        table.add_column("count", justify="right")
+        table.add_column("%", justify="right")
+        for key, count in sorted(counts.items(), key=lambda x: -x[1]):
+            table.add_row(key, str(count), _pct(count))
+        console.print(table)
 
     inst_table = Table(title="Per-Instance Breakdown")
     inst_table.add_column("instance_id", justify="left")

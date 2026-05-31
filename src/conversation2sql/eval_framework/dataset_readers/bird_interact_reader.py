@@ -11,9 +11,6 @@ from pathlib import Path
 
 import tqdm
 
-from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute import (
-    _execute_query,
-)
 from conversation2sql.eval_framework.dataset_readers.sql_usage_extractor import (
     extract_table_in_gt_sql,
 )
@@ -228,29 +225,6 @@ def _resolve_kb_context(
     return kb_full, masked_agent_kb, gt_knowledge_base
 
 
-def _is_query_empty(sql, db_dsn):
-    try:
-        result, cur = _execute_query(sql, db_dsn)
-    except Exception as e:
-        logger.warning(
-            f"Error executing SQL `{db_dsn}`, sql: `{sql}` to check if query is empty: {e}"
-        )
-        return True
-
-    return (
-        result is None
-        or len(result) == 0
-        or (
-            len(result) == 1
-            and (
-                result[0][cur[0][0]] is None
-                or result[0][cur[0][0]] == ""
-                or result[0][cur[0][0]] == "None"
-            )
-        )
-    )
-
-
 def load_bird_interact_as_tasks(
     dataset_path: str | Path,
     dataset_name_jsonl: str,
@@ -325,7 +299,6 @@ def load_bird_interact_as_tasks(
                     continue
             db_name = line.pop("selected_database")
             if line["instance_id"] in skipped_instance_id:
-                #  or _is_query_empty(line['sol_sql'][0], db_dsn_template.format(database=db_name)):
                 skipped_empty.append(line["instance_id"])
                 continue
 
@@ -424,31 +397,3 @@ def _load_not_ambig_query_from_livesqlbench() -> dict:
 
             output[instance_id] = not_ambig_query
     return output
-
-
-if __name__ == "__main__":
-    _dataset_path = "data/bird_interact/bird-interact-lite"
-    _dataset_name_jsonl = (
-        "data/bird_interact/bird-interact-lite/bird_interact_data_GT.jsonl"
-    )
-    _filter_query_category = True
-    _db_dsn_template = "postgresql://root:123123@localhost:5432/{database}"
-    _user_patience = 10
-    # plants, electrical_performance, plant_record, warranty_risk_plants
-    samples = load_bird_interact_as_tasks(
-        _dataset_path,
-        _dataset_name_jsonl,
-        _filter_query_category,
-        _db_dsn_template,
-        _user_patience,
-        make_data_ambiguous=True,
-        read_only_gt_tables=True,
-        read_only_gt_kb=False,
-        database_schema_type="toon",
-        is_kb_linearized=True,
-    )
-
-    print(f"Loaded {len(samples)} samples")
-    print("Example sample:")
-    print(samples[0].masked_agent_kb)
-    print(samples[0].full_knowledge_base)
