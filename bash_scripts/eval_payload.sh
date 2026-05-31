@@ -98,51 +98,32 @@ case "$MODEL" in
     ;;
 esac
 
-# Export predictor params with the names PydanticParser expects from the env.
-# Ambiguous fields (shared with ConfigUserSimulator) get the section prefix.
+# Only the model NAME is still needed bash-side (build_run_slug + vllm serve).
+# All predictor sampling params now come from the Python --model-profile preset.
 export PREDICTOR_MODEL_NAME="${MODEL_NAME}"
-export PREDICTOR_MODEL_PROVIDER="${PREDICTOR_MODEL_PROVIDER}"
-export PREDICTOR_TEMPERATURE="${TEMPERATURE}"
-export PREDICTOR_TOP_P="${TOP_P}"
-export PREDICTOR_TOP_K="${TOP_K}"
-export PREDICTOR_PRESENCE_PENALTY="${PRESENCE_PENALTY}"
-export PREDICTOR_REPETITION_PENALTY="${REPETITION_PENALTY}"
-export PREDICTOR_ENABLE_THINKING="${ENABLE_THINKING}"
 
 
 # ---------------------------------------------------------------------------
-# Variant -> the 4 run_suite condition flags.
-#   *_toon_*       -> DATABASE_SCHEMA_TYPE=toon  (else ddl)
-#   gt_db_*        -> READ_ONLY_GT_TABLES=true   (else false)
-#   *_gt_kb*       -> READ_ONLY_GT_KB=true        (else false)
-#   *_linearized   -> IS_KB_LINEARIZED=true       (else false)
+# Build the CLI args forwarded to `conv2sql run`. Everything per-run goes
+# through the CLI (highest-priority layer) so the static YAML cannot shadow it.
+# The model profile + variant expand to predictor/reader flags inside Python.
 # ---------------------------------------------------------------------------
-case "$VARIANT" in
-  all_db_all_kb)                 SCHEMA_TYPE=ddl;  GT_DB=false; GT_KB=false; IS_LIN=false ;;
-  all_db_all_kb_linearized)      SCHEMA_TYPE=ddl;  GT_DB=false; GT_KB=false; IS_LIN=true  ;;
-  all_db_toon_all_kb)            SCHEMA_TYPE=toon; GT_DB=false; GT_KB=false; IS_LIN=false ;;
-  all_db_toon_all_kb_linearized) SCHEMA_TYPE=toon; GT_DB=false; GT_KB=false; IS_LIN=true  ;;
-  gt_db_all_kb_linearized)       SCHEMA_TYPE=ddl;  GT_DB=true;  GT_KB=false; IS_LIN=true  ;;
-  gt_db_gt_kb_linearized)        SCHEMA_TYPE=ddl;  GT_DB=true;  GT_KB=true;  IS_LIN=true  ;;
-  gt_db_gt_kb)                   SCHEMA_TYPE=ddl;  GT_DB=true;  GT_KB=true;  IS_LIN=false ;;
-  *)
-    echo "[eval_payload] Unknown VARIANT='$VARIANT'." >&2
-    echo "Valid: all_db_all_kb all_db_all_kb_linearized all_db_toon_all_kb all_db_toon_all_kb_linearized gt_db_all_kb_linearized gt_db_gt_kb_linearized gt_db_gt_kb" >&2
-    exit 1
-    ;;
-esac
-
-# Export reader params with the names PydanticParser expects from the env.
-export DATABASE_SCHEMA_TYPE="${SCHEMA_TYPE}"
-export READ_ONLY_GT_TABLES="${GT_DB}"
-export READ_ONLY_GT_KB="${GT_KB}"
-export IS_KB_LINEARIZED="${IS_LIN}"
-
-# Export pipeline params (all unique fields, no section prefix needed).
-export BASELINE="${BASELINE}"
-export CONCURRENCY="${CONCURRENCY}"
-export NUM_ITERATIONS="${NUM_ITERATIONS}"
-export DEBUG="${DEBUG}"
+RUN_ARGS=(
+  --model-profile "${MODEL}"
+  --variant "${VARIANT}"
+  --baseline "${BASELINE}"
+  --predictor_model_provider "${PREDICTOR_MODEL_PROVIDER}"
+  --predictor_enable_thinking "${ENABLE_THINKING}"
+  --concurrency "${CONCURRENCY}"
+  --num-iterations "${NUM_ITERATIONS}"
+  --debug "${DEBUG}"
+)
+# Ad-hoc ablation overrides from `just ... --extra "..."`. Word-split on spaces;
+# values containing spaces are out of scope.
+if [ -n "${EXTRA:-}" ]; then
+  read -ra _EXTRA_ARR <<< "${EXTRA}"
+  RUN_ARGS+=("${_EXTRA_ARR[@]}")
+fi
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +133,8 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
   echo "[DRY-RUN] model=${MODEL} variant=${VARIANT} baseline=${BASELINE} provider=${PREDICTOR_MODEL_PROVIDER} concurrency=${CONCURRENCY} num_iterations=${NUM_ITERATIONS} gpus=${CUDA_VISIBLE_DEVICES}"
   printf '[DRY-RUN] vllm serve %q --max-model-len %q' "${MODEL_NAME}" "${MAX_MODEL_LEN}"
   printf ' %q' "${SERVER_ARGS[@]}"; printf '\n'
-  echo "[DRY-RUN] conv2sql run --config configs/eval_pipeline_config.yaml  (all params read from env)"
+  printf '[DRY-RUN] conv2sql run --config configs/eval_pipeline_config.yaml'
+  printf ' %s' "${RUN_ARGS[@]}"; printf '\n'
   exit 0
 fi
 
@@ -175,7 +157,7 @@ else
   unset USER_SIMULATOR_VLLM_API_BASE  || true
 fi
 
-run_suite
+run_suite "${RUN_ARGS[@]}"
 
 
 # ---------------------------------------------------------------------------
