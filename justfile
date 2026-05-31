@@ -98,7 +98,8 @@ variants:
 [arg("baseline", long="baseline", help="evaluation mode: no_tool | tools_only | tools_user | bird_full (default: no_tool)")]
 [arg("concurrency", long="concurrency", help="tasks processed concurrently by the Python pipeline (default: 16)")]
 [arg("num_iterations", long="num-iterations", help="repeat dataset N times for statistical relevance (default 1); collapses to 1 when predictor temperature=0")]
-eval variant="all_db_all_kb" model="qwen35" gpus="1" debug="false" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1":
+[arg("extra", long="extra", help="extra flags forwarded verbatim to `conv2sql run`, quoted (e.g. --extra \"--predictor_top_p 0.8\")")]
+eval variant="all_db_all_kb" model="qwen35" gpus="1" debug="false" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="":
     #!/usr/bin/env bash
     set -Eeuo pipefail
     # Export env vars read by eval_payload.sh and the Python pipeline.
@@ -110,6 +111,7 @@ eval variant="all_db_all_kb" model="qwen35" gpus="1" debug="false" provider="hos
     export NUM_ITERATIONS="{{num_iterations}}"
     export CUDA_VISIBLE_DEVICES="{{gpus}}"   # which GPU(s) the vLLM server may use
     export DEBUG="{{debug}}"
+    export EXTRA="{{extra}}"                 # ad-hoc flags forwarded to conv2sql run
     if [ "{{runner}}" = "slurm" ]; then
         # Pass a human-readable job name to sbatch so it appears in squeue output.
         {{dispatch}} "eval_{{model}}_{{variant}}_{{provider}}"
@@ -127,8 +129,9 @@ eval variant="all_db_all_kb" model="qwen35" gpus="1" debug="false" provider="hos
 [arg("baseline", long="baseline", help="evaluation mode: no_tool | tools_only | tools_user | bird_full (default: no_tool)")]
 [arg("concurrency", long="concurrency", help="tasks processed concurrently by the Python pipeline (default: 16)")]
 [arg("num_iterations", long="num-iterations", help="repeat dataset N times for statistical relevance (default 1)")]
-dry variant="all_db_all_kb" model="qwen35" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1":
-    DRY_RUN=1 MODEL="{{model}}" VARIANT="{{variant}}" BASELINE="{{baseline}}" PREDICTOR_MODEL_PROVIDER="{{provider}}" CONCURRENCY="{{concurrency}}" NUM_ITERATIONS="{{num_iterations}}" bash bash_scripts/eval_payload.sh
+[arg("extra", long="extra", help="extra flags forwarded verbatim to `conv2sql run`")]
+dry variant="all_db_all_kb" model="qwen35" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="":
+    DRY_RUN=1 MODEL="{{model}}" VARIANT="{{variant}}" BASELINE="{{baseline}}" PREDICTOR_MODEL_PROVIDER="{{provider}}" CONCURRENCY="{{concurrency}}" NUM_ITERATIONS="{{num_iterations}}" EXTRA="{{extra}}" bash bash_scripts/eval_payload.sh
 
 # ── sequential ────────────────────────────────────────────────────────────────
 # Run several variants one after another (waits for each to finish before starting
@@ -155,7 +158,8 @@ dry variant="all_db_all_kb" model="qwen35" provider="hosted_vllm" baseline="no_t
 [arg("baseline", long="baseline", help="evaluation mode: no_tool | tools_only | tools_user | bird_full (default: no_tool)")]
 [arg("concurrency", long="concurrency", help="tasks processed concurrently by the Python pipeline (default: 16)")]
 [arg("num_iterations", long="num-iterations", help="iterations per variant (default 1); see eval --num-iterations")]
-sequential model="qwen35" gpus="1" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" *variants:
+[arg("extra", long="extra", help="extra flags forwarded verbatim to each variant's `conv2sql run`")]
+sequential model="qwen35" gpus="1" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="" *variants:
     #!/usr/bin/env bash
     set -Eeuo pipefail
     # Expand the variadic just parameter into a bash array.
@@ -171,7 +175,7 @@ sequential model="qwen35" gpus="1" provider="hosted_vllm" baseline="no_tool" con
         echo "============================================================"
         # Delegate to the single-variant `eval` recipe; capture combined stdout+stderr.
         # Named-arg syntax avoids positional coupling with debug (kept at its default).
-        if ! out=$(just eval variant="${variant}" model="{{model}}" gpus="{{gpus}}" provider="{{provider}}" baseline="{{baseline}}" concurrency="{{concurrency}}" --num-iterations "{{num_iterations}}" 2>&1); then
+        if ! out=$(just eval variant="${variant}" model="{{model}}" gpus="{{gpus}}" provider="{{provider}}" baseline="{{baseline}}" concurrency="{{concurrency}}" --num-iterations "{{num_iterations}}" --extra "{{extra}}" 2>&1); then
             echo "$out"
             echo "[sequential] ERROR launching ${variant} — skipping."
             failed+=("${variant}")
