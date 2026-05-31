@@ -5,8 +5,11 @@ truthy, else 0.0. For one instruction with sample scores g = [S_1 .. S_n]:
 
   - Average       P̄       = mean over instances of mean(g)
   - Aptitude      A^90     = mean over instances of percentile(g, 90)
-  - Unreliability U_10^90  = mean over instances of [percentile(g,90) - percentile(g,10)]
+  - Unreliability U_10^90  = A^90 - A^10 = mean over instances of [pct(g,90) - pct(g,10)]
   - Reliability   R        = 1 - U                 (scores are 0..1, not 0..100)
+  - Percentiles   A^p      = mean over instances of percentile(g, p) for
+    p in {10, 25, 50, 75, 90}. These feed the Aptitude/Unreliability boxplot:
+    whiskers A^10 / A^90, box A^25 / A^75, median A^50.
   - pass@k (Chen et al. 2021, unbiased): for an instance with n samples and c
     passes, 1 - C(n-c, k)/C(n, k) (= 1 when n-c < k), averaged across instances
     with n >= k. Returned as a sweep {k: value} for k = 1 .. max(n_i).
@@ -20,8 +23,13 @@ to applying the paper's graded-score formulas to a binary score.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import field
 
 import numpy as np
+
+
+# Percentiles aggregated per instance and surfaced for the box plot.
+BOX_PERCENTILES = (10, 25, 50, 75, 90)
 
 
 @dataclass
@@ -31,6 +39,7 @@ class ReliabilityStats:
     unreliability: float          # U_10^90
     reliability: float            # 1 - U
     passk: dict[int, float]       # {k: pass@k}, k = 1..max_n
+    percentiles: dict[int, float] = field(default_factory=dict)  # {p: A^p}, p in BOX_PERCENTILES
 
 
 def _scores(group: list[dict]) -> list[float]:
@@ -72,24 +81,23 @@ def reliability_metrics(groups: dict[str, list[dict]]) -> ReliabilityStats:
     if not groups:
         return ReliabilityStats(0.0, 0.0, 0.0, 0.0, {})
     means: list[float] = []
-    p90s: list[float] = []
-    ranges: list[float] = []
+    pct_acc: dict[int, list[float]] = {p: [] for p in BOX_PERCENTILES}
     for g in groups.values():
         if not g:
             continue
         s = _scores(g)
         means.append(float(np.mean(s)))
-        p90 = float(np.percentile(s, 90))
-        p10 = float(np.percentile(s, 10))
-        p90s.append(p90)
-        ranges.append(p90 - p10)
+        for p in BOX_PERCENTILES:
+            pct_acc[p].append(float(np.percentile(s, p)))
     if not means:
         return ReliabilityStats(0.0, 0.0, 0.0, 0.0, passk_curve(groups))
-    unreliability = sum(ranges) / len(ranges)
+    percentiles = {p: sum(v) / len(v) for p, v in pct_acc.items()}
+    unreliability = percentiles[90] - percentiles[10]
     return ReliabilityStats(
         avg_performance=sum(means) / len(means),
-        aptitude=sum(p90s) / len(p90s),
+        aptitude=percentiles[90],
         unreliability=unreliability,
         reliability=1.0 - unreliability,
         passk=passk_curve(groups),
+        percentiles=percentiles,
     )

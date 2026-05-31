@@ -64,6 +64,7 @@ DP="${DP:-1}"                            # vLLM data-parallel-size
 mapfile -d '' _SERVER_CONFIG < <(
   python3 "${BASE_WORK}/src/conversation2sql/presets.py" server-config \
     --model-profile "${MODEL}" \
+    --baseline "${BASELINE}" \
     --enable-thinking "${ENABLE_THINKING}" \
     --tp "${TP}" --dp "${DP}" \
     --base-work "${BASE_WORK}"

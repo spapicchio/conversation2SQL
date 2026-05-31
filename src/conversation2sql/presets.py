@@ -34,6 +34,9 @@ MODEL_PROFILES: dict[str, dict] = {
         "server": {
             "reasoning_parser": "qwen3",
             "language_model_only": True,
+            # Tool calling is only wired up for the tool baselines; see
+            # _TOOL_BASELINES / resolve_server_args.
+            "tool_call_parser": "qwen3_coder",
         },
         "thinking": {
             "predictor_temperature": "0.6",
@@ -188,6 +191,16 @@ def expand_presets(
 # --- vLLM server launch config ---------------------------------------------
 # Used by bash_scripts/eval_payload.sh via the `server-config` CLI below.
 
+# Baselines that exercise the agent's tool calling (everything but `no_tool`).
+# For these the server must be told to parse tool calls (vLLM disables tool
+# calling by default). See justfile's baseline table.
+_TOOL_BASELINES = frozenset({"tools_only", "tools_user", "bird_full"})
+
+
+def baseline_uses_tools(baseline: str) -> bool:
+    """True when the baseline drives the tool-calling agent (not `no_tool`)."""
+    return baseline in _TOOL_BASELINES
+
 
 def _require_profile(name: str) -> dict:
     if name not in MODEL_PROFILES:
@@ -209,12 +222,15 @@ def resolve_server_args(
     tp: int,
     dp: int,
     base_work: str,
+    baseline: str = "no_tool",
 ) -> list[str]:
     """Return the `vllm serve` flags for a model profile (excluding the model
     name and --max-model-len, which the caller passes separately).
 
     Flag order mirrors the previous hand-written bash `case` so existing launch
-    commands are byte-for-byte unchanged.
+    commands are byte-for-byte unchanged. When ``baseline`` drives the
+    tool-calling agent and the profile declares a ``tool_call_parser``, the
+    tool-calling flags are appended.
     """
     prof = _require_profile(name)
     server = prof["server"]
@@ -232,6 +248,8 @@ def resolve_server_args(
         args += ["--language-model-only"]
     if "limit_mm_per_prompt" in server:
         args += ["--limit-mm-per-prompt", json.dumps(server["limit_mm_per_prompt"])]
+    if baseline_uses_tools(baseline) and "tool_call_parser" in server:
+        args += ["--enable-auto-tool-choice", "--tool-call-parser", server["tool_call_parser"]]
     return args
 
 
@@ -253,7 +271,7 @@ def _cmd_server_config(args: argparse.Namespace) -> None:
     prof = _require_profile(args.model_profile)
     think = resolve_effective_thinking(args.model_profile, _str_to_bool(args.enable_thinking))
     server_args = resolve_server_args(
-        args.model_profile, think, args.tp, args.dp, args.base_work
+        args.model_profile, think, args.tp, args.dp, args.base_work, args.baseline
     )
     fields = [
         prof["predictor_model_name"],
@@ -273,6 +291,10 @@ def main(argv: list[str] | None = None) -> None:
         help="Emit NUL-delimited model name, max-model-len, thinking, and vllm serve args.",
     )
     sc.add_argument("--model-profile", required=True)
+    sc.add_argument(
+        "--baseline", default="no_tool",
+        help="eval baseline; tool baselines add the tool-calling serve flags.",
+    )
     sc.add_argument(
         "--enable-thinking", default="",
         help="true/false; empty uses the profile's default_thinking.",

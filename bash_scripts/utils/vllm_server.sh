@@ -67,6 +67,7 @@ s.close()
             --uvicorn-log-level warning \
             --max-num-seqs 64 \
             --enable-prefix-caching \
+            --gpu-memory-utilization 0.95 \
             "$@" >> "$vllm_log" 2>&1 &
     else
         setsid uv run vllm serve "$model_name" \
@@ -74,6 +75,7 @@ s.close()
             --max-model-len "$max_model_len" \
             --uvicorn-log-level warning \
             --max-num-seqs 64 \
+            --gpu-memory-utilization 0.95 \
             --enable-prefix-caching \
             "$@" &
     fi

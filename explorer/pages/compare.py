@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
+from charts import aptitude_unreliability_box
+from charts import reliability_explainer
 from loader import RunData
 from loader import join_runs
 from loader import list_runs
@@ -86,8 +89,6 @@ st.divider()
 
 # ── Charts ─────────────────────────────────────────────────────────────────────
 
-import altair as alt
-
 db_cols = st.columns(len(runs))
 for col, (_, run) in zip(db_cols, runs.items()):
     with col:
@@ -132,6 +133,18 @@ if has_tools:
                 [{"Tool": k, "Calls": v} for k, v in run.stats.tool_usage.most_common()]
             ).set_index("Tool")
             st.bar_chart(tool_df)
+
+# ── Aptitude / Unreliability box plot (one box per run) ─────────────────────────
+
+rels = {
+    label: run.stats.reliability
+    for label, run in runs.items()
+    if run.stats.reliability is not None and run.stats.reliability.percentiles
+}
+if rels:
+    st.subheader("Aptitude & Unreliability")
+    reliability_explainer()
+    st.plotly_chart(aptitude_unreliability_box(rels), use_container_width=True)
 
 st.divider()
 

@@ -9,6 +9,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+from charts import aptitude_unreliability_box
+from charts import reliability_explainer
 from loader import RunData
 from loader import load_run
 from loader import list_runs
@@ -114,6 +116,13 @@ with tab_results:
         r2.metric("Aptitude A⁹⁰", f"{rel.aptitude * 100:.1f}%")
         r3.metric("Unreliability U₁₀⁹⁰", f"{rel.unreliability * 100:.1f}%")
         r4.metric("Reliability R", f"{rel.reliability * 100:.1f}%")
+        reliability_explainer()
+        if rel.percentiles:
+            model_label = predictor.get("model_name", "this run") if predictor else "this run"
+            st.plotly_chart(
+                aptitude_unreliability_box({model_label: rel}),
+                use_container_width=True,
+            )
         if rel.passk:
             passk_df = pd.DataFrame(
                 [{"k": k, "pass@k": v} for k, v in sorted(rel.passk.items())]

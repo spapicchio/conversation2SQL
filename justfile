@@ -39,7 +39,7 @@ dispatch := "bash bash_scripts/submit_and_log.sh bash_scripts/eval_payload.sh"
 
 # List available recipes (default when you run bare `just`).
 default:
-    @just eval
+    @just --list
 
 # Sync the project venv from the lockfile (run once after cloning or after uv.lock changes).
 setup:
@@ -90,6 +90,19 @@ variants:
 #
 # Under RUNNER=local  the job runs in a new detached tmux session.
 # Under RUNNER=slurm  sbatch receives a job name of "eval_<model>_<variant>_<provider>".
+
+#   ┌────────────┬─────────────────────┬─────────────────────────┬──────────┬─────────────────┐
+#   │  baseline  │ make_data_ambiguous │         runner          │ user-sim │ enable_ask_user │
+#   ├────────────┼─────────────────────┼─────────────────────────┼──────────┼─────────────────┤
+#   │ no_tool    │ False               │ run_baseline_no_tool    │ False    │ —               │
+#   ├────────────┼─────────────────────┼─────────────────────────┼──────────┼─────────────────┤
+#   │ tools_only │ False               │ run_agent_bird_baseline │ False    │ False           │
+#   ├────────────┼─────────────────────┼─────────────────────────┼──────────┼─────────────────┤
+#   │ tools_user │ False               │ run_agent_bird_baseline │ True     │ True            │
+#   ├────────────┼─────────────────────┼─────────────────────────┼──────────┼─────────────────┤
+#   │ bird_full  │ True                │ run_agent_bird_baseline │ True     │ True            │
+#   └────────────┴─────────────────────┴─────────────────────────┴──────────┴─────────────────┘
+
 [arg("variant", long="variant", help="one of the keys printed by `just variants` (e.g. all_db_all_kb)")]
 [arg("model", long="model", help="model profile: qwen35 or gemma4 (default: qwen35)")]
 [arg("gpus", long="gpus", help="comma-separated CUDA device IDs (default: 1)")]

@@ -1,6 +1,7 @@
 import pytest
 
 from conversation2sql.presets import (
+    baseline_uses_tools,
     expand_presets,
     resolve_effective_thinking,
     resolve_profile,
@@ -108,3 +109,33 @@ def test_resolve_server_args_unknown_profile_lists_valid_keys():
     with pytest.raises(ValueError) as exc:
         resolve_server_args("nope", enable_thinking=None, tp=1, dp=1, base_work="/bw")
     assert "qwen35" in str(exc.value)
+
+
+def test_baseline_uses_tools():
+    assert baseline_uses_tools("no_tool") is False
+    assert baseline_uses_tools("tools_only") is True
+    assert baseline_uses_tools("tools_user") is True
+    assert baseline_uses_tools("bird_full") is True
+
+
+def test_resolve_server_args_qwen_tool_baseline_adds_tool_calling_flags():
+    args = resolve_server_args(
+        "qwen35", enable_thinking=True, tp=1, dp=1, base_work="/bw", baseline="tools_user"
+    )
+    assert args[-3:] == ["--enable-auto-tool-choice", "--tool-call-parser", "qwen3_coder"]
+
+
+def test_resolve_server_args_qwen_no_tool_omits_tool_calling_flags():
+    args = resolve_server_args(
+        "qwen35", enable_thinking=True, tp=1, dp=1, base_work="/bw", baseline="no_tool"
+    )
+    assert "--enable-auto-tool-choice" not in args
+    assert "--tool-call-parser" not in args
+
+
+def test_resolve_server_args_gemma_tool_baseline_has_no_parser_so_no_flags():
+    # gemma4 declares no tool_call_parser, so tool baselines don't add flags.
+    args = resolve_server_args(
+        "gemma4", enable_thinking=None, tp=1, dp=1, base_work="/bw", baseline="bird_full"
+    )
+    assert "--enable-auto-tool-choice" not in args
