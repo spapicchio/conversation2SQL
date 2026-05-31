@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.table import Table
 
 from conversation2sql.cli_parser import PydanticParser
+from conversation2sql.presets import expand_presets
 from conversation2sql.config_input import (
     ConfigPipeline,
     ConfigPredictor,
@@ -29,6 +30,16 @@ app = typer.Typer(help="conversation2SQL — evaluate LLM agents on BIRD-Interac
 console = Console()
 
 
+def _extract_enable_thinking(extra: list[str]) -> bool | None:
+    """Pull the --predictor_enable_thinking value out of passthrough args, if present."""
+    for flag in ("--predictor_enable_thinking", "--predictor-enable-thinking"):
+        if flag in extra:
+            i = extra.index(flag)
+            if i + 1 < len(extra):
+                return extra[i + 1].strip().lower() in ("1", "true", "t", "yes", "y")
+    return None
+
+
 @app.command(
     context_settings={
         "allow_extra_args": True,
@@ -39,6 +50,12 @@ console = Console()
 def run(
     ctx: typer.Context,
     config: Optional[Path] = typer.Option(None, "--config", help="Path to YAML config file."),
+    model_profile: Optional[str] = typer.Option(
+        None, "--model-profile", help="Named model preset (e.g. qwen35, gemma4) — expands to predictor sampling flags."
+    ),
+    variant: Optional[str] = typer.Option(
+        None, "--variant", help="Named dataset variant (e.g. all_db_all_kb) — expands to reader schema flags."
+    ),
     help: bool = typer.Option(False, "--help", "-h", help="Show this message and exit."),
 ) -> None:
     """Run an evaluation experiment."""
@@ -51,7 +68,12 @@ def run(
         raise typer.Exit()
 
     extra = ctx.args
-    args = (["--config", str(config)] if config else []) + extra
+    # Presets are prepended so explicit passthrough flags (which come later in
+    # argv) win — argparse keeps the last occurrence of a repeated flag.
+    preset_args = expand_presets(
+        model_profile, variant, _extract_enable_thinking(extra)
+    )
+    args = (["--config", str(config)] if config else []) + preset_args + extra
     if help and config is not None:
         args.append("--help")
     parser = PydanticParser(
