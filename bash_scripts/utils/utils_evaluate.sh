@@ -112,16 +112,25 @@ run_suite() {
 
   log_section "Running suite: ${BASELINE:-no_tool} → ${run_dir}" "${MY_SLURM_JOB_ID:-}"
 
-  # All model, schema, and pipeline params are already in the environment as
-  # Python-compatible var names (PREDICTOR_*, DATABASE_SCHEMA_TYPE, etc.).
-  # PydanticParser reads them directly — only the output folder needs a flag
-  # because it is determined here, not by the caller.
+  # Per-run params arrive as CLI flags (passed through from eval_payload's
+  # RUN_ARGS via "$@"). output_folder and the vLLM api-base are computed here,
+  # so pass them as flags too — this is also what stops the static YAML from
+  # shadowing them.
+  local extra_flags=("$@")
+  extra_flags+=(--output_folder "${run_dir}")
+  if [ -n "${PREDICTOR_VLLM_API_BASE:-}" ]; then
+    extra_flags+=(--predictor_vllm_api_base "${PREDICTOR_VLLM_API_BASE}")
+  fi
+  if [ -n "${USER_SIMULATOR_VLLM_API_BASE:-}" ]; then
+    extra_flags+=(--user_simulator_vllm_api_base "${USER_SIMULATOR_VLLM_API_BASE}")
+  fi
+
   CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES}" \
   TOKENIZERS_PARALLELISM=true \
   VLLM_WORKER_MULTIPROC_METHOD=spawn \
-  OUTPUT_FOLDER="${run_dir}" \
   uv run conv2sql run \
-    --config "${BASE_WORK}/configs/eval_pipeline_config.yaml"
+    --config "${BASE_WORK}/configs/eval_pipeline_config.yaml" \
+    "${extra_flags[@]}"
 
   log_section "=== Done ${BASELINE:-no_tool} ===" "${MY_SLURM_JOB_ID:-}"
 }
