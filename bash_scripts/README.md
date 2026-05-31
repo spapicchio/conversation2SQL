@@ -50,8 +50,12 @@ just eval VARIANT [gpus=1] [model=qwen35] [debug=false]
 
 ## The two axes
 
-A run is a **model profile** × a **variant**. Both are resolved inside
-`eval_payload.sh`, replacing the former one-file-per-experiment leaf scripts.
+A run is a **model profile** × a **variant**. `eval_payload.sh`'s `case "$MODEL"`
+now only builds the **`vllm serve` args** (model name, context length, server
+flags). The **predictor sampling params** and the **variant→schema-flag** mapping
+live in `src/conversation2sql/presets.py` and reach the pipeline as CLI flags via
+`--model-profile` / `--variant` (expanded in `cli.py run`). Ad-hoc overrides go
+through `just eval --variant <v> --extra "<flags>"`.
 
 **Model profiles** set the model name, context length, sampling params, and vLLM
 server flags:
@@ -147,10 +151,13 @@ cluster run is the launcher.
 
 ## Extending
 
-- **New variant** — add a `case` arm in `eval_payload.sh` (set `SCHEMA_TYPE`,
-  `GT_DB`, `GT_KB`, `IS_LIN`) and list the key in the `variants` recipe.
-- **New model profile** — add a `case` arm under "Model profile" in
-  `eval_payload.sh` (set `MODEL_NAME`, `MAX_MODEL_LEN`, sampling params, and the
-  `SERVER_ARGS` array), then run `just eval <variant> <gpus> <profile>`.
+- **New ablation knob** — add the field to `config_input.py`; use it ad hoc via
+  `just eval --variant <v> --extra "--my_flag val"`. No bash/justfile edits.
+- **New variant** — add an entry to `VARIANTS` in `src/conversation2sql/presets.py`
+  (the four reader flags) and list the key in the `variants` recipe.
+- **New model profile** — add an entry to `MODEL_PROFILES` in `presets.py`
+  (sampling params) AND a `case` arm under "Model profile" in `eval_payload.sh`
+  for the `vllm serve` args (`MODEL_NAME`, `MAX_MODEL_LEN`, `SERVER_ARGS`), then
+  run `just eval --variant <v> --model <profile>`.
 - **Check before launching** — `just dry <variant> [model]` prints the exact
   `vllm serve` and `run_suite` commands without starting anything.

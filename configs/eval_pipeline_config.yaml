@@ -1,21 +1,14 @@
 # eval_pipeline_config.yaml
-# Configuration for the conversation2SQL evaluation pipeline.
-# Pass this file to EvalPipelineFactory.from_yaml("eval_pipeline_config.yaml").
-
-# ── Reader ────────────────────────────────────────────────────────────────────
-# Built-in types:
-#   "PlaceholderReader" — returns a canned AIMessage (no API key needed)
-#   "BirdInteractReader" - reads from the BirdInteract dataset (requires `gt_path_jsonl` in `dataset_kwargs`)
-pipeline:
-  debug: true
-  output_folder: "results"  # Folder to save results and logs
-  baseline: "no_tool" # (e.g., "no_tool", "tools_only", "tools_user", "bird_full")
-  concurrency: 16  # Number of tasks processed concurrently; raise to e.g. 8 to saturate VLLM
-  num_iterations: 1  # repeat the dataset N times for statistical relevance
+# STATIC defaults for the conversation2SQL evaluation pipeline.
+#
+# Per-run knobs (baseline, model sampling, dataset variant/schema flags,
+# concurrency, num_iterations, output_folder, vllm api-base) are NOT here —
+# they arrive as CLI flags from `just`/`eval_payload.sh` (the highest-priority
+# layer in PydanticParser). Putting them here would silently shadow those flags.
+# Model sampling + variant→schema-flag mappings live in
+# src/conversation2sql/presets.py.
 
 reader:
-  # dataset_name_jsonl: 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'
-  # dataset_path: 'data/bird_interact/bird-interact-full'
   dataset_name_jsonl: 'data/bird_interact/bird-interact-lite/bird_interact_data_GT.jsonl'
   dataset_path: 'data/bird_interact/bird-interact-lite'
   filter_query_category: true
@@ -23,30 +16,11 @@ reader:
   # db_dsn_template: 'postgresql://root:123123@localhost:5433/{database}' # Full DB
   user_patience_budget: 1
 
-  database_schema_type: 'ddl' # Whether to use the original DDL or toon format
-  make_data_ambiguous: false # if set to False, the data is not made ambiguous (KG is not masked and the question does not contain ambiguity)
-  read_only_gt_tables: false # if set to True, the schema linking is performed automatically (DB schema contains only relevant tables); if set to False, the agent read from all tables
-  read_only_gt_kb: false # if set to True, the agent read from the GT KB (GT KB contains only relevant facts); if set to False, the agent read from the full KB
-  is_kb_linearized: false # Whether to linearize the KB schema into text or provide it in a structured format (e.g., JSON); linearization may be easier for LLMs to understand but less faithful to the original structure
-# ── Predictor ─────────────────────────────────────────────────────────────────
 predictor:
-  model_name: 'Qwen/Qwen3.5-9B'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
-  model_provider: 'together_ai'  # The model provider, e.g., 'openai', 'azure', 'anthropic', 'together_ai' etc.
-  temperature: 1.0
-  top_p: 0.95
-  top_k: 20
-  min_p: 0.0
-  presence_penalty: 1.5
-  repetition_penalty: 1.0
   max_new_tokens: 20000
-  predictor_vllm_api_base: 'http://localhost:8000/v1'
 
-
-# ── User Simulator ─────────────────────────────────────────────────────────────────
 user_simulator:
   model_name: 'gpt-5.4-mini-2026-03-17'
   model_provider: 'openai'
   temperature: 1.0
   max_new_tokens: 500
-  user_simulator_vllm_api_base: 'http://localhost:8000/v1'
-
