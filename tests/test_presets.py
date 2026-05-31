@@ -1,0 +1,67 @@
+import pytest
+
+from conversation2sql.presets import (
+    expand_presets,
+    resolve_profile,
+    resolve_variant,
+)
+
+
+def test_resolve_variant_flags():
+    assert resolve_variant("gt_db_gt_kb_linearized") == [
+        "--database_schema_type", "ddl",
+        "--read_only_gt_tables", "true",
+        "--read_only_gt_kb", "true",
+        "--is_kb_linearized", "true",
+    ]
+
+
+def test_resolve_variant_toon():
+    flags = resolve_variant("all_db_toon_all_kb")
+    assert "--database_schema_type" in flags
+    assert flags[flags.index("--database_schema_type") + 1] == "toon"
+    assert flags[flags.index("--read_only_gt_tables") + 1] == "false"
+
+
+def test_resolve_variant_unknown_lists_valid_keys():
+    with pytest.raises(ValueError) as exc:
+        resolve_variant("nope")
+    assert "all_db_all_kb" in str(exc.value)
+
+
+def test_resolve_profile_qwen_thinking():
+    flags = resolve_profile("qwen35", enable_thinking=True)
+    assert flags[flags.index("--predictor_model_name") + 1] == "Qwen/Qwen3.5-9B"
+    assert flags[flags.index("--predictor_temperature") + 1] == "0.6"
+    assert flags[flags.index("--predictor_presence_penalty") + 1] == "0.0"
+
+
+def test_resolve_profile_qwen_non_thinking():
+    flags = resolve_profile("qwen35", enable_thinking=False)
+    assert flags[flags.index("--predictor_temperature") + 1] == "1.0"
+    assert flags[flags.index("--predictor_presence_penalty") + 1] == "1.5"
+
+
+def test_resolve_profile_default_thinking_per_model():
+    qwen = resolve_profile("qwen35", enable_thinking=None)
+    assert qwen[qwen.index("--predictor_temperature") + 1] == "0.6"
+    gemma = resolve_profile("gemma4", enable_thinking=None)
+    assert gemma[gemma.index("--predictor_top_k") + 1] == "64"
+
+
+def test_resolve_profile_unknown_lists_valid_keys():
+    with pytest.raises(ValueError) as exc:
+        resolve_profile("nope", enable_thinking=True)
+    assert "qwen35" in str(exc.value)
+
+
+def test_expand_presets_composes_profile_then_variant():
+    flags = expand_presets("qwen35", "all_db_all_kb", enable_thinking=True)
+    assert flags.index("--predictor_model_name") < flags.index("--database_schema_type")
+
+
+def test_expand_presets_allows_none_selectors():
+    assert expand_presets(None, "all_db_all_kb", enable_thinking=None) == resolve_variant(
+        "all_db_all_kb"
+    )
+    assert expand_presets(None, None, enable_thinking=None) == []
