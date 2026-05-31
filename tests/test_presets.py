@@ -2,7 +2,9 @@ import pytest
 
 from conversation2sql.presets import (
     expand_presets,
+    resolve_effective_thinking,
     resolve_profile,
+    resolve_server_args,
     resolve_variant,
 )
 
@@ -65,3 +67,44 @@ def test_expand_presets_allows_none_selectors():
         "all_db_all_kb"
     )
     assert expand_presets(None, None, enable_thinking=None) == []
+
+
+# --- vLLM server config ----------------------------------------------------
+
+
+def test_resolve_effective_thinking_uses_profile_default():
+    assert resolve_effective_thinking("qwen35", None) is True
+    assert resolve_effective_thinking("gemma4", None) is False
+    assert resolve_effective_thinking("qwen35", False) is False
+
+
+def test_resolve_server_args_qwen_thinking():
+    args = resolve_server_args("qwen35", enable_thinking=True, tp=1, dp=1, base_work="/bw")
+    assert args == [
+        "--tensor-parallel-size", "1",
+        "--data-parallel-size", "1",
+        "--reasoning-parser", "qwen3",
+        "--default-chat-template-kwargs", '{"enable_thinking": true}',
+        "--language-model-only",
+    ]
+
+
+def test_resolve_server_args_qwen_non_thinking_flips_json():
+    args = resolve_server_args("qwen35", enable_thinking=False, tp=2, dp=1, base_work="/bw")
+    assert args[args.index("--tensor-parallel-size") + 1] == "2"
+    assert args[args.index("--default-chat-template-kwargs") + 1] == '{"enable_thinking": false}'
+
+
+def test_resolve_server_args_gemma_joins_chat_template_and_limits_mm():
+    args = resolve_server_args("gemma4", enable_thinking=None, tp=1, dp=1, base_work="/bw")
+    assert args[args.index("--chat-template") + 1] == (
+        "/bw/bash_scripts/utils/tool_chat_template_gemma4.jinja"
+    )
+    assert args[args.index("--limit-mm-per-prompt") + 1] == '{"image": 0, "audio": 0}'
+    assert "--language-model-only" not in args
+
+
+def test_resolve_server_args_unknown_profile_lists_valid_keys():
+    with pytest.raises(ValueError) as exc:
+        resolve_server_args("nope", enable_thinking=None, tp=1, dp=1, base_work="/bw")
+    assert "qwen35" in str(exc.value)

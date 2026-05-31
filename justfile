@@ -39,7 +39,7 @@ dispatch := "bash bash_scripts/submit_and_log.sh bash_scripts/eval_payload.sh"
 
 # List available recipes (default when you run bare `just`).
 default:
-    @just --list
+    @just eval
 
 # Sync the project venv from the lockfile (run once after cloning or after uv.lock changes).
 setup:

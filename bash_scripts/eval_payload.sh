@@ -22,10 +22,13 @@
 #   CONCURRENCY              – concurrent tasks in the Python pipeline  (default: 16)
 #   NUM_ITERATIONS           – repeat dataset N times                   (default: 1)
 #   DEBUG                    – debug logging                            (default: false)
+#   ENABLE_THINKING          – true|false; blank uses the profile default
+#   TP / DP                  – vLLM tensor/data-parallel size           (default: 1)
 #
-# After resolving the model profile and variant, all sampling params and
-# schema flags are exported as Python-compatible env vars so PydanticParser
-# reads them directly — no CLI flag translation needed in run_suite.
+# The model NAME, context length, thinking mode and vLLM server flags are
+# resolved by src/conversation2sql/presets.py (the single source of truth).
+# Per-run sampling/schema params are forwarded to `conv2sql run` as CLI flags
+# (via RUN_ARGS + the --model-profile/--variant presets), not env vars.
 #
 # Launch via `just eval ...`, which sets these and dispatches through
 # submit_and_log.sh.  Set DRY_RUN=1 to print the resolved config and exit.
@@ -44,62 +47,38 @@ PREDICTOR_MODEL_PROVIDER="${PREDICTOR_MODEL_PROVIDER:-hosted_vllm}"
 CONCURRENCY="${CONCURRENCY:-16}"
 NUM_ITERATIONS="${NUM_ITERATIONS:-1}"
 DEBUG="${DEBUG:-false}"
+ENABLE_THINKING="${ENABLE_THINKING:-}"   # blank → use the profile's default_thinking
+TP="${TP:-1}"                            # vLLM tensor-parallel-size
+DP="${DP:-1}"                            # vLLM data-parallel-size
 
 
 # ---------------------------------------------------------------------------
-# Model profile -> model name, context length, sampling, vLLM server flags.
+# Model profile -> model name, context length, thinking mode, vLLM server flags.
+#
+# Resolved by the Python preset (single source of truth, presets.py) instead of
+# a bash case. presets.py has no third-party imports, so the system python3 runs
+# it fast and hermetically — no venv/uv, works in DRY_RUN too. The resolver emits
+# NUL-delimited fields so JSON args (chat-template-kwargs) survive intact:
+#   model_name \0 max_model_len \0 enable_thinking \0 <vllm serve args...>
 # ---------------------------------------------------------------------------
-case "$MODEL" in
-  qwen35)
-    # https://huggingface.co/Qwen/Qwen3.5-9B
-    # Thinking (coding):  temp=0.6 top_p=0.95 top_k=20 presence=0.0
-    # Non-thinking (gen): temp=1.0 top_p=0.95 top_k=20 presence=1.5
-    MODEL_NAME="Qwen/Qwen3.5-9B"
-    MAX_MODEL_LEN=50000
-    ENABLE_THINKING="${ENABLE_THINKING:-true}"
-    if [ "$ENABLE_THINKING" = true ]; then
-      TEMPERATURE=0.6; TOP_P=0.95; TOP_K=20; PRESENCE_PENALTY=0.0; REPETITION_PENALTY=1.0
-      DEFAULT_PARAMS='{"enable_thinking": true}'
-    else
-      TEMPERATURE=1.0; TOP_P=0.95; TOP_K=20; PRESENCE_PENALTY=1.5; REPETITION_PENALTY=1.0
-      DEFAULT_PARAMS='{"enable_thinking": false}'
-    fi
-    SERVER_ARGS=(
-      --tensor-parallel-size 1
-      --data-parallel-size 1
-      --reasoning-parser qwen3
-      --default-chat-template-kwargs "$DEFAULT_PARAMS"
-      --language-model-only
-    )
-    ;;
-  gemma4)
-    # https://huggingface.co/google/gemma-4-26B-A4B-it
-    MODEL_NAME="google/gemma-4-26B-A4B-it"
-    MAX_MODEL_LEN=32000
-    ENABLE_THINKING="${ENABLE_THINKING:-false}"
-    TEMPERATURE=1.0; TOP_P=0.95; TOP_K=64; PRESENCE_PENALTY=0.0; REPETITION_PENALTY=1.0
-    if [ "$ENABLE_THINKING" = true ]; then
-      DEFAULT_PARAMS='{"enable_thinking": true}'
-    else
-      DEFAULT_PARAMS='{"enable_thinking": false}'
-    fi
-    SERVER_ARGS=(
-      --tensor-parallel-size 1
-      --data-parallel-size 1
-      --reasoning-parser gemma4
-      --chat-template "${BASE_WORK}/bash_scripts/utils/tool_chat_template_gemma4.jinja"
-      --default-chat-template-kwargs "$DEFAULT_PARAMS"
-      --limit-mm-per-prompt '{"image": 0, "audio": 0}'
-    )
-    ;;
-  *)
-    echo "[eval_payload] Unknown MODEL='$MODEL' (expected: qwen35 | gemma4)" >&2
-    exit 1
-    ;;
-esac
+mapfile -d '' _SERVER_CONFIG < <(
+  python3 "${BASE_WORK}/src/conversation2sql/presets.py" server-config \
+    --model-profile "${MODEL}" \
+    --enable-thinking "${ENABLE_THINKING}" \
+    --tp "${TP}" --dp "${DP}" \
+    --base-work "${BASE_WORK}"
+)
+if (( ${#_SERVER_CONFIG[@]} < 4 )) || [ -z "${_SERVER_CONFIG[0]}" ]; then
+  echo "[eval_payload] Failed to resolve server config for MODEL='${MODEL}' (run 'just variants' for valid profiles)" >&2
+  exit 1
+fi
+MODEL_NAME="${_SERVER_CONFIG[0]}"
+MAX_MODEL_LEN="${_SERVER_CONFIG[1]}"
+ENABLE_THINKING="${_SERVER_CONFIG[2]}"          # resolved "true"/"false"
+SERVER_ARGS=("${_SERVER_CONFIG[@]:3}")
 
 # Only the model NAME is still needed bash-side (build_run_slug + vllm serve).
-# All predictor sampling params now come from the Python --model-profile preset.
+# All predictor sampling params come from the Python --model-profile preset.
 export PREDICTOR_MODEL_NAME="${MODEL_NAME}"
 
 
