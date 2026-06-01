@@ -139,3 +139,21 @@ def test_resolve_server_args_gemma_tool_baseline_has_no_parser_so_no_flags():
         "gemma4", enable_thinking=None, tp=1, dp=1, base_work="/bw", baseline="bird_full"
     )
     assert "--enable-auto-tool-choice" not in args
+
+
+# --- profile_for_model_name ------------------------------------------------
+
+
+def test_profile_for_model_name_roundtrips_all_profiles():
+    from conversation2sql.presets import MODEL_PROFILES, profile_for_model_name
+
+    for name, prof in MODEL_PROFILES.items():
+        assert profile_for_model_name(prof["predictor_model_name"]) == name
+
+
+def test_profile_for_model_name_unknown_raises():
+    import pytest
+    from conversation2sql.presets import profile_for_model_name
+
+    with pytest.raises(ValueError):
+        profile_for_model_name("no/such-model")

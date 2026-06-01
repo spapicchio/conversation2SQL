@@ -210,6 +210,22 @@ def _require_profile(name: str) -> dict:
     return MODEL_PROFILES[name]
 
 
+def profile_for_model_name(model_name: str) -> str:
+    """Reverse-map a predictor model name to its profile key.
+
+    Model names are unique across MODEL_PROFILES. Used by `recover-config` to
+    relaunch the right vLLM server for a snapshot that only records the model
+    name, not the profile.
+    """
+    for name, prof in MODEL_PROFILES.items():
+        if prof["predictor_model_name"] == model_name:
+            return name
+    raise ValueError(
+        f"No model profile for model_name {model_name!r}; "
+        f"known: {', '.join(sorted(p['predictor_model_name'] for p in MODEL_PROFILES.values()))}"
+    )
+
+
 def resolve_effective_thinking(name: str, enable_thinking: bool | None) -> bool:
     """Return the thinking mode, falling back to the profile default when None."""
     prof = _require_profile(name)
