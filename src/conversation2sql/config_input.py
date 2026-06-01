@@ -11,7 +11,8 @@ class ConfigPipeline(BaseModel):
     output_folder: str = "results"
     baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full'] = 'bird_full'
     concurrency: int = 1
-    num_iterations: int = Field(default=1, ge=1)  # repeat the dataset N times for statistical relevance
+    num_iterations: int = Field(default=3, ge=1)  # repeat the dataset N times for statistical relevance
+    resume: bool = False  # skip (instance_id, iteration) pairs already in output_folder/results_iter*.jsonl and run only the missing ones
 
 
 # ---------------------------------------------------------------------------
@@ -44,8 +45,10 @@ class ConfigPredictor(BaseModel):
     repetition_penalty: float = 1.0   
     max_new_tokens: int = 2000
     reasoning_effort: str | None = None  # The level of reasoning effort for the model, e.g., 'low', 'medium', 'high'. This can be used to control how much intermediate reasoning the model generates before producing the final answer. The exact interpretation depends on the implementation in the ChatLiteLLM class.
-    predictor_vllm_api_base: str | None = None  # If using vLLM API for prediction, the base URL of the API, e.g., 'http://localhost:8000/v1'   
+    predictor_vllm_api_base: str | None = None  # If using vLLM API for prediction, the base URL of the API, e.g., 'http://localhost:8000/v1'
     enable_thinking: bool | None = None  # Whether to enable the "thinking" mode in the chat template, which allows the model to generate intermediate reasoning steps before the final answer
+    request_timeout: float | None = 600.0  # Per-request timeout (s) for model calls; a stuck request fails fast instead of hanging a worker thread until the asyncio executor-join watchdog trips
+    num_retries: int = 2  # How many times litellm retries a failed/timed-out request before giving up
 
 class ConfigUserSimulator(BaseModel):
     model_name: str = 'gpt-3.5-turbo'  # The model name or path to be used for prediction, e.g., 'gpt-3.5-turbo', 'text-embedding-3-small', etc.
@@ -59,3 +62,5 @@ class ConfigUserSimulator(BaseModel):
     reasoning_effort: str | None = None  # The level of reasoning effort for the model, e.g., 'low', 'medium', 'high'. This can be used to control how much intermediate reasoning the model generates before producing the final answer. The exact interpretation depends on the implementation in the ChatLiteLLM class.
     user_simulator_vllm_api_base: str | None = None  # If using vLLM API for user simulation, the base URL of the API, e.g., 'http://localhost:8000/v1'
     enable_thinking: bool | None = None  # Whether to enable the "thinking" mode in the chat template, which allows the model to generate intermediate reasoning steps before the final answer
+    request_timeout: float | None = 600.0  # Per-request timeout (s) for model calls; a stuck request fails fast instead of hanging a worker thread until the asyncio executor-join watchdog trips
+    num_retries: int = 2  # How many times litellm retries a failed/timed-out request before giving up

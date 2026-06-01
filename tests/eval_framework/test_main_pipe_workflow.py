@@ -163,6 +163,9 @@ class TestConcurrencyConfig:
         with pytest.raises(ValidationError):
             ConfigPipeline(num_iterations=0)
 
+    def test_resume_defaults_to_false(self):
+        assert ConfigPipeline().resume is False
+
 
 @patch("conversation2sql.eval_framework.main_pipe_workflow.run_agent_bird_baseline")
 @patch("conversation2sql.eval_framework.main_pipe_workflow.run_baseline_no_tool")
