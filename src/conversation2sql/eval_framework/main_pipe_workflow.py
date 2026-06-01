@@ -268,7 +268,7 @@ async def _run_tasks_concurrently(
         total = num_iterations * len(dataset)
         logger.info(
             "resume: skipping %d completed, running %d/%d (instance_id, iteration) pairs",
-            len(completed),
+            total - len(pairs),
             len(pairs),
             total,
         )
