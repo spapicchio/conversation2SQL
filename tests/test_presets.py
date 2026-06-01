@@ -157,3 +157,39 @@ def test_profile_for_model_name_unknown_raises():
 
     with pytest.raises(ValueError):
         profile_for_model_name("no/such-model")
+
+
+# --- recover-config CLI subcommand -----------------------------------------
+
+
+def test_recover_config_emits_provider_and_server_fields(tmp_path):
+    import subprocess
+    import sys
+    from pathlib import Path
+    import yaml
+
+    from conversation2sql.presets import MODEL_PROFILES
+
+    prof = MODEL_PROFILES["qwen35"]
+    snapshot = {
+        "pipeline": {"baseline": "no_tool"},
+        "predictor": {
+            "model_name": prof["predictor_model_name"],
+            "model_provider": "hosted_vllm",
+            "enable_thinking": None,
+        },
+        "user_simulator": {"model_name": "x", "model_provider": "openai"},
+    }
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump(snapshot))
+
+    presets_py = Path("src/conversation2sql/presets.py").resolve()
+    out = subprocess.run(
+        [sys.executable, str(presets_py), "recover-config", "--run-dir", str(tmp_path)],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    fields = out.split("\0")
+    assert fields[0] == "hosted_vllm"                       # provider first
+    assert fields[1] == prof["predictor_model_name"]        # model name
+    assert fields[2] == str(prof["max_model_len"])          # max model len
+    assert fields[3] in ("true", "false")                   # resolved thinking
+    assert "--reasoning-parser" in fields[4:]               # serve args follow

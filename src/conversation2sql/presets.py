@@ -298,6 +298,44 @@ def _cmd_server_config(args: argparse.Namespace) -> None:
     sys.stdout.write("\0".join(fields))
 
 
+def _cmd_recover_config(args: argparse.Namespace) -> None:
+    """Emit NUL-delimited fields for a resume launch, read from a run's snapshot:
+
+        provider \\0 model_name \\0 max_model_len \\0 enable_thinking \\0 <vllm serve args...>
+
+    provider comes first so bash decides whether to start a local vLLM server.
+    yaml is imported lazily: this command runs under the venv (recover_payload.sh
+    sources the venv first), while the module itself stays third-party-free so the
+    system python3 can run `server-config`.
+    """
+    import yaml  # lazy: keep module import third-party-free for system python3
+
+    config_path = os.path.join(args.run_dir, "config.yaml")
+    with open(config_path, encoding="utf-8") as f:
+        snapshot = yaml.safe_load(f)
+
+    predictor = snapshot["predictor"]
+    provider = predictor["model_provider"]
+    model_name = predictor["model_name"]
+    enable_thinking = predictor.get("enable_thinking")
+    baseline = snapshot.get("pipeline", {}).get("baseline", "no_tool")
+
+    profile = profile_for_model_name(model_name)
+    think = resolve_effective_thinking(profile, enable_thinking)
+    server_args = resolve_server_args(
+        profile, think, args.tp, args.dp, args.base_work, baseline
+    )
+    prof = _require_profile(profile)
+    fields = [
+        provider,
+        model_name,
+        str(prof["max_model_len"]),
+        "true" if think else "false",
+        *server_args,
+    ]
+    sys.stdout.write("\0".join(fields))
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="presets", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -319,6 +357,16 @@ def main(argv: list[str] | None = None) -> None:
     sc.add_argument("--dp", type=int, default=1, help="data-parallel-size")
     sc.add_argument("--base-work", default=os.environ.get("BASE_WORK", ""))
     sc.set_defaults(func=_cmd_server_config)
+
+    rc = sub.add_parser(
+        "recover-config",
+        help="Emit provider + vllm serve config read from a run's config.yaml snapshot.",
+    )
+    rc.add_argument("--run-dir", required=True, help="Run directory containing config.yaml.")
+    rc.add_argument("--tp", type=int, default=1, help="tensor-parallel-size")
+    rc.add_argument("--dp", type=int, default=1, help="data-parallel-size")
+    rc.add_argument("--base-work", default=os.environ.get("BASE_WORK", ""))
+    rc.set_defaults(func=_cmd_recover_config)
 
     args = parser.parse_args(argv)
     try:
