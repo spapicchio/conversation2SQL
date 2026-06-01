@@ -145,6 +145,37 @@ def workflow_evaluation_pipeline(
         raise e
 
 
+def _load_completed_pairs(
+    output_folder: Path, num_iterations: int
+) -> set[tuple[str, int]]:
+    """Successful (instance_id, iteration) pairs already on disk.
+
+    Reads output_folder/results_iter{i}.jsonl for i in range(num_iterations).
+    Parsing is line-by-line and defensive: blank lines, malformed JSON (a crash
+    can leave a truncated trailing line), and records missing instance_id are
+    skipped. Error records live only in results_error.jsonl and are deliberately
+    NOT counted as completed, so errored/never-reached tasks are re-run.
+    """
+    completed: set[tuple[str, int]] = set()
+    for iteration in range(num_iterations):
+        path = output_folder / f"results_iter{iteration}.jsonl"
+        if not path.exists():
+            continue
+        with path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                instance_id = record.get("instance_id")
+                if instance_id is not None:
+                    completed.add((instance_id, iteration))
+    return completed
+
+
 async def _run_tasks_concurrently(
     dataset: list[TaskData],
     runner: Callable,

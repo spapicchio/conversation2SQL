@@ -260,6 +260,28 @@ class TestIterations:
         assert not (out / "results_iter1.jsonl").exists()
 
 
+def test_load_completed_pairs_reads_all_iterations(tmp_path):
+    from conversation2sql.eval_framework.main_pipe_workflow import _load_completed_pairs
+
+    (tmp_path / "results_iter0.jsonl").write_text(
+        json.dumps({"instance_id": "a", "iteration": 0}) + "\n"
+        + json.dumps({"instance_id": "b", "iteration": 0}) + "\n"
+        + "{ this is a truncated line\n"  # crash can leave a partial trailing line
+    )
+    (tmp_path / "results_iter1.jsonl").write_text(
+        json.dumps({"instance_id": "a", "iteration": 1}) + "\n"
+    )
+
+    pairs = _load_completed_pairs(tmp_path, num_iterations=2)
+    assert pairs == {("a", 0), ("b", 0), ("a", 1)}
+
+
+def test_load_completed_pairs_missing_files_return_empty(tmp_path):
+    from conversation2sql.eval_framework.main_pipe_workflow import _load_completed_pairs
+
+    assert _load_completed_pairs(tmp_path, num_iterations=3) == set()
+
+
 def test_saved_snapshot_roundtrips_through_parser(tmp_path):
     from conversation2sql.eval_framework.main_pipe_workflow import _save_configs_as_yaml
     from conversation2sql.cli_parser import PydanticParser
