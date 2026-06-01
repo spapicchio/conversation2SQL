@@ -32,10 +32,20 @@ folder complete.
 
 The pipeline already writes a `config.yaml` snapshot into the run directory at start
 (`_save_configs_as_yaml`), using sections `pipeline / reader / predictor / user`.
-Those are exactly the section names `PydanticParser` derives from the four config
-classes (`cli_parser.py` `_derive_section_name`, `_read_yaml`), so the snapshot can be
-fed back verbatim via `--config`, with CLI flags overriding only what must change
+The first three exactly match the section names `PydanticParser` derives from the
+config classes (`cli_parser.py` `_derive_section_name`, `_read_yaml`), so the snapshot
+can be fed back via `--config`, with CLI flags overriding only what must change
 (`output_folder`, `resume`, fresh vLLM api-base).
+
+**Snapshot key bug (must fix as part of this work):** `ConfigUserSimulator` derives the
+section name `user_simulator`, but `_save_configs_as_yaml` writes the key `user`. So the
+user-simulator section is silently dropped whenever a snapshot is replayed through
+`PydanticParser` — already true today in `explorer/_adjust_old_runs.py` (it discards
+that section as `_`). No reader or test depends on the literal `user` key
+(`explorer/loader.py` stores the whole config as an opaque dict). The fix: write the key
+as `user_simulator` so the snapshot round-trips. Old run dirs keep the `user` key and so
+fall back to user-sim defaults on resume; this only matters for `tools_user`/`bird_full`
+recoveries of pre-fix runs (the `no_tool` case needs no user-sim).
 
 This faithfully reproduces the *exact* original run, including any ad-hoc `--extra`
 overrides — which is why it was preferred over reconstructing the named
