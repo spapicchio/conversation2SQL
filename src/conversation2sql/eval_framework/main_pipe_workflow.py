@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -91,13 +92,19 @@ def workflow_evaluation_pipeline(
 
     output_folder = Path(config_pipeline.output_folder)
 
-    # save config in the output folder
+    # save config in the output folder; on resume keep the original snapshot intact
+    snapshot_name = (
+        f"config_resume_{datetime.now().strftime('%H_%M_%S')}.yaml"
+        if config_pipeline.resume
+        else "config.yaml"
+    )
     _save_configs_as_yaml(
         output_folder=output_folder,
         config_pipeline=config_pipeline,
         config_reader=config_reader,
         config_predictor=config_predictor,
         config_user=config_user,
+        filename=snapshot_name,
     )
 
     # initialize models (API based)
@@ -134,6 +141,7 @@ def workflow_evaluation_pipeline(
                 output_folder=output_folder,
                 concurrency=config_pipeline.concurrency,
                 num_iterations=effective_iterations,
+                resume=config_pipeline.resume,
             )
         )
     except Exception as e:
@@ -190,6 +198,7 @@ async def _run_tasks_concurrently(
     output_folder: Path,
     concurrency: int,
     num_iterations: int,
+    resume: bool = False,
 ) -> None:
     sem = asyncio.Semaphore(concurrency)
     file_lock = threading.Lock()
@@ -246,11 +255,24 @@ async def _run_tasks_concurrently(
     # so the concurrency pool stays saturated across iteration boundaries.
     # Per-task errors are swallowed inside _process_one (logged to
     # results_error.jsonl), so a single failure never aborts the gather.
-    coros = [
-        _process_one(task, iteration)
+    completed: set[tuple[str, int]] = (
+        _load_completed_pairs(output_folder, num_iterations) if resume else set()
+    )
+    pairs = [
+        (task, iteration)
         for iteration in range(num_iterations)
         for task in dataset
+        if (task.instance_id, iteration) not in completed
     ]
+    if resume:
+        total = num_iterations * len(dataset)
+        logger.info(
+            "resume: skipping %d completed, running %d/%d (instance_id, iteration) pairs",
+            len(completed),
+            len(pairs),
+            total,
+        )
+    coros = [_process_one(task, iteration) for task, iteration in pairs]
     await tqdm.asyncio.tqdm.gather(
         *coros, desc=f"Inference with {baseline} x{num_iterations}"
     )
@@ -306,6 +328,7 @@ def _save_configs_as_yaml(
     config_reader: ConfigReader,
     config_predictor: ConfigPredictor,
     config_user: ConfigUserSimulator,
+    filename: str = "config.yaml",
 ) -> None:
     output_folder.mkdir(parents=True, exist_ok=True)
     configs = {
@@ -314,7 +337,7 @@ def _save_configs_as_yaml(
         "predictor": config_predictor.model_dump(mode="json"),
         "user_simulator": config_user.model_dump(mode="json"),
     }
-    config_path = output_folder / "config.yaml"
+    config_path = output_folder / filename
     with config_path.open("w", encoding="utf-8") as f:
         yaml.safe_dump(configs, f, sort_keys=False, allow_unicode=True)
     logger.info(f"Saved configs to {config_path}")
