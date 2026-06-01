@@ -157,7 +157,7 @@ class TestConcurrencyConfig:
         assert ConfigPipeline().concurrency == 1
 
     def test_num_iterations_defaults_to_1(self):
-        assert ConfigPipeline().num_iterations == 1
+        assert ConfigPipeline().num_iterations == 3
 
     def test_num_iterations_rejects_zero(self):
         with pytest.raises(ValidationError):
@@ -255,3 +255,26 @@ class TestIterations:
         out = Path(cp.output_folder)
         assert (out / "results_iter0.jsonl").exists()
         assert not (out / "results_iter1.jsonl").exists()
+
+
+def test_saved_snapshot_roundtrips_through_parser(tmp_path):
+    from conversation2sql.eval_framework.main_pipe_workflow import _save_configs_as_yaml
+    from conversation2sql.cli_parser import PydanticParser
+
+    cp = ConfigPipeline(output_folder=str(tmp_path), baseline="tools_user")
+    cr = ConfigReader()
+    cpred = ConfigPredictor(model_name="some/model")
+    cu = ConfigUserSimulator(model_name="user/model", model_provider="openai")
+    _save_configs_as_yaml(tmp_path, cp, cr, cpred, cu)
+
+    parser = PydanticParser(
+        [ConfigPipeline, ConfigReader, ConfigPredictor, ConfigUserSimulator]
+    )
+    rp, rr, rpred, ruser = parser.parse_args_and_config(
+        ["--config", str(tmp_path / "config.yaml")]
+    )
+    # The user-simulator section must survive the round-trip.
+    assert ruser.model_name == "user/model"
+    assert ruser.model_provider == "openai"
+    assert rpred.model_name == "some/model"
+    assert rp.baseline == "tools_user"

@@ -164,18 +164,37 @@ async def _run_tasks_concurrently(
     file_lock = threading.Lock()
 
     async def _process_one(task: TaskData, iteration: int) -> None:
-        async with sem:
-            if baseline == "no_tool":
-                response = await asyncio.to_thread(runner, task, model_agent)
-            else:
-                response = await asyncio.to_thread(
-                    runner,
-                    task,
-                    model_agent,
-                    model_user_parsing,
-                    model_user_generator,
-                    enable_ask_user=(baseline in ("tools_user", "bird_full")),
+        try:
+            async with sem:
+                if baseline == "no_tool":
+                    response = await asyncio.to_thread(runner, task, model_agent)
+                else:
+                    response = await asyncio.to_thread(
+                        runner,
+                        task,
+                        model_agent,
+                        model_user_parsing,
+                        model_user_generator,
+                        enable_ask_user=(baseline in ("tools_user", "bird_full")),
+                    )
+        except Exception as e:
+            # Isolate per-task failures: one wedged/erroring task is logged to
+            # results_error.jsonl and skipped, instead of propagating out of the
+            # gather and aborting every remaining (task, iteration) pair.
+            logger.error(
+                f"Error on task_id={task.instance_id} iteration={iteration}: {e}"
+            )
+            error_record = {
+                "instance_id": task.instance_id,
+                "iteration": iteration,
+                "error": str(e),
+            }
+            with file_lock:
+                _save_record(
+                    response=error_record,
+                    output_path_jsonl=output_folder / "results_error.jsonl",
                 )
+            return
         task_output = {
             "config_predictor": config_predictor.model_dump(),
             "config_user": config_user.model_dump(),
@@ -194,6 +213,8 @@ async def _run_tasks_concurrently(
 
     # Flatten all (iteration, task) pairs into one shared semaphore-bounded gather
     # so the concurrency pool stays saturated across iteration boundaries.
+    # Per-task errors are swallowed inside _process_one (logged to
+    # results_error.jsonl), so a single failure never aborts the gather.
     coros = [
         _process_one(task, iteration)
         for iteration in range(num_iterations)
@@ -222,6 +243,8 @@ def _init_models(
         repetition_penalty=config_predictor.repetition_penalty,
         enable_thinking=config_predictor.enable_thinking,
         reasoning_effort=config_predictor.reasoning_effort,
+        request_timeout=config_predictor.request_timeout,
+        num_retries=config_predictor.num_retries,
     )
     if not needs_user_sim:
         return model_agent, (None, None)
@@ -232,12 +255,16 @@ def _init_models(
         temperature=config_user.temperature,
         max_tokens=config_user.max_new_tokens,
         api_base=config_user.user_simulator_vllm_api_base,
+        request_timeout=config_user.request_timeout,
+        num_retries=config_user.num_retries,
     )
     model_user_generator = utils_create_model(
         model_name=config_user.model_name,
         model_provider=config_user.model_provider,
         temperature=config_user.temperature,
         max_tokens=config_user.max_new_tokens,
+        request_timeout=config_user.request_timeout,
+        num_retries=config_user.num_retries,
     )
     return model_agent, (model_user_parsing, model_user_generator)
 
@@ -254,7 +281,7 @@ def _save_configs_as_yaml(
         "pipeline": config_pipeline.model_dump(mode="json"),
         "reader": config_reader.model_dump(mode="json"),
         "predictor": config_predictor.model_dump(mode="json"),
-        "user": config_user.model_dump(mode="json"),
+        "user_simulator": config_user.model_dump(mode="json"),
     }
     config_path = output_folder / "config.yaml"
     with config_path.open("w", encoding="utf-8") as f:
