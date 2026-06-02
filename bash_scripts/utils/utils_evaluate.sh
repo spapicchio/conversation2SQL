@@ -54,17 +54,26 @@ export OMP_NUM_THREADS=50   # limit OpenMP threads to avoid CPU oversubscription
 # Prints a short identifier for the run, e.g.:
 #   no_tool__Qwen3.5-9B__ddl__lin__gt-db
 #
-# Reads from the Python-compatible env vars set by eval_payload.sh:
-#   BASELINE, PREDICTOR_MODEL_NAME, DATABASE_SCHEMA_TYPE,
-#   IS_KB_LINEARIZED, READ_ONLY_GT_TABLES, READ_ONLY_GT_KB
+# baseline + model name come from env vars (BASELINE, PREDICTOR_MODEL_NAME); the
+# schema/gt/linearized parts come from the VARIANT via presets.py — the single
+# source of truth. (The schema flags travel to Python as CLI args, not env vars,
+# so the slug must query presets directly or it would always fall back to "ddl".)
 # ---------------------------------------------------------------------------
 build_run_slug() {
   local baseline="${BASELINE:-no_tool}"
   local model_name="${PREDICTOR_MODEL_NAME:-}"
-  local schema_type="${DATABASE_SCHEMA_TYPE:-ddl}"
-  local is_lin="${IS_KB_LINEARIZED:-false}"
-  local gt_db="${READ_ONLY_GT_TABLES:-false}"
-  local gt_kb="${READ_ONLY_GT_KB:-false}"
+
+  # Resolve the variant's four schema flag values (NUL-delimited, in the order:
+  # database_schema_type, read_only_gt_tables, read_only_gt_kb, is_kb_linearized).
+  local _vc=()
+  mapfile -d '' _vc < <(
+    python3 "${BASE_WORK}/src/conversation2sql/presets.py" variant-config \
+      --variant "${VARIANT:-}" 2>/dev/null
+  )
+  local schema_type="${_vc[0]:-ddl}"
+  local gt_db="${_vc[1]:-false}"
+  local gt_kb="${_vc[2]:-false}"
+  local is_lin="${_vc[3]:-false}"
 
   # Take only the last component of the model path (e.g. "Qwen/Qwen3.5-9B" → "Qwen3.5-9B"),
   # then replace any character that is not alphanumeric / dot / underscore / hyphen with "-",

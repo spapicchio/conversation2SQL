@@ -298,6 +298,24 @@ def _cmd_server_config(args: argparse.Namespace) -> None:
     sys.stdout.write("\0".join(fields))
 
 
+def _cmd_variant_config(args: argparse.Namespace) -> None:
+    """Emit NUL-delimited variant flag *values* (no flag names) in _VARIANT_FLAG_ORDER:
+
+        database_schema_type \\0 read_only_gt_tables \\0 read_only_gt_kb \\0 is_kb_linearized
+
+    Used by build_run_slug in utils_evaluate.sh so the run-directory slug reflects
+    the variant. The schema flags travel to the Python pipeline as CLI args (via
+    --variant), so the slug must read them from here too — presets.py stays the
+    single source of truth rather than the bash side re-deriving them from env vars.
+    """
+    if args.variant not in VARIANTS:
+        raise ValueError(
+            f"Unknown variant {args.variant!r}; valid: {', '.join(sorted(VARIANTS))}"
+        )
+    values = VARIANTS[args.variant]
+    sys.stdout.write("\0".join(values[key] for key in _VARIANT_FLAG_ORDER))
+
+
 def _cmd_recover_config(args: argparse.Namespace) -> None:
     """Emit NUL-delimited fields for a resume launch, read from a run's snapshot:
 
@@ -357,6 +375,13 @@ def main(argv: list[str] | None = None) -> None:
     sc.add_argument("--dp", type=int, default=1, help="data-parallel-size")
     sc.add_argument("--base-work", default=os.environ.get("BASE_WORK", ""))
     sc.set_defaults(func=_cmd_server_config)
+
+    vc = sub.add_parser(
+        "variant-config",
+        help="Emit NUL-delimited schema/gt/linearized values for a dataset variant.",
+    )
+    vc.add_argument("--variant", required=True)
+    vc.set_defaults(func=_cmd_variant_config)
 
     rc = sub.add_parser(
         "recover-config",
