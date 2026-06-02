@@ -221,3 +221,28 @@ class TestReconcile:
         assert "2026-06-02/09-00-00/pending" in out
         assert out["2026-06-02/09-00-00/pending"]["status"] == "running"
         assert "2026-06-02/08-00-00/done_slug" in out
+
+
+class TestCli:
+    def test_reconcile_subcommand(self, tmp_path):
+        results = tmp_path / "results"
+        _make_run(
+            results, "2026-06-02", "08-48-35", "slug",
+            _cfg(pipeline={"num_iterations": 1}, predictor={"temperature": 0.0}),
+            [_make_record(execution_accuracy=True)],
+        )
+        csv_path = tmp_path / "experiments.csv"
+        from explorer.index import main
+        main(["reconcile", "--results-root", str(results), "--csv", str(csv_path)])
+        rows = list(csv.DictReader(csv_path.open()))
+        assert rows and rows[0]["run_dir"] == "2026-06-02/08-48-35/slug"
+
+    def test_append_subcommand(self, tmp_path):
+        results = tmp_path / "results"
+        run = results / "2026-06-02" / "08-48-35" / "slug"
+        _write_config(run, _cfg())
+        csv_path = tmp_path / "experiments.csv"
+        from explorer.index import main
+        main(["append", str(run), "--csv", str(csv_path), "--results-root", str(results)])
+        rows = list(csv.DictReader(csv_path.open()))
+        assert rows[0]["status"] == "running"
