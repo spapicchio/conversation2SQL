@@ -54,3 +54,78 @@ class TestRenderArgs:
     def test_columns_constant_order(self):
         assert COLUMNS[:7] == ["run_dir", "date", "time", "status", "baseline", "model", "args"]
         assert COLUMNS[-1] == "Notes"
+
+
+import csv
+
+from explorer.index import derive_status, append_stub
+
+
+def _write_config(run_dir: Path, cfg: dict) -> None:
+    import yaml
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+
+class TestDeriveStatus:
+    def test_error_when_dir_suffixed(self, tmp_path):
+        d = tmp_path / "run__error"
+        d.mkdir()
+        assert derive_status(d, _cfg(), n_present=0) == "error"
+
+    def test_error_when_error_jsonl_present(self, tmp_path):
+        d = tmp_path / "run"
+        d.mkdir()
+        (d / "results_error.jsonl").write_text("{}\n")
+        assert derive_status(d, _cfg(), n_present=3) == "error"
+
+    def test_done_when_all_iterations_present(self, tmp_path):
+        d = tmp_path / "run"
+        d.mkdir()
+        assert derive_status(d, _cfg(pipeline={"num_iterations": 3}), n_present=3) == "done"
+
+    def test_partial_when_some_iterations(self, tmp_path):
+        d = tmp_path / "run"
+        d.mkdir()
+        assert derive_status(d, _cfg(pipeline={"num_iterations": 9}), n_present=4) == "partial"
+
+    def test_temp_zero_collapses_expected_to_one(self, tmp_path):
+        d = tmp_path / "run"
+        d.mkdir()
+        cfg = _cfg(pipeline={"num_iterations": 9}, predictor={"temperature": 0.0})
+        assert derive_status(d, cfg, n_present=1) == "done"
+
+
+class TestAppendStub:
+    def test_appends_running_row_with_config_columns(self, tmp_path):
+        results = tmp_path / "results"
+        run = results / "2026-06-02" / "08-48-35" / "no_tool__Qwen__ddl__iter9"
+        _write_config(run, _cfg())
+        csv_path = tmp_path / "experiments.csv"
+
+        append_stub(run, csv_path=csv_path, results_root=results)
+
+        rows = list(csv.DictReader(csv_path.open()))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["run_dir"] == "2026-06-02/08-48-35/no_tool__Qwen__ddl__iter9"
+        assert row["date"] == "2026-06-02"
+        assert row["time"] == "08-48-35"
+        assert row["status"] == "running"
+        assert row["baseline"] == "no_tool"
+        assert row["model"] == "Qwen/Qwen3.5-9B"
+        assert "--schema-type ddl" in row["args"]
+        assert row["accuracy"] == ""
+        assert row["Notes"] == ""
+
+    def test_idempotent(self, tmp_path):
+        results = tmp_path / "results"
+        run = results / "2026-06-02" / "08-48-35" / "slug"
+        _write_config(run, _cfg())
+        csv_path = tmp_path / "experiments.csv"
+
+        append_stub(run, csv_path=csv_path, results_root=results)
+        append_stub(run, csv_path=csv_path, results_root=results)
+
+        rows = list(csv.DictReader(csv_path.open()))
+        assert len(rows) == 1
