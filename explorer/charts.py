@@ -92,13 +92,60 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
                 hoverinfo="text",
             )
         )
+        # Annotate the headline values just right of each box so runs are easy to
+        # compare at a glance: A⁹⁰ (Aptitude), A⁵⁰ (median), A¹⁰ (floor).
+        for tag, value in (("A⁹⁰", p[90]), ("A⁵⁰", p[50]), ("A¹⁰", p[10])):
+            fig.add_annotation(
+                x=label,
+                y=value,
+                text=f"{tag} {value:.0%}",
+                showarrow=False,
+                xanchor="left",
+                xshift=22,
+                font=dict(size=11, color=palette[i % len(palette)]),
+            )
 
     fig.update_layout(
         height=360,
         showlegend=False,
-        margin=dict(t=10, b=10, l=10, r=10),
+        margin=dict(t=10, b=10, l=10, r=70),  # room for the value labels right of each box
     )
     fig.update_yaxes(
         title_text="Per-task score", range=[0, 1], tickformat=".0%"
     )
+    return fig
+
+
+def reliability_bars(rels: dict[str, ReliabilityStats]) -> go.Figure:
+    """Grouped bar chart of the headline reliability metrics, one group per metric.
+
+    X-axis is the metric (P̄, A⁹⁰, U₁₀⁹⁰, R, pass@N); bars within a group are the
+    runs (``barmode="group"``). All values are 0..1 and share the percentage
+    y-axis. Note U₁₀⁹⁰ is *lower = better* while the others are *higher = better*.
+    """
+    palette = px.colors.qualitative.Plotly
+    metrics = ["Average P̄", "Aptitude A⁹⁰", "Unreliability U₁₀⁹⁰", "Reliability R", "pass@N"]
+    fig = go.Figure()
+    for i, (label, rel) in enumerate(rels.items()):
+        passk = rel.passk[max(rel.passk)] if rel.passk else 0.0
+        values = [rel.avg_performance, rel.aptitude, rel.unreliability, rel.reliability, passk]
+        fig.add_trace(
+            go.Bar(
+                name=label,
+                x=metrics,
+                y=values,
+                marker_color=palette[i % len(palette)],
+                text=[f"{v:.1%}" for v in values],
+                textposition="outside",
+                hovertemplate="<b>%{fullData.name}</b><br>%{x}: %{y:.1%}<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        barmode="group",
+        height=360,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+        margin=dict(t=40, b=10, l=10, r=10),
+    )
+    fig.update_yaxes(range=[0, 1], tickformat=".0%")
     return fig

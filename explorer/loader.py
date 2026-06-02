@@ -19,6 +19,8 @@ except ModuleNotFoundError:
 class RunStats:
     n_total: int
     n_passed: int
+    n_instances: int       # unique instance_ids (records collapsed across iterations)
+    pass_at_1: float       # mean over instances of (passes / samples); == accuracy for single-iter
     avg_input_tokens: float
     avg_output_tokens: float
     avg_cost: float
@@ -76,6 +78,24 @@ def classify_submit_error(record: dict) -> str:
 def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = None) -> RunStats:
     n_total = len(records)
     n_passed = sum(1 for r in records if r.get("execution_accuracy", False))
+
+    # pass@1: average the per-instance pass rate so multiple iterations count as
+    # repeated samples of one instance, not as n× more samples.
+    inst_groups = groups
+    if inst_groups is None:
+        inst_groups = {}
+        for rec in records:
+            inst_groups.setdefault(rec.get("instance_id", ""), []).append(rec)
+    n_instances = len(inst_groups)
+    pass_at_1 = (
+        sum(
+            sum(1 for r in g if r.get("execution_accuracy", False)) / len(g)
+            for g in inst_groups.values()
+            if g
+        )
+        / max(n_instances, 1)
+    )
+
     avg_input = sum(r.get("mean_prompt_tokens") or 0 for r in records) / max(n_total, 1)
     avg_output = sum(r.get("mean_completion_tokens") or 0 for r in records) / max(
         n_total, 1
@@ -111,6 +131,8 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
     return RunStats(
         n_total=n_total,
         n_passed=n_passed,
+        n_instances=n_instances,
+        pass_at_1=pass_at_1,
         avg_input_tokens=avg_input,
         avg_output_tokens=avg_output,
         avg_cost=avg_cost,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import altair as alt
@@ -9,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from charts import aptitude_unreliability_box
+from charts import reliability_bars
 from charts import reliability_explainer
 from loader import RunData
 from loader import join_runs
@@ -62,28 +64,69 @@ runs: dict[str, RunData] = {
 
 # ── Aggregate stats panel ──────────────────────────────────────────────────────
 
-stat_cols = st.columns(len(runs))
-for col, (label, run) in zip(stat_cols, runs.items()):
-    with col:
-        st.markdown(f"**{label}**")
-        predictor = run.config.get("predictor", {})
-        model = predictor.get("model_name", "unknown")
-        st.markdown(f"`{model}`")
-        stats = run.stats
-        pct = stats.n_passed / max(stats.n_total, 1) * 100
-        st.metric("Accuracy", f"{stats.n_passed}/{stats.n_total} ({pct:.1f}%)")
-        st.metric("Avg Input Tokens", f"{stats.avg_input_tokens:,.0f}")
-        st.metric("Avg Output Tokens", f"{stats.avg_output_tokens:,.0f}")
-        st.metric("Avg Cost", f"${stats.avg_cost:.5f}")
-        st.metric("Avg Budget Remaining", f"{stats.avg_budget_remaining:.1f}")
-        if run.n_iterations >= 2 and run.stats.reliability is not None:
-            rel = run.stats.reliability
-            st.metric("Average P̄", f"{rel.avg_performance * 100:.1f}%")
-            st.metric("Aptitude A⁹⁰", f"{rel.aptitude * 100:.1f}%")
-            st.metric("Unreliability U₁₀⁹⁰", f"{rel.unreliability * 100:.1f}%")
-            st.metric("Reliability R", f"{rel.reliability * 100:.1f}%")
-            if rel.passk:
-                st.metric("pass@N", f"{rel.passk[max(rel.passk)] * 100:.1f}%")
+# Operational metrics → direction-aware highlighted table (metrics as rows, runs as columns).
+# (formatter, higher_is_better | None to skip highlighting)
+_OPERATIONAL_ROWS: list[tuple[str, Callable[[object], str], bool | None]] = [
+    ("Model", lambda v: str(v), None),
+    ("Accuracy (pass@1)", lambda v: f"{v * 100:.1f}%", True),
+    ("Avg Input Tokens", lambda v: f"{v:,.0f}", False),
+    ("Avg Output Tokens", lambda v: f"{v:,.0f}", False),
+    ("Avg Cost", lambda v: f"${v:.5f}", False),
+    ("Avg Budget Remaining", lambda v: f"{v:.1f}", True),
+]
+
+
+def _operational_value(run: RunData, metric: str):
+    stats = run.stats
+    return {
+        "Model": run.config.get("predictor", {}).get("model_name", "unknown"),
+        "Accuracy (pass@1)": stats.pass_at_1,
+        "Avg Input Tokens": stats.avg_input_tokens,
+        "Avg Output Tokens": stats.avg_output_tokens,
+        "Avg Cost": stats.avg_cost,
+        "Avg Budget Remaining": stats.avg_budget_remaining,
+    }[metric]
+
+
+raw = pd.DataFrame(
+    {label: {m: _operational_value(run, m) for m, _, _ in _OPERATIONAL_ROWS}
+     for label, run in runs.items()}
+)
+display = pd.DataFrame(
+    {label: {m: fmt(_operational_value(run, m)) for m, fmt, _ in _OPERATIONAL_ROWS}
+     for label, run in runs.items()}
+)
+
+
+def _highlight_best(row: pd.Series) -> list[str]:
+    metric = str(row.name)
+    direction = {m: hib for m, _, hib in _OPERATIONAL_ROWS}[metric]
+    if direction is None or len(runs) < 2:
+        return [""] * len(row)
+    numeric = raw.loc[metric]
+    best = numeric.max() if direction else numeric.min()
+    return ["background-color: rgba(0, 200, 0, 0.18)" if numeric[c] == best else ""
+            for c in row.index]
+
+
+st.caption(
+    f"Accuracy is pass@1 over n={next(iter(runs.values())).stats.n_instances} "
+    "instances (dataset size). Green = best per row."
+)
+st.dataframe(
+    display.style.apply(_highlight_best, axis=1),
+    use_container_width=True,
+)
+
+# Reliability percentages → grouped barplot (only meaningful with >=2 iterations).
+bar_rels = {
+    label: run.stats.reliability
+    for label, run in runs.items()
+    if run.n_iterations >= 2 and run.stats.reliability is not None
+}
+if bar_rels:
+    st.subheader("Reliability metrics")
+    st.plotly_chart(reliability_bars(bar_rels), use_container_width=True)
 
 st.divider()
 

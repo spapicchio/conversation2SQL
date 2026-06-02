@@ -99,9 +99,12 @@ with tab_config:
 with tab_results:
     # Stats panel: five metric cards
     stats = run.stats
-    pct = stats.n_passed / max(stats.n_total, 1) * 100
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Accuracy", f"{stats.n_passed} / {stats.n_total} ({pct:.1f}%)")
+    c1.metric(
+        "Accuracy (pass@1)",
+        f"{stats.pass_at_1 * 100:.1f}%  ·  n={stats.n_instances}",
+        help=f"pass@1 over {stats.n_instances} samples (dataset size)",
+    )
     c2.metric("Avg Input Tokens", f"{stats.avg_input_tokens:,.0f}")
     c3.metric("Avg Output Tokens", f"{stats.avg_output_tokens:,.0f}")
     c4.metric("Avg Cost", f"${stats.avg_cost:.5f}")

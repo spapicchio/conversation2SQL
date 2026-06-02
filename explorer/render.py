@@ -91,7 +91,7 @@ def render_conversation(record: dict) -> None:
     for msg in record.get("messages", []):
         role = msg.get("role")
 
-        if role in ("user", "system"):
+        if role in ("user", "human", "system"):
             with st.expander(f"{role.capitalize()} prompt — click to expand"):
                 st.text(msg.get("content", ""))
 
