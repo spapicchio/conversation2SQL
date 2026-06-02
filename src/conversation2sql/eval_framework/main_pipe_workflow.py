@@ -107,6 +107,21 @@ def workflow_evaluation_pipeline(
         filename=snapshot_name,
     )
 
+    # Register this run in the experiments index (best-effort: never abort a run).
+    # The repo root must be importable for the top-level `explorer` package, which
+    # is not part of the installed `conversation2sql` distribution.
+    try:
+        import sys
+
+        repo_root = str(Path(__file__).resolve().parents[3])
+        if repo_root not in sys.path:
+            sys.path.insert(0, repo_root)
+        from explorer.index import append_stub
+
+        append_stub(output_folder)
+    except Exception as e:  # noqa: BLE001 - indexing must never break evaluation
+        logger.warning("Could not append run to experiments index: %s", e)
+
     # initialize models (API based)
     model_agent, (model_user_parsing, model_user_generator) = _init_models(
         config_predictor,
