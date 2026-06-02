@@ -31,7 +31,20 @@ just dry all_db_all_kb            # print the resolved commands, launch nothing
 
 # back-to-back local runs (waits for each tmux session before the next)
 just sequential all_db_all_kb all_db_toon_all_kb
+
+# resume a run that partially failed: re-run only the missing/errored instances,
+# appending into that same run directory (pass the leaf dir holding config.yaml)
+just recover results/2026_06_01/13_55_45__no_tool__Qwen3.5-9B__ddl
 ```
+
+`just recover <run_dir>` replays that run's own `config.yaml` snapshot through
+`bash_scripts/recover_payload.sh` (reusing its model/variant/baseline, and
+relaunching a fresh vLLM server for `hosted_vllm` runs) and adds `--resume`. The
+pipeline then skips every `(instance_id, iteration)` pair already present in
+`<run_dir>/results_iter*.jsonl` and runs only what is missing — covering both
+tasks logged to `results_error.jsonl` and tasks a crash never reached. The
+original `config.yaml` is preserved; the resume run's snapshot is written
+alongside as `config_resume_<HH_MM_SS>.yaml`.
 
 `just eval` prints a tmux session id; attach with `tmux attach -t <id>`. Logs are
 tee'd to `results/<date>/<time>/tmux_log/{all,warning,error}.log` and the vLLM
