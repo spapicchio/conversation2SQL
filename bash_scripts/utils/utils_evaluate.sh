@@ -52,16 +52,19 @@ export OMP_NUM_THREADS=50   # limit OpenMP threads to avoid CPU oversubscription
 # build_run_slug
 #
 # Prints a short identifier for the run, e.g.:
-#   no_tool__Qwen3.5-9B__ddl__lin__gt-db
+#   no_tool__Qwen3.5-9B__ddl__lin__gt-db__iter5
 #
 # baseline + model name come from env vars (BASELINE, PREDICTOR_MODEL_NAME); the
 # schema/gt/linearized parts come from the VARIANT via presets.py — the single
 # source of truth. (The schema flags travel to Python as CLI args, not env vars,
 # so the slug must query presets directly or it would always fall back to "ddl".)
+# The trailing __iter<N> records NUM_ITERATIONS so the requested pass count is
+# visible from the directory name (count results_iter*.jsonl to confirm).
 # ---------------------------------------------------------------------------
 build_run_slug() {
   local baseline="${BASELINE:-no_tool}"
   local model_name="${PREDICTOR_MODEL_NAME:-}"
+  local num_iterations="${NUM_ITERATIONS:-1}"
 
   # Resolve the variant's four schema flag values (NUL-delimited, in the order:
   # database_schema_type, read_only_gt_tables, read_only_gt_kb, is_kb_linearized).
@@ -85,8 +88,91 @@ build_run_slug() {
   [[ "${is_lin}" == "true" ]] && slug="${slug}__lin"
   [[ "${gt_db}"  == "true" ]] && slug="${slug}__gt-db"
   [[ "${gt_kb}"  == "true" ]] && slug="${slug}__gt-kb"
+  slug="${slug}__iter${num_iterations}"
 
   echo "${slug}"
+}
+
+
+# ---------------------------------------------------------------------------
+# has_unresolved_errors <run_dir>
+#
+# Exit 0 (true) when the run still has *unresolved* errors, i.e. an entry in
+# results_error.jsonl that has NOT since been superseded by a successful result.
+# results_error.jsonl is append-only and is not cleared on --resume, so a stale
+# error line for a pair that was later re-run successfully (and thus appears in
+# results_iter*.jsonl) does NOT count. A whole-run error record (no instance_id)
+# always counts as unresolved. Exit 1 (false) when nothing remains broken.
+#
+# This is the single source of truth for the __error suffix: both the fresh
+# eval run (run_suite) and the recover path use it, so the suffix is added when
+# errors remain and dropped once a recover resolves them.
+# ---------------------------------------------------------------------------
+has_unresolved_errors() {
+  local run_dir="$1"
+  [[ -s "${run_dir}/results_error.jsonl" ]] || return 1
+  python3 - "${run_dir}" <<'PY'
+import glob, json, os, re, sys
+
+run_dir = sys.argv[1]
+
+# Successful (instance_id, iteration) pairs already written to disk. The
+# iteration comes from the filename (matches the pipeline's _load_completed_pairs).
+completed = set()
+for path in glob.glob(os.path.join(run_dir, "results_iter*.jsonl")):
+    m = re.search(r"results_iter(\d+)\.jsonl$", os.path.basename(path))
+    if not m:
+        continue
+    iteration = int(m.group(1))
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            iid = rec.get("instance_id")
+            if iid is not None:
+                completed.add((iid, iteration))
+
+# An error is unresolved when its pair has no successful result. A record with
+# no instance_id/iteration is a whole-run failure -> always unresolved.
+with open(os.path.join(run_dir, "results_error.jsonl"), encoding="utf-8") as f:
+    for line in f:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            sys.exit(0)  # garbled error line -> treat as unresolved
+        iid, iteration = rec.get("instance_id"), rec.get("iteration")
+        if iid is None or iteration is None or (iid, iteration) not in completed:
+            sys.exit(0)
+sys.exit(1)
+PY
+}
+
+
+# ---------------------------------------------------------------------------
+# apply_error_suffix <run_dir>
+#
+# Reconcile the run directory's __error suffix with its current state and print
+# the (possibly renamed) directory. Strips any existing suffix to find the base
+# name, then re-adds __error only when has_unresolved_errors says so. Renames in
+# place when the name changes; a no-op otherwise.
+# ---------------------------------------------------------------------------
+apply_error_suffix() {
+  local run_dir="$1"
+  local base="${run_dir%__error}"   # canonical name without the suffix
+  local final="${base}"
+  has_unresolved_errors "${run_dir}" && final="${base}__error"
+  if [[ "${final}" != "${run_dir}" ]]; then
+    mv "${run_dir}" "${final}"
+  fi
+  echo "${final}"
 }
 
 
@@ -141,5 +227,19 @@ run_suite() {
     --config "${BASE_WORK}/configs/eval_pipeline_config.yaml" \
     "${extra_flags[@]}"
 
+  # If the pipeline left any unresolved errors, mark the run by renaming its
+  # directory with an __error suffix so failed runs are obvious from a listing.
+  local final_dir
+  final_dir=$(apply_error_suffix "${run_dir}")
+  if [[ "${final_dir}" != "${run_dir}" ]]; then
+    run_dir="${final_dir}"
+    log_section "Errors detected → renamed run dir to ${run_dir}" "${MY_SLURM_JOB_ID:-}"
+  fi
+
   log_section "=== Done ${BASELINE:-no_tool} ===" "${MY_SLURM_JOB_ID:-}"
+
+  # Best-effort: refresh the experiments index so this run's metrics + final
+  # status land in experiments.csv. Never fail the run on an index error.
+  ( cd "${BASE_WORK}" && uv run python -m explorer.index reconcile ) \
+    || log_section "experiments index reconcile failed (non-fatal)" "${MY_SLURM_JOB_ID:-}"
 }

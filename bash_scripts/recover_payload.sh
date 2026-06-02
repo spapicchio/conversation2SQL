@@ -89,3 +89,11 @@ else
 fi
 
 uv run conv2sql run "${RUN_ARGS[@]}"
+
+# Reconcile the __error suffix with the post-recover state: drop it once every
+# previously-errored pair has a successful result, or keep/re-add it if errors
+# remain. apply_error_suffix is provided by the sourced utils_evaluate.sh.
+FINAL_DIR=$(apply_error_suffix "${RESUME_DIR}")
+if [[ "${FINAL_DIR}" != "${RESUME_DIR}" ]]; then
+  log_section "recover: renamed run dir to ${FINAL_DIR}" "${MY_SLURM_JOB_ID:-}"
+fi
