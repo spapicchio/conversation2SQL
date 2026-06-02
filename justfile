@@ -32,6 +32,8 @@ runner := env_var_or_default("RUNNER", "local")
 # submit_and_log.sh decides whether to open a tmux session or call sbatch,
 # then forwards the actual work to eval_payload.sh.
 dispatch := "bash bash_scripts/submit_and_log.sh bash_scripts/eval_payload.sh"
+# Same dispatcher, but runs the resume/recover payload instead of eval.
+dispatch_recover := "bash bash_scripts/submit_and_log.sh bash_scripts/recover_payload.sh"
 
 
 
@@ -103,7 +105,7 @@ variants:
 #   │ bird_full  │ True                │ run_agent_bird_baseline │ True     │ True            │
 #   └────────────┴─────────────────────┴─────────────────────────┴──────────┴─────────────────┘
 
-[arg("variant", long="variant", help="one of the keys printed by `just variants` (e.g. all_db_all_kb)")]
+[arg("variant", long="variant", help="one of the keys printed by `just variants` (e.g. all_db_all_kb_linearized)")]
 [arg("model", long="model", help="model profile: qwen35 or gemma4 (default: qwen35)")]
 [arg("gpus", long="gpus", help="comma-separated CUDA device IDs (default: 1)")]
 [arg("debug", long="debug", help="true to enable debug logging (default: false)")]
@@ -112,7 +114,7 @@ variants:
 [arg("concurrency", long="concurrency", help="tasks processed concurrently by the Python pipeline (default: 16)")]
 [arg("num_iterations", long="num-iterations", help="repeat dataset N times for statistical relevance (default 1); collapses to 1 when predictor temperature=0")]
 [arg("extra", long="extra", help="extra flags forwarded verbatim to `conv2sql run`, quoted (e.g. --extra \"--predictor_top_p 0.8\")")]
-eval variant="all_db_all_kb" model="qwen35" gpus="1" debug="false" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="":
+eval variant="all_db_all_kb_linearized" model="qwen35" gpus="1" debug="false" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="":
     #!/usr/bin/env bash
     set -Eeuo pipefail
     # Export env vars read by eval_payload.sh and the Python pipeline.
@@ -133,17 +135,40 @@ eval variant="all_db_all_kb" model="qwen35" gpus="1" debug="false" provider="hos
         {{dispatch}}
     fi
 
+# ── recover ────────────────────────────────────────────────────────────────────
+# Re-run only the missing/errored (instance_id, iteration) pairs of a previous run,
+# appending results into that same run directory. Replays the run's own config.yaml
+# snapshot, so the original model/variant/baseline settings are reused automatically.
+#
+#   just recover results/2026_06_01/13_55_45__no_tool__Qwen3.5-9B__ddl
+#
+# run_dir must be the leaf directory that contains config.yaml (and results_iter*.jsonl).
+[arg("run_dir", help="run directory to resume (the dir holding config.yaml)")]
+recover run_dir:
+    #!/usr/bin/env bash
+    set -Eeuo pipefail
+    if [ ! -f "{{run_dir}}/config.yaml" ]; then
+        echo "[recover] No config.yaml in '{{run_dir}}' — pass the leaf run dir." >&2
+        exit 1
+    fi
+    export RESUME_DIR="{{run_dir}}"
+    if [ "{{runner}}" = "slurm" ]; then
+        {{dispatch_recover}} "recover_$(basename '{{run_dir}}')"
+    else
+        {{dispatch_recover}}
+    fi
+
 # ── dry ───────────────────────────────────────────────────────────────────────
 # Print the vLLM server command + run_suite command that `eval` would execute,
 # without actually launching anything. Useful for inspecting the resolved config.
-[arg("variant", long="variant", help="one of the keys printed by `just variants` (e.g. all_db_all_kb)")]
+[arg("variant", long="variant", help="one of the keys printed by `just variants` (e.g. all_db_all_kb_linearized)")]
 [arg("model", long="model", help="model profile: qwen35 or gemma4 (default: qwen35)")]
 [arg("provider", long="provider", help="LiteLLM provider: hosted_vllm | openai | openrouter | together_ai (default: hosted_vllm)")]
 [arg("baseline", long="baseline", help="evaluation mode: no_tool | tools_only | tools_user | bird_full (default: no_tool)")]
 [arg("concurrency", long="concurrency", help="tasks processed concurrently by the Python pipeline (default: 16)")]
 [arg("num_iterations", long="num-iterations", help="repeat dataset N times for statistical relevance (default 1)")]
 [arg("extra", long="extra", help="extra flags forwarded verbatim to `conv2sql run`")]
-dry variant="all_db_all_kb" model="qwen35" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="":
+dry variant="all_db_all_kb_linearized" model="qwen35" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="":
     DRY_RUN=1 MODEL="{{model}}" VARIANT="{{variant}}" BASELINE="{{baseline}}" PREDICTOR_MODEL_PROVIDER="{{provider}}" CONCURRENCY="{{concurrency}}" NUM_ITERATIONS="{{num_iterations}}" EXTRA="{{extra}}" bash bash_scripts/eval_payload.sh
 
 # ── sequential ────────────────────────────────────────────────────────────────
