@@ -129,3 +129,95 @@ class TestAppendStub:
 
         rows = list(csv.DictReader(csv_path.open()))
         assert len(rows) == 1
+
+
+import json
+
+from explorer.index import reconcile
+
+
+def _make_record(execution_accuracy=False, instance_id="t1", database="mydb"):
+    return {
+        "execution_accuracy": execution_accuracy,
+        "instance_id": instance_id,
+        "selected_database": database,
+        "mean_prompt_tokens": 100,
+        "mean_completion_tokens": 50,
+        "total_cost": 0.01,
+        "updated_user_patience": 3,
+        "tool_calls_in_order": [],
+        "messages": [],
+        "iteration": 0,
+    }
+
+
+def _make_run(results: Path, date: str, time: str, slug: str, cfg: dict, records: list[dict]) -> Path:
+    run = results / date / time / slug
+    _write_config(run, cfg)
+    (run / "results_iter0.jsonl").write_text(
+        "".join(json.dumps(r) + "\n" for r in records), encoding="utf-8"
+    )
+    return run
+
+
+class TestReconcile:
+    def test_builds_row_with_metrics(self, tmp_path):
+        results = tmp_path / "results"
+        _make_run(
+            results, "2026-06-02", "08-48-35", "no_tool__Qwen__ddl__iter1",
+            _cfg(pipeline={"num_iterations": 1}, predictor={"temperature": 0.0}),
+            [_make_record(execution_accuracy=True), _make_record(execution_accuracy=False, instance_id="t2")],
+        )
+        csv_path = tmp_path / "experiments.csv"
+
+        reconcile(results_root=results, csv_path=csv_path)
+
+        rows = list(csv.DictReader(csv_path.open()))
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["run_dir"] == "2026-06-02/08-48-35/no_tool__Qwen__ddl__iter1"
+        assert row["status"] == "done"
+        assert row["n_instances"] == "2"
+        assert row["accuracy"] == "0.5"
+        assert "--schema-type ddl" in row["args"]
+
+    def test_preserves_notes_across_reconcile(self, tmp_path):
+        results = tmp_path / "results"
+        _make_run(
+            results, "2026-06-02", "08-48-35", "slug",
+            _cfg(pipeline={"num_iterations": 1}, predictor={"temperature": 0.0}),
+            [_make_record(execution_accuracy=True)],
+        )
+        csv_path = tmp_path / "experiments.csv"
+        reconcile(results_root=results, csv_path=csv_path)
+
+        rows = list(csv.DictReader(csv_path.open()))
+        rows[0]["Notes"] = "best ablation so far"
+        with csv_path.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+            w.writeheader()
+            w.writerows(rows)
+
+        reconcile(results_root=results, csv_path=csv_path)
+
+        out = list(csv.DictReader(csv_path.open()))
+        assert out[0]["Notes"] == "best ablation so far"
+
+    def test_keeps_running_stub_not_rediscovered(self, tmp_path):
+        results = tmp_path / "results"
+        run = results / "2026-06-02" / "09-00-00" / "pending"
+        _write_config(run, _cfg())
+        csv_path = tmp_path / "experiments.csv"
+        append_stub(run, csv_path=csv_path, results_root=results)
+        _make_run(
+            results, "2026-06-02", "08-00-00", "done_slug",
+            _cfg(pipeline={"num_iterations": 1}, predictor={"temperature": 0.0}),
+            [_make_record(execution_accuracy=True)],
+        )
+
+        reconcile(results_root=results, csv_path=csv_path)
+
+        out = {r["run_dir"]: r for r in csv.DictReader(csv_path.open())}
+        assert "2026-06-02/09-00-00/pending" in out
+        assert out["2026-06-02/09-00-00/pending"]["status"] == "running"
+        assert "2026-06-02/08-00-00/done_slug" in out
