@@ -158,6 +158,14 @@ recover run_dir:
         {{dispatch_recover}}
     fi
 
+# ── index ──────────────────────────────────────────────────────────────────────
+# Rebuild experiments.csv at the repo root: rescan results/, fill metrics from the
+# explorer loader, and preserve the hand-edited Notes column. Safe to run anytime.
+#
+#   just index
+index:
+    uv run python -m explorer.index reconcile
+
 # ── dry ───────────────────────────────────────────────────────────────────────
 # Print the vLLM server command + run_suite command that `eval` would execute,
 # without actually launching anything. Useful for inspecting the resolved config.
