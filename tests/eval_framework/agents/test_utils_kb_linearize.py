@@ -4,6 +4,7 @@ from __future__ import annotations
 from conversation2sql.eval_framework.agents.utils_kb_linearize import (
     format_entry_line,
     linearize_kb,
+    linearize_prerequisites,
 )
 from conversation2sql.eval_framework.state import ExternalKnowledgeEntry
 
@@ -98,6 +99,68 @@ def test_format_entry_line_no_subgraph_context():
     line = format_entry_line("Derived (D)", kb)
     assert "[B]" not in line
     assert "[D]" in line
+
+
+# ---------------------------------------------------------------------------
+# linearize_prerequisites — single entry + its transitive prerequisites
+# ---------------------------------------------------------------------------
+
+def test_linearize_prerequisites_missing_name():
+    kb = {"Foo (F)": _entry(1, "Foo (F)")}
+    assert linearize_prerequisites("does_not_exist", kb) == "Knowledge not found."
+
+
+def test_linearize_prerequisites_leaf_has_no_edges_block():
+    """An entry with no prerequisites renders only its own definition, no edges."""
+    kb = {"Active User (AU)": _entry(1, "Active User (AU)",
+                                     description="logged in recently",
+                                     definition="days <= 30")}
+    result = linearize_prerequisites("Active User (AU)", kb)
+    assert "# Dependency edges" not in result
+    assert "# Definitions" in result
+    assert "[AU] Active User" in result
+
+
+def test_linearize_prerequisites_has_no_subgraph_header():
+    """Single-entry lookup must not emit the per-component '# Subgraph N' header."""
+    kb = {"Foo (F)": _entry(1, "Foo (F)", description="the foo")}
+    result = linearize_prerequisites("Foo (F)", kb)
+    assert "# Subgraph" not in result
+
+
+def test_linearize_prerequisites_includes_transitive_ancestors():
+    """Querying B (where A is prereq of B) pulls in A with the edge, leaves-first."""
+    a = _entry(1, "Base (A)", definition="x")
+    b = _entry(2, "Mid (B)", definition=r"\frac{A}{2}", children=[1])
+    kb = {"Base (A)": a, "Mid (B)": b}
+    result = linearize_prerequisites("Mid (B)", kb)
+    assert "(A, prerequisite_of, B)" in result
+    def_section = result.split("# Definitions")[1]
+    assert def_section.index("[A]") < def_section.index("[B]")
+
+
+def test_linearize_prerequisites_excludes_dependents():
+    """Querying B (A prereq_of B, B prereq_of C) includes ancestor A, excludes dependent C."""
+    a = _entry(1, "Base (A)")
+    b = _entry(2, "Mid (B)", children=[1])
+    c = _entry(3, "Top (C)", children=[2])
+    kb = {"Base (A)": a, "Mid (B)": b, "Top (C)": c}
+    result = linearize_prerequisites("Mid (B)", kb)
+    assert "[A]" in result
+    assert "[B]" in result
+    assert "[C]" not in result
+    assert "(A, prerequisite_of, B)" in result
+    assert "prerequisite_of, C)" not in result
+
+
+def test_linearize_prerequisites_skips_masked_ancestor():
+    """A prerequisite masked out of the KB is silently skipped (no edge to a ghost)."""
+    # B depends on id=1, but id=1 is not present in the (masked) KB.
+    b = _entry(2, "Mid (B)", children=[1])
+    kb = {"Mid (B)": b}
+    result = linearize_prerequisites("Mid (B)", kb)
+    assert "[B]" in result
+    assert "# Dependency edges" not in result
 
 
 # ---------------------------------------------------------------------------

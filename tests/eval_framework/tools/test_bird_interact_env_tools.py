@@ -410,9 +410,10 @@ def test_get_knowledge_definition_wrapper_returns_marker_for_missing(task_data):
 # Linearized branch — is_kb_linearized=True
 # ---------------------------------------------------------------------------
 
-def test_get_knowledge_definition_linearized_returns_single_line(task_data_linearized):
-    """With is_kb_linearized=True, the tool returns one formatted line for the entry,
-    not a JSON-dumped ExternalKnowledgeEntry."""
+def test_get_knowledge_definition_linearized_returns_prerequisite_section(task_data_linearized):
+    """With is_kb_linearized=True, the tool returns a linearized section (definitions
+    block) for the entry, not a JSON-dumped ExternalKnowledgeEntry. The conftest entry
+    has no prerequisites, so only its own definition appears."""
     raw = _invoke_tool(
         env_tools.get_knowledge_definition,
         knowledge_name="active_user",
@@ -421,8 +422,39 @@ def test_get_knowledge_definition_linearized_returns_single_line(task_data_linea
     decoded = json.loads(raw)
     assert "knowledge" in decoded
     assert isinstance(decoded["knowledge"], str)
+    assert "# Definitions" in decoded["knowledge"]
     assert "[active_user]" in decoded["knowledge"]
+    # active_user has no prerequisites, so the unrelated entry must not appear.
     assert "revenue" not in decoded["knowledge"].lower()
+
+
+def test_get_knowledge_definition_linearized_includes_transitive_prerequisites(task_data):
+    """With is_kb_linearized=True, looking up an entry also surfaces the knowledge it
+    transitively depends on, with the dependency edges between them."""
+    from conversation2sql.eval_framework.state import ExternalKnowledgeEntry
+
+    chained_kb = {
+        "base (BASE)": ExternalKnowledgeEntry(
+            id=10, knowledge="base (BASE)", description="base value",
+            definition="x", type="domain_knowledge", children_knowledge=[-1],
+        ),
+        "derived (DRV)": ExternalKnowledgeEntry(
+            id=11, knowledge="derived (DRV)", description="uses base",
+            definition="BASE * 2", type="domain_knowledge", children_knowledge=[10],
+        ),
+    }
+    ctx = task_data.model_copy(
+        update={"is_kb_linearized": True, "masked_agent_kb": chained_kb}
+    )
+    raw = _invoke_tool(
+        env_tools.get_knowledge_definition,
+        knowledge_name="derived (DRV)",
+        runtime=_Runtime(ctx),
+    )
+    knowledge = json.loads(raw)["knowledge"]
+    assert "(BASE, prerequisite_of, DRV)" in knowledge
+    assert "[BASE]" in knowledge
+    assert "[DRV]" in knowledge
 
 
 def test_get_knowledge_definition_linearized_missing_returns_sentinel(task_data_linearized):

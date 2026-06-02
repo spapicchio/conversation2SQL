@@ -267,8 +267,14 @@ def load_bird_interact_as_tasks(
     if not make_data_ambiguous:
         logger.warning(
             "make_data_ambiguous is set to False, the task will be not ambiguous:"
-            " 1. KB will be full not masked; 2. the user query will be not ambiguous"
+            " 1. KB will be full not masked; 2. the user query will be not ambiguous; 3. the user patience budget will be at least 3"
         )
+        if user_patience_budget < 3:
+            logger.warning(
+                "user_patience_budget is increased to 3 to ensure the agentcan make multiple tool calls when make_data_ambiguous=False"
+            )
+            user_patience_budget = 3
+
     if read_only_gt_tables:
         logger.warning(
             "read_only_gt_tables is set to True, the agent will read from GT tables only (schema linking is performed automatically)"

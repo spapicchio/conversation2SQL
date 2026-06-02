@@ -67,6 +67,34 @@ class TestComputeStats:
         assert stats.avg_cost == pytest.approx(0.01)
         assert stats.avg_budget_remaining == 4.0
 
+    def test_pass_at_1_collapses_iterations(self):
+        # Two instances, three iterations each. Iterations are samples of the
+        # same instance, so pass@1 averages per-instance rates, not all 6 records.
+        records = [
+            make_record(instance_id="t1", execution_accuracy=True),
+            make_record(instance_id="t1", execution_accuracy=True),
+            make_record(instance_id="t1", execution_accuracy=False),  # t1: 2/3
+            make_record(instance_id="t2", execution_accuracy=False),
+            make_record(instance_id="t2", execution_accuracy=False),
+            make_record(instance_id="t2", execution_accuracy=False),  # t2: 0/3
+        ]
+        groups: dict[str, list[dict]] = {}
+        for r in records:
+            groups.setdefault(r["instance_id"], []).append(r)
+        stats = _compute_stats(records, groups)
+        assert stats.n_total == 6
+        assert stats.n_instances == 2
+        assert stats.pass_at_1 == pytest.approx((2 / 3 + 0.0) / 2)
+
+    def test_pass_at_1_equals_accuracy_single_iteration(self):
+        records = [
+            make_record(instance_id="t1", execution_accuracy=True),
+            make_record(instance_id="t2", execution_accuracy=False),
+        ]
+        stats = _compute_stats(records)
+        assert stats.n_instances == 2
+        assert stats.pass_at_1 == pytest.approx(0.5)
+
     def test_accuracy_by_database(self):
         records = [
             make_record(execution_accuracy=True, selected_database="db_a"),
@@ -212,6 +240,8 @@ def _make_run_data(records: list[dict]) -> RunData:
         stats=RunStats(
             n_total=len(records),
             n_passed=sum(1 for r in records if r.get("execution_accuracy")),
+            n_instances=len(groups),
+            pass_at_1=0.0,
             avg_input_tokens=0.0,
             avg_output_tokens=0.0,
             avg_cost=0.0,

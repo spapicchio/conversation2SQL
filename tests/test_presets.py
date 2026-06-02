@@ -159,6 +159,52 @@ def test_profile_for_model_name_unknown_raises():
         profile_for_model_name("no/such-model")
 
 
+# --- variant-config CLI subcommand -----------------------------------------
+
+
+def test_variant_config_emits_values_in_flag_order():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    presets_py = Path("src/conversation2sql/presets.py").resolve()
+    out = subprocess.run(
+        [sys.executable, str(presets_py), "variant-config",
+         "--variant", "gt_db_gt_kb_linearized"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    # database_schema_type, read_only_gt_tables, read_only_gt_kb, is_kb_linearized
+    assert out.split("\0") == ["ddl", "true", "true", "true"]
+
+
+def test_variant_config_toon_non_gt():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    presets_py = Path("src/conversation2sql/presets.py").resolve()
+    out = subprocess.run(
+        [sys.executable, str(presets_py), "variant-config",
+         "--variant", "all_db_toon_all_kb"],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    assert out.split("\0") == ["toon", "false", "false", "false"]
+
+
+def test_variant_config_unknown_exits_nonzero():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    presets_py = Path("src/conversation2sql/presets.py").resolve()
+    res = subprocess.run(
+        [sys.executable, str(presets_py), "variant-config", "--variant", "nope"],
+        capture_output=True, text=True,
+    )
+    assert res.returncode != 0
+    assert "all_db_all_kb" in res.stderr
+
+
 # --- recover-config CLI subcommand -----------------------------------------
 
 

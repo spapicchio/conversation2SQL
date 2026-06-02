@@ -40,8 +40,8 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute
     _format_result,
 )
 from conversation2sql.eval_framework.agents.utils_kb_linearize import (
-    format_entry_line,
     linearize_kb,
+    linearize_prerequisites,
 )
 from conversation2sql.eval_framework.state import (
     ColumnMeaningEntry,
@@ -271,6 +271,8 @@ def get_knowledge_definition(
         runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Get the definition/details of a specific external knowledge entry.
+    When the KB is linearized, this also returns the entry's transitive
+    prerequisites (the knowledge it depends on) and their dependency edges.
     Cost: 0.5 bird-coins.
 
     Args:
@@ -280,8 +282,10 @@ def get_knowledge_definition(
         JSON string with the knowledge definition.
     """
     if runtime.context.is_kb_linearized:
-        line = format_entry_line(knowledge_name, runtime.context.masked_agent_kb)
-        return json.dumps({"knowledge": line}, indent=2)
+        section = linearize_prerequisites(
+            knowledge_name, runtime.context.masked_agent_kb
+        )
+        return json.dumps({"knowledge": section}, indent=2)
     return json.dumps(
         get_knowledge_definition_impl(
             knowledge_name=knowledge_name,

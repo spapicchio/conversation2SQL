@@ -34,7 +34,7 @@ Available tools and costs:
 - get_all_column_meanings: get all column meanings. Cost: 1
 - get_column_meaning: get the meaning of one column. Cost: 0.5
 - get_all_external_knowledge_names: get all external knowledge names. Cost: 0.5
-- get_knowledge_definition: get one external knowledge definition. Cost: 0.5
+- get_knowledge_definition: get one external knowledge definition along with the knowledge it depends on (its prerequisites). Cost: 0.5
 - get_all_knowledge_definitions: get all external knowledge definitions. Cost: 1
 {% if enable_ask_user %}- ask_user: ask the user a clarification question. Cost: 2
 {% endif %}- submit_sql: submit the SQL for evaluation. Cost: 3

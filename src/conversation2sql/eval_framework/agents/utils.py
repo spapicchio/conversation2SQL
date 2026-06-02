@@ -192,6 +192,8 @@ def utils_create_model(
     repetition_penalty: float | None = None,
     enable_thinking: bool | None = None,
     reasoning_effort: str | None = None,
+    request_timeout: float | None = None,
+    num_retries: int | None = None,
 ) -> ChatLiteLLM:
     """Create a configured `ChatLiteLLM` instance for agent use.
 
@@ -244,6 +246,13 @@ def utils_create_model(
         kwargs["top_k"] = top_k
     if api_base is not None:
         kwargs["api_base"] = api_base
+    # A per-request timeout makes a wedged connection fail fast instead of
+    # blocking its worker thread until asyncio's 300s executor-join watchdog
+    # trips (which surfaces as "[Errno 9] Bad file descriptor").
+    if request_timeout is not None:
+        kwargs["request_timeout"] = request_timeout
+    if num_retries is not None:
+        kwargs["max_retries"] = num_retries
 
     return ChatLiteLLM(**kwargs)
 

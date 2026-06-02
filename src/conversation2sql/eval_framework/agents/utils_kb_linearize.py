@@ -2,8 +2,9 @@
 
 Public interface
 ----------------
-linearize_kb(masked_agent_kb)           -> str   (one # Subgraph N section per connected component)
-format_entry_line(name, masked_agent_kb) -> str  (one definition line, or not-found sentinel)
+linearize_kb(masked_agent_kb)             -> str  (one # Subgraph N section per connected component)
+linearize_prerequisites(name, masked_kb)  -> str  (entry + its transitive prerequisites, edges + topo defs)
+format_entry_line(name, masked_agent_kb)  -> str  (one definition line, or not-found sentinel)
 """
 from __future__ import annotations
 
@@ -234,6 +235,36 @@ def _format_line(entry: ExternalKnowledgeEntry, token: str) -> str:
     return f"{prefix} - {desc}{suffix}" if desc else f"{prefix}{suffix}"
 
 
+def _render_section(
+    ordered: list[ExternalKnowledgeEntry],
+    in_kb: set[int],
+    token_of: dict[int, str],
+) -> list[str]:
+    """Render the dependency-edges + definitions blocks for a set of entries.
+
+    ``ordered`` must already be topologically sorted (leaves first). ``in_kb``
+    bounds which children count as edges; ``token_of`` maps node id -> token.
+    Returns the lines without any '# Subgraph N' header so callers can prepend
+    their own (or none).
+    """
+    edges = [
+        (token_of[child_id], token_of[n.id])
+        for n in ordered
+        for child_id in (n.children_knowledge or [])
+        if child_id in in_kb
+    ]
+
+    lines: list[str] = []
+    if edges:
+        lines.append("# Dependency edges (prerequisite -> dependent)")
+        lines.extend(f"({a}, prerequisite_of, {b})" for a, b in edges)
+        lines.append("")
+    lines.append("# Definitions (topological order: leaves first)")
+    for n in ordered:
+        lines.append(_format_line(n, token_of[n.id]))
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -255,24 +286,43 @@ def linearize_kb(masked_agent_kb: dict[str, ExternalKnowledgeEntry]) -> str:
         in_kb = {n.id for n in ordered}
         token_of = {n.id: _extract_token(n.knowledge) for n in ordered}
 
-        edges = [
-            (token_of[child_id], token_of[n.id])
-            for n in ordered
-            for child_id in (n.children_knowledge or [])
-            if child_id in in_kb
-        ]
-
-        lines: list[str] = [f"# Subgraph {idx}"]
-        if edges:
-            lines.append("# Dependency edges (prerequisite -> dependent)")
-            lines.extend(f"({a}, prerequisite_of, {b})" for a, b in edges)
-            lines.append("")
-        lines.append("# Definitions (topological order: leaves first)")
-        for n in ordered:
-            lines.append(_format_line(n, token_of[n.id]))
+        lines = [f"# Subgraph {idx}", *_render_section(ordered, in_kb, token_of)]
         sections.append("\n".join(lines))
 
     return "\n\n".join(sections)
+
+
+def linearize_prerequisites(
+    name: str,
+    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+) -> str:
+    """Return `name`'s definition plus all of its transitive prerequisites.
+
+    Follows ``children_knowledge`` (prerequisite) edges from `name` to collect
+    every ancestor it depends on, renders them topologically sorted (leaves
+    first) with the dependency-edges block over that subset. Entries that depend
+    *on* `name` are excluded. Prerequisites masked out of the KB are silently
+    skipped. Returns "Knowledge not found." when `name` is absent.
+    """
+    entry = masked_agent_kb.get(name)
+    if entry is None:
+        return "Knowledge not found."
+
+    by_id = {e.id: e for e in masked_agent_kb.values()}
+    collected: set[int] = set()
+    stack = [entry.id]
+    while stack:
+        current = stack.pop()
+        if current in collected or current not in by_id:
+            continue
+        collected.add(current)
+        stack.extend(by_id[current].children_knowledge or [])
+
+    nodes = [by_id[i] for i in collected]
+    ordered = _topological_sort(nodes)
+    in_kb = {n.id for n in ordered}
+    token_of = {n.id: _extract_token(n.knowledge) for n in ordered}
+    return "\n".join(_render_section(ordered, in_kb, token_of))
 
 
 def format_entry_line(
