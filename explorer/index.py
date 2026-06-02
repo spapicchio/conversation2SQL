@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -30,6 +31,11 @@ except ModuleNotFoundError:
     from explorer.loader import list_runs, load_run, RunData
 
 
+def _fmt(v) -> str:
+    """Return empty string for None, else str(v). Never use `x or ""` for values."""
+    return "" if v is None else str(v)
+
+
 def render_args(config: dict) -> str:
     """Canonical flag string built from a config.yaml dict.
 
@@ -41,7 +47,7 @@ def render_args(config: dict) -> str:
     predictor = config.get("predictor") or {}
     user = config.get("user_simulator") or {}
 
-    parts: list[str] = ["--schema-type", str(reader.get("database_schema_type", ""))]
+    parts: list[str] = ["--schema-type", _fmt(reader.get("database_schema_type"))]
     if reader.get("is_kb_linearized"):
         parts.append("--kb-linearized")
     if reader.get("read_only_gt_tables"):
@@ -50,13 +56,13 @@ def render_args(config: dict) -> str:
         parts.append("--gt-kb")
     if reader.get("make_data_ambiguous"):
         parts.append("--ambiguous")
-    parts += ["--num-iterations", str(pipeline.get("num_iterations", ""))]
-    parts += ["--temperature", str(predictor.get("temperature", ""))]
-    parts += ["--top-p", str(predictor.get("top_p", ""))]
+    parts += ["--num-iterations", _fmt(pipeline.get("num_iterations"))]
+    parts += ["--temperature", _fmt(predictor.get("temperature"))]
+    parts += ["--top-p", _fmt(predictor.get("top_p"))]
     if predictor.get("enable_thinking"):
         parts.append("--thinking")
-    parts += ["--provider", str(predictor.get("model_provider", ""))]
-    parts += ["--user-sim", str(user.get("model_name", ""))]
+    parts += ["--provider", _fmt(predictor.get("model_provider"))]
+    parts += ["--user-sim", _fmt(user.get("model_name"))]
     return " ".join(parts)
 
 
@@ -108,7 +114,6 @@ def _row_from_config(run_dir: str, date: str, time: str, config: dict, status: s
         "baseline": pipeline.get("baseline", ""),
         "model": predictor.get("model_name", ""),
         "args": render_args(config),
-        "Notes": "",
     }
     row.update(_blank_metrics())
     return row
@@ -125,20 +130,41 @@ def _read_csv(csv_path: Path) -> dict[str, dict]:
 def _write_csv(csv_path: Path, rows: dict[str, dict]) -> None:
     """Atomic write of all rows, sorted newest-first by (date, time)."""
     ordered = sorted(rows.values(), key=lambda r: (r.get("date", ""), r.get("time", "")), reverse=True)
-    tmp = csv_path.with_suffix(csv_path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=COLUMNS, extrasaction="ignore")
+    tmp_name: str | None = None
+    try:
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w",
+            dir=csv_path.parent,
+            prefix=csv_path.name + ".",
+            suffix=".tmp",
+            delete=False,
+            encoding="utf-8",
+            newline="",
+        )
+        tmp_name = tmp.name
+        w = csv.DictWriter(tmp, fieldnames=COLUMNS, extrasaction="ignore")
         w.writeheader()
         for row in ordered:
             w.writerow({c: row.get(c, "") for c in COLUMNS})
-    os.replace(tmp, csv_path)
+        tmp.close()
+        os.replace(tmp_name, csv_path)
+    except Exception:
+        if tmp_name is not None:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+        raise
 
 
 def append_stub(run_dir_path: Path, csv_path: Path | None = None, results_root: Path | None = None) -> None:
     """Append a status=running, config-only row for run_dir_path (idempotent)."""
     csv_path = csv_path or DEFAULT_CSV
     results_root = results_root or DEFAULT_RESULTS
-    rel = str(run_dir_path.resolve().relative_to(results_root.resolve()))
+    try:
+        rel = str(run_dir_path.resolve().relative_to(results_root.resolve()))
+    except ValueError:
+        raise ValueError(f"{run_dir_path} is not inside results root {results_root}")
     existing = _read_csv(csv_path)
     if rel in existing:
         return
@@ -173,7 +199,6 @@ def _row_from_run(run_dir: str, date: str, time: str, run_path: Path, run: "RunD
         "reliability": round(rel.reliability, 4) if rel else "",
         "aptitude": round(rel.aptitude, 4) if rel else "",
         "unreliability": round(rel.unreliability, 4) if rel else "",
-        "Notes": "",
     }
 
 
@@ -204,30 +229,24 @@ def reconcile(results_root: Path | None = None, csv_path: Path | None = None) ->
 
 
 def main(argv: list[str] | None = None) -> None:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--csv", type=Path, default=DEFAULT_CSV, help="path to experiments.csv")
+    common.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS, help="results/ root")
+
     parser = argparse.ArgumentParser(prog="explorer.index", description="Maintain experiments.csv")
-    parser.add_argument("--csv", type=Path, default=DEFAULT_CSV, help="path to experiments.csv")
-    parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS, help="results/ root")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    rec_p = sub.add_parser("reconcile", help="rescan results/ and rebuild the CSV")
-    rec_p.add_argument("--csv", type=Path, default=None, help="path to experiments.csv")
-    rec_p.add_argument("--results-root", type=Path, default=None, help="results/ root")
+    sub.add_parser("reconcile", parents=[common], help="rescan results/ and rebuild the CSV")
 
-    ap = sub.add_parser("append", help="append a running stub for one run dir")
+    ap = sub.add_parser("append", parents=[common], help="append a running stub for one run dir")
     ap.add_argument("run_dir", type=Path)
-    ap.add_argument("--csv", type=Path, default=None, help="path to experiments.csv")
-    ap.add_argument("--results-root", type=Path, default=None, help="results/ root")
 
     args = parser.parse_args(argv)
 
-    # Subparser values override parent defaults when provided
-    csv_path = getattr(args, "csv", None) or DEFAULT_CSV
-    results_root = getattr(args, "results_root", None) or DEFAULT_RESULTS
-
     if args.cmd == "reconcile":
-        reconcile(results_root=results_root, csv_path=csv_path)
+        reconcile(results_root=args.results_root, csv_path=args.csv)
     elif args.cmd == "append":
-        append_stub(args.run_dir, csv_path=csv_path, results_root=results_root)
+        append_stub(args.run_dir, csv_path=args.csv, results_root=args.results_root)
 
 
 if __name__ == "__main__":

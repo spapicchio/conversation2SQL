@@ -1,8 +1,10 @@
+import csv
+import json
 from pathlib import Path
 
-import pytest
+import yaml
 
-from explorer.index import render_args, COLUMNS
+from explorer.index import render_args, COLUMNS, derive_status, append_stub, reconcile, _parse_time
 
 
 def _cfg(**over):
@@ -55,16 +57,31 @@ class TestRenderArgs:
         assert COLUMNS[:7] == ["run_dir", "date", "time", "status", "baseline", "model", "args"]
         assert COLUMNS[-1] == "Notes"
 
+    def test_none_top_p_renders_empty_not_None_string(self):
+        # predictor top_p=None must not produce the literal string "None"
+        cfg = _cfg(predictor={"top_p": None})
+        result = render_args(cfg)
+        assert "--top-p None" not in result
+        assert "--top-p " in result  # flag is present with empty value
 
-import csv
-
-from explorer.index import derive_status, append_stub
+    def test_zero_temperature_renders_zero_not_empty(self):
+        # temperature=0.0 is valid; must not be blanked by `x or ""`
+        cfg = _cfg(predictor={"temperature": 0.0})
+        result = render_args(cfg)
+        assert "--temperature 0.0" in result
 
 
 def _write_config(run_dir: Path, cfg: dict) -> None:
-    import yaml
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8")
+
+
+class TestParseTime:
+    def test_new_layout_slash(self):
+        assert _parse_time("08-48-35/slug") == "08-48-35"
+
+    def test_old_flat_layout_double_underscore(self):
+        assert _parse_time("09_17_54__qwen-ddl") == "09_17_54"
 
 
 class TestDeriveStatus:
@@ -130,10 +147,18 @@ class TestAppendStub:
         rows = list(csv.DictReader(csv_path.open()))
         assert len(rows) == 1
 
+    def test_no_config_yaml_writes_running_row(self, tmp_path):
+        results = tmp_path / "results"
+        run = results / "2026-06-02" / "10-00-00" / "no_config_run"
+        run.mkdir(parents=True, exist_ok=True)
+        csv_path = tmp_path / "experiments.csv"
 
-import json
+        append_stub(run, csv_path=csv_path, results_root=results)
 
-from explorer.index import reconcile
+        rows = list(csv.DictReader(csv_path.open()))
+        assert len(rows) == 1
+        assert rows[0]["status"] == "running"
+        assert rows[0]["baseline"] == ""
 
 
 def _make_record(execution_accuracy=False, instance_id="t1", database="mydb"):
