@@ -78,10 +78,7 @@ if not pos_df.empty:
 # ── Drill-down: pick a pattern, list flagged tasks, inspect ─────────────────────
 st.divider()
 st.subheader("Drill-down")
-pattern_label = st.selectbox(
-    "Pattern", [lbl for _, lbl in PATTERN_CATALOG],
-    format_func=lambda lbl: lbl,
-)
+pattern_label = st.selectbox("Pattern", [lbl for _, lbl in PATTERN_CATALOG])
 pattern_name = next(name for name, lbl in PATTERN_CATALOG if lbl == pattern_label)
 
 flagged = [
