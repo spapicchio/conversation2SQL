@@ -17,6 +17,7 @@ from loader import join_runs
 from loader import list_runs
 from loader import load_run
 from render import render_conversation
+from patterns import PATTERN_CATALOG
 
 
 RESULTS_ROOT = Path("results")
@@ -176,6 +177,34 @@ if has_tools:
                 [{"Tool": k, "Calls": v} for k, v in run.stats.tool_usage.most_common()]
             ).set_index("Tool")
             st.bar_chart(tool_df)
+
+# ── Anti-pattern frequency (sample-average) ─────────────────────────────────────
+st.divider()
+st.subheader("Tool-interaction anti-patterns")
+st.caption("Sample-average % of instances hitting each pattern. Red = worst (highest) per row.")
+
+_pat_labels = dict(PATTERN_CATALOG)
+pat_raw = pd.DataFrame(
+    {label: {_pat_labels[name]: run.stats.pattern_frequency.get(name, 0.0)
+             for name, _ in PATTERN_CATALOG}
+     for label, run in runs.items()}
+)
+pat_display = pat_raw.applymap(lambda v: f"{v * 100:.1f}%")
+
+
+def _highlight_worst(row: pd.Series) -> list[str]:
+    if len(runs) < 2:
+        return [""] * len(row)
+    numeric = pat_raw.loc[str(row.name)]
+    worst = numeric.max()  # higher anti-pattern rate is worse
+    return ["background-color: rgba(220, 0, 0, 0.18)" if numeric[c] == worst and worst > 0 else ""
+            for c in row.index]
+
+
+st.dataframe(
+    pat_display.style.apply(_highlight_worst, axis=1),
+    use_container_width=True,
+)
 
 # ── Aptitude / Unreliability box plot (one box per run) ─────────────────────────
 
