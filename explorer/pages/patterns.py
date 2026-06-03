@@ -18,6 +18,17 @@ RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", str(Path(__file__).parent.par
 
 _LABELS = dict(PATTERN_CATALOG)  # name -> human label
 
+# Per-pattern explanation: what it flags and how it is detected from the tool-call trace.
+_DESCRIPTIONS: dict[str, str] = {
+    "blind_submit": "Agent calls `submit_sql` without ever running `execute_sql` first — it never validated the query against the DB. **Detected:** a `submit_sql` event appears with no preceding `execute_sql`.",
+    "repeated_identical_call": "Agent issues the exact same call twice — a sign it isn't tracking what it already did. **Detected:** the same tool name + identical arguments occurs ≥2 times (SQL compared with whitespace collapsed).",
+    "submit_after_error": "Agent submits a query that already failed when run. **Detected:** the submitted SQL is identical (whitespace-collapsed) to an `execute_sql` whose result had an error status.",
+    "unrecovered_error_loop": "Agent keeps re-running broken SQL without recovering. **Detected:** ≥3 consecutive `execute_sql` errors with no successful run in between (the streak resets on any success).",
+    "kb_blind": "External knowledge was available but the agent ignored it. **Detected:** the task has KB entries (`masked_agent_kb`/`gt_knowledge_base`) yet `get_knowledge_definition` is never called.",
+    "budget_death": "Agent runs out of patience budget before landing a successful answer. **Detected:** no successful `submit_sql`, and either a tool message reports the budget exhausted or `updated_user_patience` ≤ 0.",
+    "no_submission": "Conversation ends without the agent ever answering. **Detected:** no `submit_sql` call appears anywhere in the trace.",
+}
+
 
 @st.cache_data
 def _load_run_cached(path_str: str) -> RunData:
@@ -48,6 +59,14 @@ stats = run.stats
 # ── Headline: anti-pattern frequency (sample-average) ───────────────────────────
 st.subheader("Anti-pattern frequency (sample-average)")
 st.caption(f"Fraction of instances hitting each pattern · clean: {stats.clean_fraction * 100:.1f}%")
+with st.expander("What do these anti-patterns mean?"):
+    st.caption(
+        "Each is a deterministic, per-conversation flag computed from the tool-call trace "
+        "(no LLM). Frequency above is the sample-average: the mean over instances of the "
+        "fraction of that instance's samples hitting the pattern."
+    )
+    for name, label in PATTERN_CATALOG:
+        st.markdown(f"**{label}** — {_DESCRIPTIONS[name]}")
 freq_df = pd.DataFrame(
     [{"Pattern": _LABELS[name], "Frequency": stats.pattern_frequency.get(name, 0.0)}
      for name, _ in PATTERN_CATALOG]
