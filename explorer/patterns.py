@@ -77,3 +77,152 @@ def extract_tool_events(record: dict) -> list[ToolEvent]:
                 )
             )
     return events
+
+
+@dataclass(frozen=True)
+class PatternHit:
+    name: str                    # "blind_submit"
+    label: str                   # "Blind submit"
+    detail: str                  # human evidence string
+    message_indices: list[int] = field(default_factory=list)
+
+
+ERROR_LOOP_MIN = 3  # consecutive execute_sql errors that constitute an unrecovered loop
+
+
+def _norm_sql(sql: object) -> str:
+    return " ".join(sql.split()) if isinstance(sql, str) else ""
+
+
+def _norm_args(arguments: dict) -> str:
+    a = dict(arguments or {})
+    if isinstance(a.get("sql"), str):
+        a["sql"] = _norm_sql(a["sql"])
+    return json.dumps(a, sort_keys=True, ensure_ascii=False)
+
+
+def _detect_blind_submit(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    seen_execute = False
+    for e in events:
+        if e.tool_name == "execute_sql":
+            seen_execute = True
+        elif e.tool_name == "submit_sql":
+            if not seen_execute:
+                return PatternHit(
+                    "blind_submit", "Blind submit",
+                    "submitted without any prior execute_sql", [e.message_index],
+                )
+            return None  # first submission was validated
+    return None
+
+
+def _detect_repeated_identical_call(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    seen: dict[tuple[str, str], list[int]] = {}
+    for e in events:
+        seen.setdefault((e.tool_name, _norm_args(e.arguments)), []).append(e.message_index)
+    for (name, _), idxs in seen.items():
+        if len(idxs) >= 2:
+            return PatternHit(
+                "repeated_identical_call", "Repeated identical call",
+                f"`{name}` called {len(idxs)}× with identical arguments", idxs,
+            )
+    return None
+
+
+def _detect_submit_after_error(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    errored: dict[str, int] = {}
+    for e in events:
+        if e.tool_name == "execute_sql" and e.is_error:
+            errored[_norm_sql(e.arguments.get("sql"))] = e.message_index
+        elif e.tool_name == "submit_sql":
+            key = _norm_sql(e.arguments.get("sql"))
+            if key and key in errored:
+                return PatternHit(
+                    "submit_after_error", "Submit after error",
+                    "submitted SQL is identical to an execute_sql that errored",
+                    [errored[key], e.message_index],
+                )
+    return None
+
+
+def _detect_unrecovered_error_loop(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    streak: list[int] = []
+    for e in events:
+        if e.tool_name != "execute_sql":
+            continue
+        if e.is_error:
+            streak.append(e.message_index)
+            if len(streak) >= ERROR_LOOP_MIN:
+                return PatternHit(
+                    "unrecovered_error_loop", "Unrecovered error loop",
+                    f"{len(streak)} consecutive execute_sql errors", list(streak),
+                )
+        else:
+            streak = []
+    return None
+
+
+def _detect_kb_blind(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    kb = record.get("masked_agent_kb") or record.get("gt_knowledge_base") or {}
+    if not kb:
+        return None
+    if not any(e.tool_name == "get_knowledge_definition" for e in events):
+        return PatternHit(
+            "kb_blind", "KB-blind",
+            f"{len(kb)} KB entries available but get_knowledge_definition never called",
+        )
+    return None
+
+
+def _detect_budget_death(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    if any(e.tool_name == "submit_sql" and not e.is_error for e in events):
+        return None
+    budget = record.get("updated_user_patience")
+    exhausted = any("budget exhausted" in e.result_text.lower() for e in events) or (
+        isinstance(budget, (int, float)) and budget <= 0
+    )
+    if exhausted:
+        return PatternHit(
+            "budget_death", "Budget death",
+            "budget exhausted before a successful submit_sql",
+        )
+    return None
+
+
+def _detect_no_submission(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    if not any(e.tool_name == "submit_sql" for e in events):
+        return PatternHit(
+            "no_submission", "No submission",
+            "conversation ended with no submit_sql call",
+        )
+    return None
+
+
+Detector = Callable[[list[ToolEvent], dict], "PatternHit | None"]
+
+ANTI_PATTERNS: list[Detector] = [
+    _detect_blind_submit,
+    _detect_repeated_identical_call,
+    _detect_submit_after_error,
+    _detect_unrecovered_error_loop,
+    _detect_kb_blind,
+    _detect_budget_death,
+    _detect_no_submission,
+]
+
+# (name, label) for display + enumeration independent of whether a detector fires.
+PATTERN_CATALOG: list[tuple[str, str]] = [
+    ("blind_submit", "Blind submit"),
+    ("repeated_identical_call", "Repeated identical call"),
+    ("submit_after_error", "Submit after error"),
+    ("unrecovered_error_loop", "Unrecovered error loop"),
+    ("kb_blind", "KB-blind"),
+    ("budget_death", "Budget death"),
+    ("no_submission", "No submission"),
+]
+PATTERN_NAMES: list[str] = [name for name, _ in PATTERN_CATALOG]
+
+
+def detect_patterns(record: dict) -> list[PatternHit]:
+    events = extract_tool_events(record)
+    return [hit for d in ANTI_PATTERNS if (hit := d(events, record)) is not None]
