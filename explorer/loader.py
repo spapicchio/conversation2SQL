@@ -14,6 +14,11 @@ try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
 except ModuleNotFoundError:
     from explorer.metrics import ReliabilityStats, reliability_metrics
 
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from patterns import aggregate_patterns, clean_fraction, detect_patterns
+except ModuleNotFoundError:
+    from explorer.patterns import aggregate_patterns, clean_fraction, detect_patterns
+
 
 @dataclass
 class RunStats:
@@ -28,6 +33,8 @@ class RunStats:
     accuracy_by_database: dict[str, float]  # database -> pass rate
     error_distribution: Counter[str]  # error_class -> count
     tool_usage: Counter[str]  # tool_name -> total calls
+    pattern_frequency: dict[str, float] = field(default_factory=dict)  # name -> sample-avg rate
+    clean_fraction: float = 0.0  # sample-avg fraction of samples with zero hits
     reliability: ReliabilityStats | None = None
 
 
@@ -73,6 +80,18 @@ def classify_submit_error(record: dict) -> str:
     if "databaseerror" in message_lower:
         return "DB Error"
     return "Other"
+
+
+def _tool_message_text(content: object) -> str:
+    if isinstance(content, dict):
+        for key in ("content", "message", "error"):
+            value = content.get(key)
+            if isinstance(value, str):
+                return value
+        return ""
+    if isinstance(content, str):
+        return content
+    return ""
 
 
 def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = None) -> RunStats:
@@ -128,6 +147,21 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
             elif isinstance(tc, str):
                 tool_usage[tc] += 1
 
+    budget_exhausted = 0
+    for r in records:
+        for msg in r.get("messages", []):
+            if msg.get("role") != "tool":
+                continue
+            content_text = _tool_message_text(msg.get("content"))
+            if "Budget exhausted" in content_text:
+                budget_exhausted += 1
+    if budget_exhausted:
+        tool_usage["budget_exhausted"] += budget_exhausted
+
+    g = groups or {}
+    pattern_frequency = aggregate_patterns(g)
+    clean = clean_fraction(g)
+
     return RunStats(
         n_total=n_total,
         n_passed=n_passed,
@@ -140,6 +174,8 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
         accuracy_by_database=accuracy_by_database,
         error_distribution=error_distribution,
         tool_usage=tool_usage,
+        pattern_frequency=pattern_frequency,
+        clean_fraction=clean,
         reliability=reliability_metrics(groups or {}),
     )
 
@@ -228,6 +264,7 @@ def load_run(path: Path) -> RunData:
 
     for r in records:
         r["_error_class"] = classify_submit_error(r)
+        r["_pattern_hits"] = detect_patterns(r)
         r.setdefault("iteration", 0)
 
     groups: dict[str, list[dict]] = {}

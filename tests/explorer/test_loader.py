@@ -119,6 +119,28 @@ class TestComputeStats:
         assert stats.tool_usage["execute_sql"] == 2
         assert stats.tool_usage["submit_sql"] == 1
 
+    def test_budget_exhausted_counted_in_tool_usage(self):
+        records = [
+            make_record(
+                tool_calls_in_order=[
+                    {"tool_name": "execute_sql", "arguments": {}, "tool_cost": 1},
+                ],
+                messages=[
+                    {
+                        "role": "tool",
+                        "tool_name": "execute_sql",
+                        "content": {
+                            "content": "Budget exhausted (0.0 remaining). You MUST call submit_sql now with your best SQL.",
+                            "parse_error": "Expecting value: line 1 column 1 (char 0)",
+                        },
+                    }
+                ],
+            )
+        ]
+        stats = _compute_stats(records)
+        assert stats.tool_usage["execute_sql"] == 1
+        assert stats.tool_usage["budget_exhausted"] == 1
+
     def test_missing_fields_default_to_zero(self):
         stats = _compute_stats([{"execution_accuracy": False}])
         assert stats.avg_input_tokens == 0.0
@@ -330,3 +352,27 @@ class TestJoinRuns:
         runs = {"run_a": _make_run_data(g)}
         df = join_runs(runs)
         assert df.iloc[0]["run_a"] == "1/2"
+
+
+def test_compute_stats_pattern_frequency_sample_average():
+    # One instance, 2 samples: one blind-submit (no execute), one validated.
+    blind = make_record(
+        instance_id="i1",
+        messages=[
+            {"role": "ai", "tool_calls": [{"tool_name": "submit_sql", "arguments": {"sql": "x"}}]},
+            {"role": "tool", "tool_name": "submit_sql", "status": "success", "content": "ok"},
+        ],
+    )
+    validated = make_record(
+        instance_id="i1",
+        messages=[
+            {"role": "ai", "tool_calls": [{"tool_name": "execute_sql", "arguments": {"sql": "x"}}]},
+            {"role": "tool", "tool_name": "execute_sql", "status": "success", "content": "ok"},
+            {"role": "ai", "tool_calls": [{"tool_name": "submit_sql", "arguments": {"sql": "x"}}]},
+            {"role": "tool", "tool_name": "submit_sql", "status": "success", "content": "ok"},
+        ],
+    )
+    groups = {"i1": [blind, validated]}
+    stats = _compute_stats([blind, validated], groups)
+    assert stats.pattern_frequency["blind_submit"] == 0.5
+    assert stats.clean_fraction == 0.5
