@@ -87,42 +87,56 @@ def render_conversation(record: dict) -> None:
                     st.text("(none)")
 
     st.divider()
+    st.markdown("### Conversation trace")
 
+    # Render every message in order as a chronological trace (LangSmith style):
+    # the long system prompt stays collapsed; the user question, each assistant
+    # turn (reasoning + text + tool-call chips), and each tool result render as
+    # their own distinctly-styled turn.
     for msg in record.get("messages", []):
         role = msg.get("role")
 
-        if role in ("user", "human", "system"):
-            with st.expander(f"{role.capitalize()} prompt — click to expand"):
+        if role == "system":
+            with st.expander("⚙️ System prompt — click to expand"):
                 st.text(msg.get("content", ""))
+
+        elif role in ("user", "human"):
+            with st.chat_message("user"):
+                st.markdown("**User**")
+                content = msg.get("content", "")
+                st.markdown(content if isinstance(content, str) else f"```\n{content}\n```")
 
         elif role == "ai":
             with st.chat_message("assistant"):
+                st.markdown("**Assistant**")
                 content = msg.get("content", "")
                 if content:
                     render_ai_content(content)
-                st.caption(
-                    f"tokens: {msg.get('prompt_tokens', 0)}↑ {msg.get('completion_tokens', 0)}↓"
-                    f" | cost: ${msg.get('cost_usd', 0):.5f}"
-                    f" | finish: {msg.get('finish_reason', 'unknown')}"
-                )
-                for tc in msg.get("tool_calls", []):
+                tool_calls = msg.get("tool_calls", [])
+                for tc in tool_calls:
                     tool_name = tc.get("tool_name", "unknown")
                     args = tc.get("arguments", {})
                     args_str = json.dumps(args, ensure_ascii=False)
                     label = (
-                        f"🔧 {tool_name}({args_str[:60]}…)"
+                        f"🔧 calls `{tool_name}`({args_str[:60]}…)"
                         if len(args_str) > 60
-                        else f"🔧 {tool_name}({args_str})"
+                        else f"🔧 calls `{tool_name}`({args_str})"
                     )
                     with st.expander(label):
                         st.json(args)
+                st.caption(
+                    f"tokens: {msg.get('prompt_tokens', 0)}↑ {msg.get('completion_tokens', 0)}↓"
+                    f" | cost: ${msg.get('cost_usd', 0):.5f}"
+                    f" | finish: {msg.get('finish_reason', 'unknown')}"
+                    + (f" | {len(tool_calls)} tool call(s)" if tool_calls else "")
+                )
 
         elif role == "tool":
-            tool_name = msg.get("tool_name", "tool")
+            tool_name = msg.get("tool_name") or "tool"
             status = msg.get("status", "")
-            status_badge = "✓" if status == "success" else "✗"
-            with st.chat_message("user"):
-                st.markdown(f"**{tool_name}** {status_badge}")
+            status_badge = "✓ success" if status == "success" else f"✗ {status or 'error'}"
+            with st.chat_message("tool", avatar="🔧"):
+                st.markdown(f"**Tool result · `{tool_name}`** — {status_badge}")
                 content = msg.get("content", "")
                 with st.expander("Tool output — click to expand"):
                     if isinstance(content, dict):

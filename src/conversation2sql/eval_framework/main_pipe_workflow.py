@@ -236,8 +236,9 @@ async def _run_tasks_concurrently(
             # Isolate per-task failures: one wedged/erroring task is logged to
             # results_error.jsonl and skipped, instead of propagating out of the
             # gather and aborting every remaining (task, iteration) pair.
+            import traceback
             logger.error(
-                f"Error on task_id={task.instance_id} iteration={iteration}: {e}"
+                f"Error on task_id={task.instance_id} iteration={iteration}: {e}\n{traceback.format_exc()}"
             )
             error_record = {
                 "instance_id": task.instance_id,

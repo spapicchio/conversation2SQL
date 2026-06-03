@@ -48,7 +48,7 @@ def classify_submit_error(record: dict) -> str:
         return "Passed"
     last_msg = None
     for msg in record.get("messages", []):
-        if msg.get("role") == "tool" and "submit" in msg.get("tool_name", ""):
+        if msg.get("role") == "tool" and "submit" in (msg.get("tool_name") or ""):
             last_msg = msg
     if last_msg is None:
         return "No Submission"
