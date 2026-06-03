@@ -16,6 +16,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from conversation2sql.eval_framework.agents.bird_baseline.agent_callback import (
     tool_wrapper_patience_and_submit,
     wrap_model_append_tool_message, check_budget_limit,
+    sanitize_thinking_history,
 )
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
 from conversation2sql.eval_framework.agents.bird_baseline.prompts import (
@@ -94,6 +95,7 @@ def run_agent_bird_baseline(
                 thread_limit=single_task.task_budget * 2,
             ),
             check_budget_limit,
+            sanitize_thinking_history,
             wrap_model_append_tool_message,
             tool_wrapper_patience_and_submit,
         ],

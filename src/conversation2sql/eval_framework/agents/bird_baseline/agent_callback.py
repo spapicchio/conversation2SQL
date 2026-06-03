@@ -19,6 +19,47 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COST
 from conversation2sql.eval_framework.state import TaskData
 
 
+def _strip_thinking_from_history(messages: list) -> None:
+    """Flatten reasoning out of *historical* assistant turns, in place.
+
+    Reasoning models (e.g. Qwen3) return an AIMessage whose ``content`` is a list
+    of blocks like ``[{"type": "thinking", ...}, {"type": "text", ...}]``.
+    LangChain echoes that list straight back as the assistant ``content`` on the
+    next request. The Qwen3 chat template mis-renders a prior assistant turn that
+    carries a ``thinking`` block in its content: the next generation comes back
+    ``finish_reason=stop`` with NO tool call (the model writes the call inside a
+    ``<think>`` block that the tool parser never sees), so the agent loop dies
+    before any SQL is submitted.
+
+    Reproduced directly against vLLM: the same 2-turn tool conversation succeeds
+    when the prior assistant content is a plain string and fails when it is a
+    list with a thinking block. Tool calls live in ``tool_calls`` (not content),
+    so dropping the reasoning blocks and keeping only ``text`` is lossless for the
+    agent loop and makes multi-turn tool calling work in thinking mode.
+    """
+    for m in messages:
+        if isinstance(m, AIMessage) and isinstance(m.content, list):
+            m.content = "".join(
+                block.get("text", "")
+                for block in m.content
+                if isinstance(block, dict) and block.get("type") == "text"
+            )
+
+
+@wrap_model_call(state_schema=CustomAgentState)
+def sanitize_thinking_history(
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse[CustomAgentState]],
+) -> ModelResponse:
+    """Strip reasoning blocks from assistant history before each model call.
+
+    See ``_strip_thinking_from_history`` for why this is required for multi-turn
+    tool calling with thinking-enabled models.
+    """
+    _strip_thinking_from_history(request.messages)
+    return handler(request)
+
+
 @before_model(can_jump_to=["end"])
 def check_budget_limit(state: CustomAgentState, runtime: Runtime) -> dict[str, Any] | None:
     if state["updated_user_patience"] < -1:
@@ -89,6 +130,9 @@ def tool_wrapper_patience_and_submit(
                         content=f"Budget exhausted ({user_patience:.1f} remaining). "
                                 "You MUST call submit_sql now with your best SQL.",
                         tool_call_id=request.tool_call["id"],
+                        # Name the message after the blocked tool so downstream
+                        # serialisation/explorer code never sees a None tool name.
+                        name=tool_name,
                     )
                 ],
                 'updated_user_patience': -1
@@ -99,33 +143,18 @@ def tool_wrapper_patience_and_submit(
 
     if tool_name == "submit_sql":
         tool_output = json.loads(response.content)
-        message = tool_output["message"]
 
-        if user_patience < 0:
-            # Out of budget → end the conversation with an explanatory note.
+        # Either out of budget or the SQL passed → the episode is terminal.
+        # Preserve the FULL tool response (with the `passed` field and the
+        # submit_sql tool name) so downstream metric extraction in
+        # `utils_process_agent_response` can read `execution_accuracy` and the
+        # explorer renders the turn with its tool name. Rewriting the content
+        # to just the message string would drop `passed` and break scoring.
+        if user_patience < 0 or tool_output["passed"]:
             return Command(
                 update={
-                    "messages": [
-                        ToolMessage(
-                            content=f"{message}\n\n [SYSTEM NOTE] Budget exhausted conversation ended.",
-                            tool_call_id=request.tool_call["id"],
-                        )
-                    ],
-                    'updated_user_patience': -2
-                },
-            )
-
-        if tool_output["passed"]:
-            # SQL passed evaluation → end the conversation successfully.
-            return Command(
-                update={
-                    "messages": [
-                        ToolMessage(
-                            content=message,
-                            tool_call_id=request.tool_call["id"],
-                        )
-                    ],
-                    'updated_user_patience': -2
+                    "messages": [response.model_copy(deep=True)],
+                    "updated_user_patience": -2,
                 },
             )
 

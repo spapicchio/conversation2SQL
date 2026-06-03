@@ -83,7 +83,10 @@ def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:
         return {**base, **utils_extract_ai_metadata(message, tool_costs=tool_costs)}
 
     if isinstance(message, ToolMessage):
-        content = base.pop("content")
+        base.pop("content")
+        # ToolMessage.content may be a list of content blocks (LangChain spec),
+        # not just a str — normalise to text before the regex / JSON decode.
+        content = utils_single_msg_to_str(message)
         clean = re.sub(r"\s*\[SYSTEM NOTE:.*?\]\s*$", "", content, flags=re.DOTALL)
         try:
             clean = json.loads(clean)

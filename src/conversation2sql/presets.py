@@ -34,6 +34,15 @@ MODEL_PROFILES: dict[str, dict] = {
         "server": {
             "reasoning_parser": "qwen3",
             "language_model_only": True,
+            # Patched copy of the model's default chat template. The stock template
+            # injects an empty <think></think> into historical assistant turns once
+            # reasoning is stripped from history, which makes the model stop closing
+            # </think> on the current turn and bury its tool call inside the open
+            # think block (qwen3 reasoning parser swallows it → finish_reason=stop,
+            # no tool call). The patched template only emits the think wrapper when
+            # reasoning_content is non-empty, so multi-turn tool calling works in
+            # thinking mode. Path is relative to BASE_WORK; resolve_server_args joins it.
+            "chat_template": "bash_scripts/utils/tool_chat_template_qwen35.jinja",
             # Tool calling is only wired up for the tool baselines; see
             # _TOOL_BASELINES / resolve_server_args.
             "tool_call_parser": "qwen3_coder",
@@ -157,19 +166,27 @@ def resolve_variant(name: str) -> list[str]:
     return _dict_to_flags(VARIANTS[name], _VARIANT_FLAG_ORDER)
 
 
-def resolve_profile(name: str, enable_thinking: bool | None) -> list[str]:
+def resolve_profile(
+    name: str, enable_thinking: bool | None, baseline: str = "no_tool"
+) -> list[str]:
     """Return CLI flags for a model profile's predictor sampling params.
 
-    When ``enable_thinking`` is None, the profile's ``default_thinking`` is used.
+    The thinking mode is resolved via ``resolve_effective_thinking`` (explicit
+    flag wins; tool baselines default to non-thinking). The resolved value is
+    emitted as ``--predictor_enable_thinking`` so the predictor config stays in
+    sync with the sampling block — both come from the same decision here.
     """
     if name not in MODEL_PROFILES:
         raise ValueError(
             f"Unknown model profile {name!r}; valid: {', '.join(sorted(MODEL_PROFILES))}"
         )
     prof = MODEL_PROFILES[name]
-    think = prof["default_thinking"] if enable_thinking is None else enable_thinking
+    think = resolve_effective_thinking(name, enable_thinking, baseline)
     sampling = prof["thinking" if think else "non_thinking"]
-    flags = ["--predictor_model_name", prof["predictor_model_name"]]
+    flags = [
+        "--predictor_model_name", prof["predictor_model_name"],
+        "--predictor_enable_thinking", "true" if think else "false",
+    ]
     flags.extend(_dict_to_flags(sampling))
     return flags
 
@@ -178,11 +195,12 @@ def expand_presets(
     model_profile: str | None,
     variant: str | None,
     enable_thinking: bool | None,
+    baseline: str = "no_tool",
 ) -> list[str]:
     """Compose profile + variant flags. Either selector may be None."""
     flags: list[str] = []
     if model_profile is not None:
-        flags.extend(resolve_profile(model_profile, enable_thinking))
+        flags.extend(resolve_profile(model_profile, enable_thinking, baseline))
     if variant is not None:
         flags.extend(resolve_variant(variant))
     return flags
@@ -226,10 +244,27 @@ def profile_for_model_name(model_name: str) -> str:
     )
 
 
-def resolve_effective_thinking(name: str, enable_thinking: bool | None) -> bool:
-    """Return the thinking mode, falling back to the profile default when None."""
+def resolve_effective_thinking(
+    name: str, enable_thinking: bool | None, baseline: str = "no_tool"
+) -> bool:
+    """Return the thinking mode for a profile.
+
+    An explicit ``enable_thinking`` always wins. When it is None we fall back to
+    a default: tool baselines default to **non-thinking**, every other baseline
+    uses the profile's ``default_thinking``.
+
+    Why tool baselines force non-thinking: with thinking enabled these models
+    emit the tool call *inside* their ``<think>`` block on multi-turn steps, so
+    vLLM's tool parser extracts no tool call, the agent loop ends with no action,
+    and the task fails before any SQL is submitted. Non-thinking makes multi-turn
+    tool calling reliable. Pass ``--enable-thinking true`` to override.
+    """
     prof = _require_profile(name)
-    return prof["default_thinking"] if enable_thinking is None else enable_thinking
+    if enable_thinking is not None:
+        return enable_thinking
+    if baseline_uses_tools(baseline):
+        return False
+    return prof["default_thinking"]
 
 
 def resolve_server_args(
@@ -285,7 +320,9 @@ def _cmd_server_config(args: argparse.Namespace) -> None:
     --predictor_enable_thinking that matches the server's chat-template kwargs.
     """
     prof = _require_profile(args.model_profile)
-    think = resolve_effective_thinking(args.model_profile, _str_to_bool(args.enable_thinking))
+    think = resolve_effective_thinking(
+        args.model_profile, _str_to_bool(args.enable_thinking), args.baseline
+    )
     server_args = resolve_server_args(
         args.model_profile, think, args.tp, args.dp, args.base_work, args.baseline
     )
@@ -339,7 +376,7 @@ def _cmd_recover_config(args: argparse.Namespace) -> None:
     baseline = snapshot.get("pipeline", {}).get("baseline", "no_tool")
 
     profile = profile_for_model_name(model_name)
-    think = resolve_effective_thinking(profile, enable_thinking)
+    think = resolve_effective_thinking(profile, enable_thinking, baseline)
     server_args = resolve_server_args(
         profile, think, args.tp, args.dp, args.base_work, baseline
     )
