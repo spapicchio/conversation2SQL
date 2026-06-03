@@ -226,3 +226,76 @@ PATTERN_NAMES: list[str] = [name for name, _ in PATTERN_CATALOG]
 def detect_patterns(record: dict) -> list[PatternHit]:
     events = extract_tool_events(record)
     return [hit for d in ANTI_PATTERNS if (hit := d(events, record)) is not None]
+
+
+def _record_hits(record: dict) -> list[PatternHit]:
+    """Use cached hits from loader if present, else compute."""
+    cached = record.get("_pattern_hits")
+    return cached if cached is not None else detect_patterns(record)
+
+
+def aggregate_patterns(groups: dict[str, list[dict]]) -> dict[str, float]:
+    """name -> mean over instances of (fraction of that instance's samples hitting it).
+
+    Per record a pattern counts at most once (presence, not occurrence count).
+    """
+    per_instance: dict[str, list[float]] = {n: [] for n in PATTERN_NAMES}
+    for samples in groups.values():
+        if not samples:
+            continue
+        present = [{h.name for h in _record_hits(r)} for r in samples]
+        for name in PATTERN_NAMES:
+            per_instance[name].append(sum(name in p for p in present) / len(samples))
+    return {
+        name: (sum(v) / len(v) if v else 0.0) for name, v in per_instance.items()
+    }
+
+
+def clean_fraction(groups: dict[str, list[dict]]) -> float:
+    """Sample-average fraction of samples with zero anti-pattern hits."""
+    per_instance: list[float] = []
+    for samples in groups.values():
+        if not samples:
+            continue
+        clean = sum(1 for r in samples if not _record_hits(r))
+        per_instance.append(clean / len(samples))
+    return sum(per_instance) / len(per_instance) if per_instance else 0.0
+
+
+def positional_tool_distribution(
+    groups: dict[str, list[dict]], max_pos: int = 8
+) -> pd.DataFrame:
+    """Long-form frame [position, tool, share] for a 100%-stacked positional plot.
+
+    Columns 1..max_pos-1 are individual call positions; the last column ">=max_pos"
+    shows the tool at position max_pos for still-active conversations. Each sample
+    contributes exactly one category per position (a tool name, or "(no call)" once
+    the sequence has ended), so shares per position sum to 1. Aggregated sample-average:
+    per-instance share averaged over ALL instances (missing categories imply 0).
+    """
+    positions = [str(p) for p in range(1, max_pos)] + [f"≥{max_pos}"]
+    n_inst = sum(1 for s in groups.values() if s)
+    if n_inst == 0:
+        return pd.DataFrame(columns=["position", "tool", "share"])
+
+    accum: dict[str, dict[str, float]] = {pos: {} for pos in positions}
+    for samples in groups.values():
+        if not samples:
+            continue
+        counts: dict[str, Counter] = {pos: Counter() for pos in positions}
+        for r in samples:
+            seq = [e.tool_name for e in extract_tool_events(r)]
+            for i, pos in enumerate(positions):
+                cat = seq[i] if i < len(seq) else "(no call)"
+                counts[pos][cat] += 1
+        n = len(samples)
+        for pos in positions:
+            for cat, c in counts[pos].items():
+                accum[pos][cat] = accum[pos].get(cat, 0.0) + (c / n)
+
+    rows = [
+        {"position": pos, "tool": cat, "share": total / n_inst}
+        for pos in positions
+        for cat, total in accum[pos].items()
+    ]
+    return pd.DataFrame(rows)

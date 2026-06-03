@@ -171,3 +171,61 @@ def test_budget_death_quiet_after_successful_submit():
     rec = _record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql", status="success"))
     rec["updated_user_patience"] = -2
     assert "budget_death" not in _hits(rec)
+
+
+from explorer.patterns import (
+    aggregate_patterns,
+    clean_fraction,
+    positional_tool_distribution,
+)
+
+
+def _submit_only(sql="SELECT 1"):
+    # A clean validated submission: execute then submit, no anti-patterns.
+    return _record(
+        _ai(("execute_sql", {"sql": sql})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": sql})), _tool("submit_sql", status="success"),
+    )
+
+
+def test_aggregate_is_sample_average_not_pooled():
+    # One instance, 2 samples: one blind-submits, one is clean.
+    blind = _record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql", status="success"))
+    groups = {"inst1": [blind, _submit_only()]}
+    freq = aggregate_patterns(groups)
+    # Per-instance mean = 1/2 = 0.5 (not pooled over a flat list, but same here).
+    assert freq["blind_submit"] == 0.5
+    assert freq["no_submission"] == 0.0
+
+
+def test_aggregate_weights_instances_equally():
+    # inst_a: 2 samples both blind (1.0). inst_b: 1 sample clean (0.0).
+    blind = _record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql", status="success"))
+    groups = {"a": [blind, dict(blind)], "b": [_submit_only()]}
+    freq = aggregate_patterns(groups)
+    # Mean over instances of per-instance rate = (1.0 + 0.0) / 2 = 0.5,
+    # NOT pooled 2/3 = 0.667.
+    assert freq["blind_submit"] == 0.5
+
+
+def test_clean_fraction_sample_average():
+    blind = _record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql", status="success"))
+    groups = {"inst1": [blind, _submit_only()]}
+    # 1 of 2 samples is clean.
+    assert clean_fraction(groups) == 0.5
+
+
+def test_positional_distribution_shares_sum_to_one_per_position():
+    groups = {"inst1": [_submit_only()]}
+    df = positional_tool_distribution(groups, max_pos=8)
+    sums = df.groupby("position")["share"].sum()
+    for pos, total in sums.items():
+        assert abs(total - 1.0) < 1e-9, f"position {pos} sums to {total}"
+
+
+def test_positional_distribution_no_call_band_appears_after_end():
+    # 2-event sequence; positions 3..8 should be "(no call)".
+    groups = {"inst1": [_submit_only()]}
+    df = positional_tool_distribution(groups, max_pos=8)
+    pos3 = df[(df["position"] == "3") & (df["tool"] == "(no call)")]["share"]
+    assert float(pos3.iloc[0]) == 1.0
