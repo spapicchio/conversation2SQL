@@ -106,9 +106,34 @@ ANTI_PATTERNS: list[Detector] = [...]   # extensible registry — add a function
 def detect_patterns(record: dict) -> list[PatternHit]:
     events = extract_tool_events(record)
     return [hit for d in ANTI_PATTERNS if (hit := d(events, record))]
+```
 
-def aggregate_patterns(records: list[dict]) -> Counter[str]:
-    """name -> number of records hitting it (one count per record, not per occurrence)."""
+### Sample-average aggregation (the core invariant)
+
+Every aggregate is computed **per-instance first, then averaged across instances**, taking
+the `groups` dict (`instance_id → [samples]`) that `load_run` already builds — exactly like
+`pass_at_1` in `loader._compute_stats` and `reliability_metrics` in `metrics.py`. With a
+single iteration this collapses to a plain fraction (today's behavior is unchanged), but
+when multiple iterations exist it prevents instances with more samples from being
+over-weighted, and it lines up with the Aptitude/Unreliability machinery consuming the same
+`groups`. **No aggregate consumes a flat `records` list.**
+
+```python
+def aggregate_patterns(groups: dict[str, list[dict]]) -> dict[str, float]:
+    """name -> mean over instances of (fraction of that instance's samples hitting it).
+
+    Per-record a pattern counts at most once (presence, not occurrence count)."""
+
+def positional_tool_distribution(
+    groups: dict[str, list[dict]], max_pos: int = 8
+) -> "pd.DataFrame":
+    """Long-form frame: position (1..max_pos, with a '>=max_pos' tail bucket), tool, share.
+
+    For each sample, the ordered tool sequence (including the terminal submit_sql) gives the
+    tool at each position; positions past the sample's last call contribute to a synthetic
+    '(no call)' tool. Shares are aggregated sample-average style: mean over instances of the
+    per-instance mean share. Denominator is constant across positions (all instances), so the
+    '(no call)' band grows with position and shows conversation attrition."""
 ```
 
 ### Initial catalog (all deterministic, script-only)
@@ -132,9 +157,12 @@ stripping whitespace from string values; SQL args compared on whitespace-collaps
 
 - In `load_run`, after `classify_submit_error`, attach `r["_pattern_hits"] = detect_patterns(r)`
   to each record (mirrors the existing `r["_error_class"]` pattern).
-- Add to `RunStats`: `pattern_distribution: Counter[str]` (via `aggregate_patterns`) and
-  `n_clean: int` (records with zero hits). Counts are **per-record** (a record hitting a
-  pattern twice still counts once).
+- Add to `RunStats`: `pattern_frequency: dict[str, float]` (via `aggregate_patterns(groups)`,
+  sample-average) and `clean_fraction: float` (sample-average fraction of samples with zero
+  hits). `_compute_stats` already receives `groups` — reuse it; do not aggregate over the flat
+  `records` list.
+- The positional plot frame is computed in the page from `run.groups` (not stored on
+  `RunStats`), since it is page-specific and `groups` is already on `RunData`.
 
 ---
 
@@ -142,8 +170,13 @@ stripping whitespace from string values; SQL args compared on whitespace-collaps
 
 ### Single-run page (`pages/patterns.py`)
 
-- **Headline bar chart:** instances hitting each anti-pattern (sorted desc, with % of
-  `n_total`).
+- **Headline bar chart:** sample-average frequency of each anti-pattern (sorted desc, as a
+  %), from `stats.pattern_frequency`.
+- **Positional tool plot:** 100%-stacked bar — x-axis = call position (`1`..`8`, then a
+  `≥8` tail bucket), color = tool name (including terminal `submit_sql` and a grey
+  `(no call)` band for instances that already ended), height = sample-average share. Built
+  from `positional_tool_distribution(run.groups)`. Shows the typical workflow shape and when
+  submission/attrition happens.
 - **Cleanliness histogram:** how many records are clean vs hit 1 / 2 / 3+ patterns.
 - **Drill-down:** select a pattern → filtered task table (reusing the existing dataframe
   table style from `app.py`) → select a task → `render_conversation`, with the hit's
@@ -151,9 +184,10 @@ stripping whitespace from string values; SQL args compared on whitespace-collaps
 
 ### Compare page (`compare.py`, extended)
 
-- One row per anti-pattern, one column per selected run; cells = **% of instances** hitting
-  it. So a tweak that drops `repeated_identical_call` 40%→5% is visible at a glance.
-- (Raw % is the headline; absolute count not required per user.)
+- One row per anti-pattern, one column per selected run; cells = **sample-average %** hitting
+  it (from each run's `stats.pattern_frequency`). So a tweak that drops
+  `repeated_identical_call` 40%→5% is visible at a glance.
+- (Sample-average % is the headline; absolute count not required per user.)
 
 ---
 
@@ -162,6 +196,11 @@ stripping whitespace from string values; SQL args compared on whitespace-collaps
 - Hand-built tiny `messages` fixtures — one positive and one negative per detector.
 - A dedicated test for `extract_tool_events` covering back-to-back `tool` messages and an
   `ai` turn with multiple tool_calls.
+- `aggregate_patterns` / `positional_tool_distribution`: a multi-sample `groups` fixture
+  (one instance with 2 samples, one hitting a pattern) asserting the result is the
+  per-instance mean (0.5), not the pooled fraction — locks in the sample-average invariant.
+- A constant-denominator check on the positional frame: shares at each position (including
+  `(no call)`) sum to ~1.0.
 - No fixtures larger than a few messages; no LLM, no DB.
 - Run via `uv run pytest tests/explorer/test_patterns.py`.
 
