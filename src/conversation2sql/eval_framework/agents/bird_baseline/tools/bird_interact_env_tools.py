@@ -52,7 +52,10 @@ from conversation2sql.eval_framework.state import (
 MAX_RESULT_LENGTH = 500
 
 DB_TOOL_COSTS: dict[str, float] = {
-    "execute_sql": 2.0,
+    # Cost 1 to match the value advertised in the system prompt and the tool's
+    # own docstring ("Cost: 1 bird-coin"); the agent budgets against that figure,
+    # so charging 2 here desynced its budget planning and forced premature submits.
+    "execute_sql": 1.0,
     "get_schema": 1.0,
     "get_all_column_meanings": 1.0,
     "get_column_meaning": 0.5,

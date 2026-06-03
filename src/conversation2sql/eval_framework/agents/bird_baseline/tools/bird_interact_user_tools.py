@@ -208,13 +208,13 @@ def submit_sql_impl(
     if conditions and conditions.get("order", False):
         if pred_result == target_result:
             passed = True
-            message = ("Phase 1 correct!. Task finished.",)
+            message = "Phase 1 correct! Task finished."
         else:
             message = "Your SQL is not correct."
     else:
         if set(pred_result) == set(target_result):
             passed = True
-            message = ("Phase 1 correct! Task finished.",)
+            message = "Phase 1 correct! Task finished."
         else:
             message = "Your SQL is not correct."
 
