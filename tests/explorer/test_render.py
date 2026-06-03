@@ -68,3 +68,37 @@ def test_render_conversation_rejects_truly_unknown_role(patch_st):
     record = _record_with_roles(["bogus"])
     with pytest.raises(ValueError):
         patch_st.render_conversation(record)
+
+
+class _CapturingSt(_StubSt):
+    """_StubSt that records markdown() text so assertions can inspect output."""
+
+    def __init__(self):
+        self.markdown_calls: list[str] = []
+
+    def markdown(self, body="", *_args, **_kwargs):
+        self.markdown_calls.append(str(body))
+        return _StubCtx()
+
+
+def test_render_marks_highlighted_messages(monkeypatch):
+    import explorer.render as render
+
+    cap = _CapturingSt()
+    monkeypatch.setattr(render, "st", cap)
+    record = {
+        "instance_id": "i1",
+        "messages": [{"role": "ai", "content": "hi", "tool_calls": []}],
+    }
+    render.render_conversation(record, highlight_indices={0})
+    assert any("\U0001f6a9" in c for c in cap.markdown_calls)  # 🚩 marker rendered
+
+
+def test_render_no_marker_without_highlight(monkeypatch):
+    import explorer.render as render
+
+    cap = _CapturingSt()
+    monkeypatch.setattr(render, "st", cap)
+    record = {"instance_id": "i1", "messages": [{"role": "ai", "content": "hi", "tool_calls": []}]}
+    render.render_conversation(record)
+    assert not any("\U0001f6a9" in c for c in cap.markdown_calls)

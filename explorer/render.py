@@ -28,7 +28,7 @@ def render_ai_content(content) -> None:
         st.text(str(content))
 
 
-def render_conversation(record: dict) -> None:
+def render_conversation(record: dict, highlight_indices: set[int] | None = None) -> None:
     acc = record.get("execution_accuracy", False)
     badge = "✓ PASS" if acc else "✗ FAIL"
     st.subheader(
@@ -93,8 +93,11 @@ def render_conversation(record: dict) -> None:
     # the long system prompt stays collapsed; the user question, each assistant
     # turn (reasoning + text + tool-call chips), and each tool result render as
     # their own distinctly-styled turn.
-    for msg in record.get("messages", []):
+    highlight = highlight_indices or set()
+    for i, msg in enumerate(record.get("messages", [])):
         role = msg.get("role")
+        if i in highlight:
+            st.markdown("\U0001f6a9 **flagged turn**")
 
         if role == "system":
             with st.expander("⚙️ System prompt — click to expand"):
@@ -110,6 +113,10 @@ def render_conversation(record: dict) -> None:
             with st.chat_message("assistant"):
                 st.markdown("**Assistant**")
                 content = msg.get("content", "")
+                thinking = msg.get("thinking", "")
+                if thinking and not isinstance(content, list):
+                    with st.expander("Thinking (Not passed in History!) — click to expand"):
+                        st.text(thinking)
                 if content:
                     render_ai_content(content)
                 tool_calls = msg.get("tool_calls", [])
