@@ -51,6 +51,15 @@ from conversation2sql.eval_framework.state import (
 
 MAX_RESULT_LENGTH = 500
 
+# Appended only when the formatted result actually exceeds MAX_RESULT_LENGTH.
+# Without this, the cut is silent and the agent mistakes a successful query for
+# a broken one (it sees a row sliced mid-value and re-runs / second-guesses,
+# wasting bird-coins). The note states the query succeeded and how to see more.
+TRUNCATION_NOTICE = (
+    f"\n... [output truncated to {MAX_RESULT_LENGTH} characters; "
+    "the query ran successfully — add a LIMIT or select fewer columns to see more]"
+)
+
 DB_TOOL_COSTS: dict[str, float] = {
     # Cost 1 to match the value advertised in the system prompt and the tool's
     # own docstring ("Cost: 1 bird-coin"); the agent budgets against that figure,
@@ -91,8 +100,10 @@ def execute_sql_impl(sql: str, db_dsn: str) -> ExecuteSQLResponse:
     try:
         result, desc = _execute_query(query=sql, db_dsn=db_dsn)
         format_result = _format_result(result, desc)
+        if len(format_result) > MAX_RESULT_LENGTH:
+            format_result = format_result[:MAX_RESULT_LENGTH] + TRUNCATION_NOTICE
         return ExecuteSQLResponse(
-            result=f"{format_result[:MAX_RESULT_LENGTH]}",
+            result=format_result,
             success=True,
         )
 

@@ -80,7 +80,14 @@ def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:
     }
 
     if isinstance(message, AIMessage):
-        return {**base, **utils_extract_ai_metadata(message, tool_costs=tool_costs)}
+        meta = message.response_metadata or {}
+        thinking = meta.get("thinking") if isinstance(meta, dict) else None
+        thinking_field = {"thinking": thinking} if thinking else {}
+        return {
+            **base,
+            **utils_extract_ai_metadata(message, tool_costs=tool_costs),
+            **thinking_field,
+        }
 
     if isinstance(message, ToolMessage):
         base.pop("content")

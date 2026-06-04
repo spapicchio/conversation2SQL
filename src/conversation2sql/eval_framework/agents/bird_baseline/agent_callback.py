@@ -36,14 +36,41 @@ def _strip_thinking_from_history(messages: list) -> None:
     list with a thinking block. Tool calls live in ``tool_calls`` (not content),
     so dropping the reasoning blocks and keeping only ``text`` is lossless for the
     agent loop and makes multi-turn tool calling work in thinking mode.
+
+
+    Note: Taken from https://huggingface.co/Qwen/Qwen3.5-9B
+    "No Thinking Content in History: In multi-turn conversations, 
+    the historical model output should only include the final output part and does
+    not need to include the thinking content. 
+    It is implemented in the provided chat template in Jinja2. 
+    However, for frameworks that do not directly use the Jinja2 chat template,
+    it is up to the developers to ensure that the best practice is followed."
     """
     for m in messages:
         if isinstance(m, AIMessage) and isinstance(m.content, list):
-            m.content = "".join(
-                block.get("text", "")
-                for block in m.content
-                if isinstance(block, dict) and block.get("type") == "text"
-            )
+            thinking_blocks: list[str] = []
+            text_blocks: list[str] = []
+
+            for block in m.content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "thinking":
+                    thinking_blocks.append(block.get("thinking", ""))
+                elif block_type == "text":
+                    text_blocks.append(block.get("text", ""))
+
+            if thinking_blocks:
+                meta = m.response_metadata or {}
+                if not isinstance(meta, dict):
+                    meta = {}
+                if not meta.get("thinking"):
+                    meta["thinking"] = "\n\n".join(
+                        t for t in thinking_blocks if t
+                    )
+                    m.response_metadata = meta
+
+            m.content = "".join(text_blocks)
 
 
 @wrap_model_call(state_schema=CustomAgentState)

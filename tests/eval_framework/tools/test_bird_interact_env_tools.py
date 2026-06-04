@@ -14,6 +14,7 @@ from unittest.mock import patch
 import psycopg2
 
 from conversation2sql.eval_framework.agents.bird_baseline.tools import bird_interact_env_tools as env_tools
+from conversation2sql.eval_framework.agents.bird_baseline.tools import utils_db_execute
 from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     KNOWLEDGE_VISIBLE_FIELDS,
     ExecuteSQLResponse,
@@ -164,8 +165,10 @@ class TestExecuteSqlImpl:
 
     def test_long_result_is_truncated_to_max_length(self):
         """Result truncation is enforced so the agent's context cannot be
-        flooded by huge result sets. Exact equality (not <=) catches a
-        regression where truncation accidentally becomes a no-op."""
+        flooded by huge result sets. The body is cut to exactly
+        MAX_RESULT_LENGTH chars (catches a regression where truncation
+        becomes a no-op) and an explicit notice is appended so the agent
+        knows the cut happened rather than mistaking it for a failed query."""
         # Pick a length strictly larger than the cap so we can detect a
         # missing truncation step (it would leave the surplus 100 chars).
         long_text = "x" * (env_tools.MAX_RESULT_LENGTH + 100)
@@ -175,8 +178,66 @@ class TestExecuteSqlImpl:
         ):
             response = execute_sql_impl("SELECT 1;", db_dsn="dsn")
         assert response.success is True
-        assert len(response.result) == env_tools.MAX_RESULT_LENGTH
+        # Body cut to the cap, then the truncation notice appended.
+        assert response.result == long_text[: env_tools.MAX_RESULT_LENGTH] + env_tools.TRUNCATION_NOTICE
 
+    def test_short_result_is_not_marked_as_truncated(self):
+        """The truncation notice must be appended *only* when the output is
+        actually cut — a result at or under the cap is returned verbatim so
+        the agent never sees a spurious "truncated" message."""
+        short_text = "x" * (env_tools.MAX_RESULT_LENGTH - 1)
+        with (
+            patch.object(env_tools, "_execute_query", return_value=("ignored", None)),
+            patch.object(env_tools, "_format_result", return_value=short_text),
+        ):
+            response = execute_sql_impl("SELECT 1;", db_dsn="dsn")
+        assert response.success is True
+        assert response.result == short_text
+        assert env_tools.TRUNCATION_NOTICE not in response.result
+
+
+# ---------------------------------------------------------------------------
+# _format_result / _format_cell
+# ---------------------------------------------------------------------------
+class TestFormatResult:
+    """``_format_result`` turns RealDictRow rows into the text table the agent
+    reads. These tests pin the two budget/clarity properties we rely on:
+    no separator rule, and compact full-precision JSON for container cells."""
+
+    def test_no_separator_rule_between_header_and_rows(self):
+        """The dash rule carried no information and wasted the downstream
+        character budget — the first line after the header must be data."""
+        result = [{"sitekey": "SP9227", "sitelabel": "Solar Plant West"}]
+        desc = (("sitekey",), ("sitelabel",))
+        out = utils_db_execute._format_result(result, desc)
+        lines = out.split("\n")
+        assert lines[0] == "sitekey | sitelabel"
+        assert lines[1] == "SP9227 | Solar Plant West"
+        assert "---" not in out
+
+    def test_container_cell_is_compact_json_not_python_repr(self):
+        """JSON/array columns come back as dict/list; they must render as
+        compact double-quoted JSON (deterministic key order, full precision),
+        never Python ``repr`` with single quotes or rounded floats."""
+        result = [{"stations": [{"station": "Observatory", "aoi": 0.0146324}]}]
+        desc = (("stations",),)
+        out = utils_db_execute._format_result(result, desc)
+        cell = out.split("\n")[1]
+        # Compact separators, sorted keys, no precision loss, valid JSON.
+        assert cell == '[{"aoi":0.0146324,"station":"Observatory"}]'
+        assert "'" not in cell
+        assert json.loads(cell) == [{"station": "Observatory", "aoi": 0.0146324}]
+
+    def test_cells_are_truncated_to_max_characters(self):
+        """The per-cell cap still applies after JSON serialisation."""
+        result = [{"blob": {"k": "y" * 500}}]
+        desc = (("blob",),)
+        out = utils_db_execute._format_result(result, desc, max_characters=20)
+        assert len(out.split("\n")[1]) == 20
+
+    def test_none_and_empty_results_have_dedicated_messages(self):
+        assert utils_db_execute._format_result(None, ()) == "Query executed successfully."
+        assert utils_db_execute._format_result([], ()) == "Query executed, empty result set."
 
 
 # ---------------------------------------------------------------------------

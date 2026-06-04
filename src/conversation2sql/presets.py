@@ -43,6 +43,7 @@ MODEL_PROFILES: dict[str, dict] = {
             # reasoning_content is non-empty, so multi-turn tool calling works in
             # thinking mode. Path is relative to BASE_WORK; resolve_server_args joins it.
             "chat_template": "bash_scripts/utils/tool_chat_template_qwen35.jinja",
+            
             # Tool calling is only wired up for the tool baselines; see
             # _TOOL_BASELINES / resolve_server_args.
             "tool_call_parser": "qwen3_coder",
@@ -252,18 +253,10 @@ def resolve_effective_thinking(
     An explicit ``enable_thinking`` always wins. When it is None we fall back to
     a default: tool baselines default to **non-thinking**, every other baseline
     uses the profile's ``default_thinking``.
-
-    Why tool baselines force non-thinking: with thinking enabled these models
-    emit the tool call *inside* their ``<think>`` block on multi-turn steps, so
-    vLLM's tool parser extracts no tool call, the agent loop ends with no action,
-    and the task fails before any SQL is submitted. Non-thinking makes multi-turn
-    tool calling reliable. Pass ``--enable-thinking true`` to override.
     """
     prof = _require_profile(name)
     if enable_thinking is not None:
         return enable_thinking
-    if baseline_uses_tools(baseline):
-        return False
     return prof["default_thinking"]
 
 
@@ -283,6 +276,7 @@ def resolve_server_args(
     tool-calling agent and the profile declares a ``tool_call_parser``, the
     tool-calling flags are appended.
     """
+    # TODO: this function may be too model specific
     prof = _require_profile(name)
     server = prof["server"]
     think = resolve_effective_thinking(name, enable_thinking)
@@ -294,13 +288,21 @@ def resolve_server_args(
     ]
     if "chat_template" in server:
         args += ["--chat-template", os.path.join(base_work, server["chat_template"])]
-    args += ["--default-chat-template-kwargs", json.dumps({"enable_thinking": think})]
+
+    if 'qwen' in name.lower() and not think:
+        # for Qwen profiles, the defualt chat template must be add only when False
+        args += ["--default-chat-template-kwargs", json.dumps({"enable_thinking": think})]
+    
     if server.get("language_model_only"):
         args += ["--language-model-only"]
+
     if "limit_mm_per_prompt" in server:
         args += ["--limit-mm-per-prompt", json.dumps(server["limit_mm_per_prompt"])]
+
     if baseline_uses_tools(baseline) and "tool_call_parser" in server:
         args += ["--enable-auto-tool-choice", "--tool-call-parser", server["tool_call_parser"]]
+
+
     return args
 
 

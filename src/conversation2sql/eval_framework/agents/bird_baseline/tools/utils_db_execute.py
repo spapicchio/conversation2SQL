@@ -106,12 +106,29 @@ def preprocess_results(
     return processed
 
 
+def _format_cell(value: Any, max_characters: int) -> str:
+    """Render one cell for the text table.
+
+    Container values (JSON/array/composite columns come back as ``list``/``dict``)
+    are serialised as *compact* JSON rather than Python ``repr`` so the agent sees
+    valid, deterministic, double-quoted JSON (``{"aoi":0.0146324,...}``) instead of
+    single-quoted ``repr`` padding — shorter and parseable. Full numeric precision
+    is preserved on purpose: ``execute_sql`` is an inspection tool, so rounding
+    (which lives in ``preprocess_results`` for the submit-time comparison) would
+    hide values the agent needs to verify its query.
+    """
+    if isinstance(value, (dict, list)):
+        s = json.dumps(value, default=str, separators=(",", ":"), sort_keys=True)
+    else:
+        s = str(value)
+    return s[:max_characters]
+
+
 def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters=100) -> str:
     """
     Output:
 
     sitekey | sitelabel
-    -------------------
     SP9227 | Solar Plant West Davidport
     SP6740 | Solar Plant Dillonmouth
     SP7738 | Solar Plant North Xavier
@@ -128,7 +145,6 @@ def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters
     cursor_desc = (Column(name='sitekey', type_code=25), Column(name='sitelabel', type_code=25))
     """
 
-    # result = preprocess_results(result, cursor_desc)
     if result is None:
         return "Query executed successfully."
 
@@ -140,9 +156,10 @@ def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters
 
     # take the first 100 rows to avoid overwhelming the output, and truncate each cell to max_characters chars
     rows = [
-        " | ".join(str(row[col])[:max_characters] for col in cols)
+        " | ".join(_format_cell(row[col], max_characters) for col in cols)
         for row in result[:100]
     ]
 
-    separator = "-" * min(max(len(header), *(len(r) for r in rows)), 200)
-    return "\n".join([header, separator, *rows])
+    # No separator rule: it carries no information for the model and a dash line
+    # padded to row width wastes the limited budget enforced downstream.
+    return "\n".join([header, *rows])
