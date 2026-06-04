@@ -89,6 +89,8 @@ build_run_slug() {
   [[ "${gt_db}"  == "true" ]] && slug="${slug}__gt-db"
   [[ "${gt_kb}"  == "true" ]] && slug="${slug}__gt-kb"
   slug="${slug}__iter${num_iterations}"
+  # IF DEBUG IS SET and it is TRUE, add a suffix to distinguish these runs without needing a separate VARIANT for debug configs.
+  [[ -n "${DEBUG:-}" && "${DEBUG:-}" == "true" ]] && slug="${slug}__debug"
 
   echo "${slug}"
 }
