@@ -1,3 +1,5 @@
+from langchain.agents.middleware import ClearToolUsesEdit
+from langchain.agents.middleware import ContextEditingMiddleware
 from typing import Any
 from conversation2sql.eval_framework.agents.utils import (
     utils_extract_sql_from_ai_message,
@@ -15,10 +17,13 @@ from langchain_core.messages import AIMessage, BaseMessage
 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_callback import (
     tool_wrapper_patience_and_submit,
-    wrap_model_append_tool_message, check_budget_limit,
+    wrap_model_append_tool_message,
+    check_budget_limit,
     sanitize_thinking_history,
 )
-from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import (
+    CustomAgentState,
+)
 from conversation2sql.eval_framework.agents.bird_baseline.prompts import (
     build_bird_interact_agent_messages,
 )
@@ -41,18 +46,19 @@ from conversation2sql.logger import get_logger
 
 logger = get_logger(__name__)
 
+
 def run_agent_bird_baseline(
-        single_task: TaskData,
-        model_agent: BaseChatModel,
-        model_user_parsing: BaseChatModel,
-        model_user_generator: BaseChatModel,
-        *,
-        enable_ask_user: bool,
+    single_task: TaskData,
+    model_agent: BaseChatModel,
+    model_user_parsing: BaseChatModel,
+    model_user_generator: BaseChatModel,
+    *,
+    enable_ask_user: bool,
 ) -> CustomAgentState:
     if enable_ask_user:
-        assert (
-            model_user_parsing is not None and model_user_generator is not None
-        ), "model_user_parsing and model_user_generator must not be None when enable_ask_user=True"
+        assert model_user_parsing is not None and model_user_generator is not None, (
+            "model_user_parsing and model_user_generator must not be None when enable_ask_user=True"
+        )
 
     messages = build_bird_interact_agent_messages(
         params={
@@ -93,6 +99,17 @@ def run_agent_bird_baseline(
                 # Persists across multiple invocations with the same thread ID.
                 # Requires a checkpointer to maintain state. None means no thread limit.
                 thread_limit=single_task.task_budget * 2,
+            ),
+            ContextEditingMiddleware(
+                edits=[
+                    ClearToolUsesEdit(
+                        trigger=10_000,
+                        keep=3,
+                        clear_tool_inputs=False,
+                        exclude_tools=[],
+                        placeholder="[cleared]",
+                    ),
+                ],
             ),
             check_budget_limit,
             sanitize_thinking_history,
@@ -167,7 +184,7 @@ def utils_process_agent_response(
     tool_costs = tool_costs or {}
     messages = [
         utils_process_single_msg(m, tool_costs=tool_costs)
-        for m in response.pop("messages") #pyrefly: ignore
+        for m in response.pop("messages")  # pyrefly: ignore
     ]
     total_cost = 0
     total_tokens = 0
@@ -199,4 +216,3 @@ def utils_process_agent_response(
         "execution_accuracy": passed,
         "messages": messages,
     }
-
