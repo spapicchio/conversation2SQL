@@ -24,7 +24,7 @@ _DESCRIPTIONS: dict[str, str] = {
     "repeated_identical_call": "Agent issues the exact same call twice — a sign it isn't tracking what it already did. **Detected:** the same tool name + identical arguments occurs ≥2 times (SQL compared with whitespace collapsed).",
     "submit_after_error": "Agent submits a query that already failed when run. **Detected:** the submitted SQL is identical (whitespace-collapsed) to an `execute_sql` whose result had an error status.",
     "unrecovered_error_loop": "Agent keeps re-running broken SQL without recovering. **Detected:** ≥3 consecutive `execute_sql` errors with no successful run in between (the streak resets on any success).",
-    "kb_blind": "External knowledge was available but the agent ignored it. **Detected:** the task has KB entries (`masked_agent_kb`/`gt_knowledge_base`) yet `get_knowledge_definition` is never called.",
+    "kb_blind": "The task's answer needs external knowledge but the agent ignored it. **Detected:** the gold solution depends on ≥1 KB entry (`gt_knowledge_base` non-empty) yet `get_knowledge_definition` is never called. *Only applicable to KB-needing tasks* — its rate is measured over that subset, not all samples.",
     "budget_death": "Agent runs out of patience budget before landing a successful answer. **Detected:** no successful `submit_sql`, and either a tool message reports the budget exhausted or `updated_user_patience` ≤ 0.",
     "no_submission": "Conversation ends without the agent ever answering. **Detected:** no `submit_sql` call appears anywhere in the trace.",
 }
@@ -56,25 +56,39 @@ with st.sidebar:
 run = _load_run_cached(str(RESULTS_ROOT / date / run_key))
 stats = run.stats
 
-# ── Headline: anti-pattern frequency (sample-average) ───────────────────────────
-st.subheader("Anti-pattern frequency (sample-average)")
-st.caption(f"Fraction of instances hitting each pattern · clean: {stats.clean_fraction * 100:.1f}%")
+# ── Headline: anti-pattern rate among applicable samples ────────────────────────
+st.subheader("Anti-pattern rate (sample-average, among applicable samples)")
+st.caption(f"Rate over the samples each pattern could fire on · clean: {stats.clean_fraction * 100:.1f}%")
 with st.expander("What do these anti-patterns mean?"):
     st.caption(
         "Each is a deterministic, per-conversation flag computed from the tool-call trace "
-        "(no LLM). Frequency above is the sample-average: the mean over instances of the "
-        "fraction of that instance's samples hitting the pattern."
+        "(no LLM). The rate is the sample-average — mean over instances of the fraction of "
+        "that instance's samples hitting the pattern — but measured over each pattern's "
+        "**applicable** samples (the denominator `n`), so patterns with different "
+        "denominators (e.g. KB-blind only applies to KB-needing tasks) compare honestly."
     )
     for name, label in PATTERN_CATALOG:
         st.markdown(f"**{label}** — {_DESCRIPTIONS[name]}")
-freq_df = pd.DataFrame(
-    [{"Pattern": _LABELS[name], "Frequency": stats.pattern_frequency.get(name, 0.0)}
-     for name, _ in PATTERN_CATALOG]
-).sort_values("Frequency", ascending=False)
+_freq_rows = []
+for name, _ in PATTERN_CATALOG:
+    s = stats.pattern_stats.get(name)
+    rate, n = (s.rate, s.applicable_n) if s else (0.0, 0)
+    _freq_rows.append({
+        "Pattern": _LABELS[name],
+        "Rate": rate,
+        "n": n,
+        "Label": f"{rate * 100:.0f}%  (n={n})",
+    })
+freq_df = pd.DataFrame(_freq_rows).sort_values("Rate", ascending=False)
+freq_base = alt.Chart(freq_df).encode(y=alt.Y("Pattern:N", sort="-x"))
 st.altair_chart(
-    alt.Chart(freq_df).mark_bar().encode(
-        x=alt.X("Frequency:Q", scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format="%")),
-        y=alt.Y("Pattern:N", sort="-x"),
+    (
+        freq_base.mark_bar().encode(
+            x=alt.X("Rate:Q", scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format="%")),
+        )
+        + freq_base.mark_text(align="left", dx=3, color="#444").encode(
+            x=alt.X("Rate:Q"), text="Label:N",
+        )
     ).properties(height=260),
     use_container_width=True,
 )
@@ -84,13 +98,28 @@ st.subheader("Tool by call position")
 pos_df = positional_tool_distribution(run.groups)
 if not pos_df.empty:
     pos_order = [str(p) for p in range(1, 8)] + ["≥8"]
+    pos_base = alt.Chart(pos_df).encode(
+        x=alt.X("position:N", sort=pos_order, title="Call position"),
+        # Normalize + share the order so bars and labels stack identically.
+        y=alt.Y("share:Q", stack="normalize", title="Share"),
+        order=alt.Order("tool:N"),
+    )
+    pos_bars = pos_base.mark_bar().encode(
+        y=alt.Y("share:Q", stack="normalize", axis=alt.Axis(format="%"), title="Share"),
+        color=alt.Color("tool:N", title="Tool"),
+    )
+    # Annotate each segment with its share, centred via bandPosition. Hide slivers
+    # below 5% so the labels stay legible.
+    pos_labels = (
+        pos_base.transform_filter("datum.share >= 0.05")
+        .mark_text(baseline="middle", fontSize=10, color="white")
+        .encode(
+            y=alt.Y("share:Q", stack="normalize", bandPosition=0.5),
+            text=alt.Text("share:Q", format=".0%"),
+        )
+    )
     st.altair_chart(
-        alt.Chart(pos_df).mark_bar().encode(
-            x=alt.X("position:N", sort=pos_order, title="Call position"),
-            y=alt.Y("share:Q", stack="normalize", axis=alt.Axis(format="%"), title="Share"),
-            color=alt.Color("tool:N", title="Tool"),
-            order=alt.Order("tool:N"),
-        ).properties(height=320),
+        (pos_bars + pos_labels).properties(height=320),
         use_container_width=True,
     )
 

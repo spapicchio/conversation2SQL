@@ -181,15 +181,29 @@ if has_tools:
 # ── Anti-pattern frequency (sample-average) ─────────────────────────────────────
 st.divider()
 st.subheader("Tool-interaction anti-patterns")
-st.caption("Sample-average % of instances hitting each pattern. Red = worst (highest) per row.")
+st.caption(
+    "Sample-average rate among each pattern's *applicable* samples (denominator `n`). "
+    "Red = worst (highest) per row."
+)
 
 _pat_labels = dict(PATTERN_CATALOG)
+
+
+def _pat_stat(run, name):
+    return run.stats.pattern_stats.get(name)
+
+
 pat_raw = pd.DataFrame(
-    {label: {_pat_labels[name]: run.stats.pattern_frequency.get(name, 0.0)
+    {label: {_pat_labels[name]: (s.rate if (s := _pat_stat(run, name)) else 0.0)
              for name, _ in PATTERN_CATALOG}
      for label, run in runs.items()}
 )
-pat_display = pat_raw.applymap(lambda v: f"{v * 100:.1f}%")
+pat_display = pd.DataFrame(
+    {label: {_pat_labels[name]:
+             (f"{s.rate * 100:.1f}% (n={s.applicable_n})" if (s := _pat_stat(run, name)) else "—")
+             for name, _ in PATTERN_CATALOG}
+     for label, run in runs.items()}
+)
 
 
 def _highlight_worst(row: pd.Series) -> list[str]:

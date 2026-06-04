@@ -15,9 +15,14 @@ except ModuleNotFoundError:
     from explorer.metrics import ReliabilityStats, reliability_metrics
 
 try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
-    from patterns import aggregate_patterns, clean_fraction, detect_patterns
+    from patterns import PatternStat, aggregate_patterns, clean_fraction, detect_patterns
 except ModuleNotFoundError:
-    from explorer.patterns import aggregate_patterns, clean_fraction, detect_patterns
+    from explorer.patterns import (
+        PatternStat,
+        aggregate_patterns,
+        clean_fraction,
+        detect_patterns,
+    )
 
 
 @dataclass
@@ -33,7 +38,7 @@ class RunStats:
     accuracy_by_database: dict[str, float]  # database -> pass rate
     error_distribution: Counter[str]  # error_class -> count
     tool_usage: Counter[str]  # tool_name -> total calls
-    pattern_frequency: dict[str, float] = field(default_factory=dict)  # name -> sample-avg rate
+    pattern_stats: dict[str, PatternStat] = field(default_factory=dict)  # name -> rate + applicable N
     clean_fraction: float = 0.0  # sample-avg fraction of samples with zero hits
     reliability: ReliabilityStats | None = None
 
@@ -159,7 +164,7 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
         tool_usage["budget_exhausted"] += budget_exhausted
 
     g = groups or {}
-    pattern_frequency = aggregate_patterns(g)
+    pattern_stats = aggregate_patterns(g)
     clean = clean_fraction(g)
 
     return RunStats(
@@ -174,7 +179,7 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
         accuracy_by_database=accuracy_by_database,
         error_distribution=error_distribution,
         tool_usage=tool_usage,
-        pattern_frequency=pattern_frequency,
+        pattern_stats=pattern_stats,
         clean_fraction=clean,
         reliability=reliability_metrics(groups or {}),
     )

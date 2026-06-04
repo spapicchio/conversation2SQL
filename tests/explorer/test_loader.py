@@ -374,5 +374,6 @@ def test_compute_stats_pattern_frequency_sample_average():
     )
     groups = {"i1": [blind, validated]}
     stats = _compute_stats([blind, validated], groups)
-    assert stats.pattern_frequency["blind_submit"] == 0.5
+    assert stats.pattern_stats["blind_submit"].rate == 0.5
+    assert stats.pattern_stats["blind_submit"].applicable_n == 2
     assert stats.clean_fraction == 0.5

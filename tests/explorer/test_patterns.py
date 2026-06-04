@@ -145,14 +145,27 @@ def test_unrecovered_error_loop_resets_on_success():
     assert "unrecovered_error_loop" not in _hits(rec)
 
 
-def test_kb_blind_fires_when_kb_present_and_unused():
+def test_kb_blind_fires_when_gt_kb_needed_and_unused():
     rec = _record(_ai(("execute_sql", {"sql": "x"})), _tool("execute_sql"))
-    rec["masked_agent_kb"] = {"BFR": "Bandwidth ratio"}
+    rec["gt_knowledge_base"] = {"BFR": "Bandwidth ratio"}
     assert "kb_blind" in _hits(rec)
 
 
-def test_kb_blind_quiet_without_kb():
+def test_kb_blind_quiet_when_gt_kb_not_needed_even_if_masked_kb_present():
+    # The full browsable KB is present, but the gold solution needs no KB entry,
+    # so the task does not actually require external knowledge → not applicable.
     rec = _record(_ai(("execute_sql", {"sql": "x"})), _tool("execute_sql"))
+    rec["masked_agent_kb"] = {"BFR": "Bandwidth ratio", "X": "y"}
+    rec["gt_knowledge_base"] = {}
+    assert "kb_blind" not in _hits(rec)
+
+
+def test_kb_blind_quiet_when_gt_kb_queried():
+    rec = _record(
+        _ai(("get_knowledge_definition", {"knowledge_name": "BFR"})),
+        _tool("get_knowledge_definition"),
+    )
+    rec["gt_knowledge_base"] = {"BFR": "Bandwidth ratio"}
     assert "kb_blind" not in _hits(rec)
 
 
@@ -174,10 +187,17 @@ def test_budget_death_quiet_after_successful_submit():
 
 
 from explorer.patterns import (
+    PatternStat,
     aggregate_patterns,
     clean_fraction,
     positional_tool_distribution,
 )
+
+
+def test_pattern_stat_fields():
+    s = PatternStat(rate=0.25, applicable_n=8)
+    assert s.rate == 0.25
+    assert s.applicable_n == 8
 
 
 def _submit_only(sql="SELECT 1"):
@@ -194,8 +214,10 @@ def test_aggregate_is_sample_average_not_pooled():
     groups = {"inst1": [blind, _submit_only()]}
     freq = aggregate_patterns(groups)
     # Per-instance mean = 1/2 = 0.5 (not pooled over a flat list, but same here).
-    assert freq["blind_submit"] == 0.5
-    assert freq["no_submission"] == 0.0
+    assert freq["blind_submit"].rate == 0.5
+    assert freq["no_submission"].rate == 0.0
+    # Every sample is applicable to blind_submit → denominator is all samples.
+    assert freq["blind_submit"].applicable_n == 2
 
 
 def test_aggregate_weights_instances_equally():
@@ -205,7 +227,23 @@ def test_aggregate_weights_instances_equally():
     freq = aggregate_patterns(groups)
     # Mean over instances of per-instance rate = (1.0 + 0.0) / 2 = 0.5,
     # NOT pooled 2/3 = 0.667.
-    assert freq["blind_submit"] == 0.5
+    assert freq["blind_submit"].rate == 0.5
+
+
+def test_aggregate_kb_blind_denominator_only_counts_applicable_samples():
+    # inst_a needs KB (gt non-empty) and ignores it → hit. inst_b needs no KB.
+    needs_kb = _record(_ai(("execute_sql", {"sql": "x"})), _tool("execute_sql"))
+    needs_kb["gt_knowledge_base"] = {"BFR": "ratio"}
+    no_kb = _submit_only()
+    no_kb["gt_knowledge_base"] = {}
+    groups = {"a": [needs_kb], "b": [no_kb]}
+    freq = aggregate_patterns(groups)
+    # Only inst_a is applicable: rate = 1.0 over a single applicable sample,
+    # and the non-applicable sample is excluded from the denominator entirely.
+    assert freq["kb_blind"].rate == 1.0
+    assert freq["kb_blind"].applicable_n == 1
+    # A pattern applicable to everything still counts all samples.
+    assert freq["no_submission"].applicable_n == 2
 
 
 def test_clean_fraction_sample_average():
