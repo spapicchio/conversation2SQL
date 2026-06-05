@@ -195,9 +195,10 @@ from explorer.patterns import (
 
 
 def test_pattern_stat_fields():
-    s = PatternStat(rate=0.25, applicable_n=8)
+    s = PatternStat(rate=0.25, applicable_n=8, applicable_instances=4)
     assert s.rate == 0.25
     assert s.applicable_n == 8
+    assert s.applicable_instances == 4
 
 
 def _submit_only(sql="SELECT 1"):
@@ -218,6 +219,20 @@ def test_aggregate_is_sample_average_not_pooled():
     assert freq["no_submission"].rate == 0.0
     # Every sample is applicable to blind_submit → denominator is all samples.
     assert freq["blind_submit"].applicable_n == 2
+
+
+def test_aggregate_instances_denominator_distinct_from_samples():
+    # 2 instances × 2 samples each = 4 applicable samples but 2 instances.
+    blind = _record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql", status="success"))
+    groups = {"a": [dict(blind), dict(blind)], "b": [_submit_only(), _submit_only()]}
+    freq = aggregate_patterns(groups)
+    bs = freq["blind_submit"]
+    assert bs.applicable_n == 4          # samples
+    assert bs.applicable_instances == 2  # the rate's true denominator
+    # rate is per-instance: inst a = 1.0, inst b = 0.0 → 0.5.
+    assert bs.rate == 0.5
+    # effective flagged instances = rate × instances = 1 (a clean integer here).
+    assert abs(bs.rate * bs.applicable_instances - 1.0) < 1e-9
 
 
 def test_aggregate_weights_instances_equally():
@@ -253,17 +268,190 @@ def test_clean_fraction_sample_average():
     assert clean_fraction(groups) == 0.5
 
 
-def test_positional_distribution_shares_sum_to_one_per_position():
+def test_positional_distribution_shares_sum_to_one_per_quintile():
     groups = {"inst1": [_submit_only()]}
-    df = positional_tool_distribution(groups, max_pos=8)
-    sums = df.groupby("position")["share"].sum()
-    for pos, total in sums.items():
-        assert abs(total - 1.0) < 1e-9, f"position {pos} sums to {total}"
+    df = positional_tool_distribution(groups)
+    sums = df.groupby("quintile")["share"].sum()
+    for q, total in sums.items():
+        assert abs(total - 1.0) < 1e-9, f"quintile {q} sums to {total}"
 
 
-def test_positional_distribution_no_call_band_appears_after_end():
-    # 2-event sequence; positions 3..8 should be "(no call)".
+def test_positional_distribution_bins_by_normalized_position():
+    # 2-event sequence (execute_sql, submit_sql): index 0/2=0% → 0-20%,
+    # index 1/2=50% → 40-60%. Unreached quintiles yield no rows.
     groups = {"inst1": [_submit_only()]}
-    df = positional_tool_distribution(groups, max_pos=8)
-    pos3 = df[(df["position"] == "3") & (df["tool"] == "(no call)")]["share"]
-    assert float(pos3.iloc[0]) == 1.0
+    df = positional_tool_distribution(groups)
+    early = df[(df["quintile"] == "0-20%") & (df["tool"] == "execute_sql")]["share"]
+    mid = df[(df["quintile"] == "40-60%") & (df["tool"] == "submit_sql")]["share"]
+    assert float(early.iloc[0]) == 1.0
+    assert float(mid.iloc[0]) == 1.0
+    assert df[df["quintile"] == "20-40%"].empty  # short conversation skips this fifth
+
+
+from explorer.patterns import per_iteration_pattern_rates
+
+
+def _record_it(iteration, *messages):
+    return {"messages": list(messages), "iteration": iteration}
+
+
+def test_per_iteration_buckets_by_iteration_field():
+    # blind_submit hits in iter 0 (submit, no execute), clean in iter 1.
+    hit = _record_it(0, _ai(("submit_sql", {"sql": "SELECT 1"})), _tool("submit_sql"))
+    clean = _record_it(
+        1,
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": "SELECT 1"})), _tool("submit_sql"),
+    )
+    df = per_iteration_pattern_rates([hit, clean])
+    bs = df[df["pattern"] == "Blind submit"].set_index("iteration")["rate"]
+    assert bs[0] == 1.0
+    assert bs[1] == 0.0
+
+
+def test_per_iteration_mean_matches_sample_average_for_complete_run():
+    # Two instances, two iterations each; one instance always blind-submits.
+    blind = lambda it: _record_it(it, _ai(("submit_sql", {"sql": "SELECT 1"})), _tool("submit_sql"))
+    ok = lambda it: _record_it(
+        it,
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": "SELECT 1"})), _tool("submit_sql"),
+    )
+    records = [blind(0), blind(1), ok(0), ok(1)]
+    df = per_iteration_pattern_rates(records)
+    bs = df[df["pattern"] == "Blind submit"]["rate"]
+    # Each iteration: 1 of 2 records blind → 0.5; mean over iterations → 0.5.
+    assert list(bs) == [0.5, 0.5]
+    assert abs(bs.mean() - 0.5) < 1e-9
+
+
+def test_per_iteration_covers_every_pattern_label():
+    df = per_iteration_pattern_rates([_record_it(0, _ai(("submit_sql", {})), _tool("submit_sql"))])
+    assert set(df["pattern"]) == {lbl for _, lbl in PATTERN_CATALOG}
+
+
+from explorer.patterns import repeated_identical_tool_counts
+
+
+def test_repeated_counts_surplus_per_tool():
+    # execute_sql repeated 3× (2 surplus), get_schema 2× (1 surplus).
+    rec = _record(
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql"),
+        _ai(("get_schema", {})), _tool("get_schema"),
+        _ai(("get_schema", {})), _tool("get_schema"),
+    )
+    df = repeated_identical_tool_counts([rec])
+    counts = dict(zip(df["tool"], df["repeats"]))
+    assert counts == {"execute_sql": 2, "get_schema": 1}
+    # sorted descending by repeats
+    assert list(df["tool"]) == ["execute_sql", "get_schema"]
+
+
+def test_repeated_counts_sums_across_records_and_ignores_whitespace():
+    rec_a = _record(
+        _ai(("execute_sql", {"sql": "SELECT  1"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql"),
+    )
+    rec_b = _record(
+        _ai(("execute_sql", {"sql": "SELECT 2"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "SELECT 2"})), _tool("execute_sql"),
+    )
+    df = repeated_identical_tool_counts([rec_a, rec_b])
+    assert dict(zip(df["tool"], df["repeats"])) == {"execute_sql": 2}
+
+
+def test_repeated_counts_empty_when_no_repeats():
+    rec = _record(
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "SELECT 2"})), _tool("execute_sql"),
+    )
+    df = repeated_identical_tool_counts([rec])
+    assert df.empty
+    assert list(df.columns) == ["tool", "repeats"]
+
+
+from explorer.patterns import first_submit_accuracy_by_quintile
+
+
+def _passed(rec, ok=True):
+    rec["execution_accuracy"] = ok
+    return rec
+
+
+def test_first_submit_accuracy_buckets_early_and_late():
+    # Immediate submit (1 event → 0/1 = 0%) vs submit after 4 calls (4/5 = 80%).
+    early = _passed(_record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql")), ok=False)
+    late = _passed(_record(
+        _ai(("execute_sql", {"sql": "a"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "b"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "c"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "d"})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": "x"})), _tool("submit_sql"),
+    ), ok=True)
+    df = first_submit_accuracy_by_quintile([early, late]).set_index("quintile")
+    assert df.loc["0-20%", "accuracy"] == 0.0
+    assert df.loc["0-20%", "n"] == 1
+    assert df.loc["80-100%", "accuracy"] == 1.0
+    assert df.loc["80-100%", "n"] == 1
+
+
+def test_first_submit_accuracy_pooled_within_bucket():
+    # Two immediate submits in the same bucket: one pass, one fail → 0.5.
+    p = _passed(_record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql")), ok=True)
+    f = _passed(_record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql")), ok=False)
+    df = first_submit_accuracy_by_quintile([p, f]).set_index("quintile")
+    assert df.loc["0-20%", "accuracy"] == 0.5
+    assert df.loc["0-20%", "n"] == 2
+
+
+def test_first_submit_accuracy_excludes_no_submission():
+    no_sub = _passed(_record(_ai(("execute_sql", {"sql": "x"})), _tool("execute_sql")), ok=False)
+    df = first_submit_accuracy_by_quintile([no_sub])
+    assert df["n"].sum() == 0
+
+
+def test_first_submit_accuracy_returns_all_bins_in_order():
+    df = first_submit_accuracy_by_quintile([])
+    assert list(df["quintile"]) == ["0-20%", "20-40%", "40-60%", "60-80%", "80-100%"]
+
+
+from explorer.patterns import tool_position_accuracy
+
+
+def test_tool_position_accuracy_places_tools_by_normalized_position():
+    # 5 events: execute(0/5=0%), execute(1/5=20%), execute(2/5=40%),
+    #           get_schema(3/5=60%), submit(4/5=80%).
+    rec = _passed(_record(
+        _ai(("execute_sql", {"sql": "a"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "b"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "c"})), _tool("execute_sql"),
+        _ai(("get_schema", {})), _tool("get_schema"),
+        _ai(("submit_sql", {"sql": "x"})), _tool("submit_sql"),
+    ), ok=True)
+    cell = tool_position_accuracy([rec]).set_index(["tool", "quintile"])
+    assert cell.loc[("get_schema", "60-80%"), "accuracy"] == 1.0
+    assert cell.loc[("submit_sql", "80-100%"), "accuracy"] == 1.0
+    assert cell.loc[("execute_sql", "0-20%"), "n"] == 1
+
+
+def test_tool_position_accuracy_dedupes_repeat_in_same_quintile():
+    # 10 events; execute_sql at indices 0 and 1 both fall in 0-20% (0/10, 1/10).
+    msgs = []
+    for i in range(10):
+        name = "execute_sql" if i < 2 else "get_schema"
+        args = {"sql": str(i)} if name == "execute_sql" else {}
+        msgs += [_ai((name, args)), _tool(name)]
+    rec = _passed(_record(*msgs), ok=True)
+    cell = tool_position_accuracy([rec]).set_index(["tool", "quintile"])
+    # execute_sql called twice in the first quintile → conversation counted once.
+    assert cell.loc[("execute_sql", "0-20%"), "n"] == 1
+
+
+def test_tool_position_accuracy_pooled_across_conversations():
+    a = _passed(_record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql")), ok=True)
+    b = _passed(_record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql")), ok=False)
+    cell = tool_position_accuracy([a, b]).set_index(["tool", "quintile"])
+    assert cell.loc[("submit_sql", "0-20%"), "accuracy"] == 0.5
+    assert cell.loc[("submit_sql", "0-20%"), "n"] == 2

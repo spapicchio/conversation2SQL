@@ -39,6 +39,18 @@ def test_resolve_profile_qwen_thinking():
     assert flags[flags.index("--predictor_presence_penalty") + 1] == "0.0"
 
 
+def test_resolve_profile_derives_max_new_tokens_from_max_model_len():
+    """predictor max_new_tokens tracks the profile's max_model_len (single knob)."""
+    from conversation2sql.presets import MODEL_PROFILES, _COMPLETION_RATIO
+
+    for name, prof in MODEL_PROFILES.items():
+        flags = resolve_profile(name, enable_thinking=None)
+        derived = flags[flags.index("--predictor_max_new_tokens") + 1]
+        ratio = prof.get("completion_ratio", _COMPLETION_RATIO)
+        assert derived == str(round(prof["max_model_len"] * ratio))
+        assert int(derived) <= prof["max_model_len"]  # vLLM's hard constraint
+
+
 def test_resolve_profile_qwen_non_thinking():
     flags = resolve_profile("qwen35", enable_thinking=False)
     assert flags[flags.index("--predictor_temperature") + 1] == "1.0"

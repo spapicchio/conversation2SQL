@@ -67,6 +67,32 @@ class TestComputeStats:
         assert stats.avg_cost == pytest.approx(0.01)
         assert stats.avg_budget_remaining == 4.0
 
+    def test_total_tokens_reflect_cumulative_per_conversation(self):
+        # The full prompt is re-sent each turn, so total_*_tokens (summed across
+        # LLM calls) is the real billed token count — averaged across records.
+        records = [
+            make_record(
+                total_prompt_tokens=1000,
+                total_completion_tokens=120,
+                num_model_calls=4,
+            ),
+            make_record(
+                total_prompt_tokens=3000,
+                total_completion_tokens=280,
+                num_model_calls=6,
+            ),
+        ]
+        stats = _compute_stats(records)
+        assert stats.avg_total_input_tokens == 2000.0
+        assert stats.avg_total_output_tokens == 200.0
+        assert stats.avg_model_calls == 5.0
+
+    def test_total_tokens_default_to_zero_when_missing(self):
+        stats = _compute_stats([{"execution_accuracy": False}])
+        assert stats.avg_total_input_tokens == 0.0
+        assert stats.avg_total_output_tokens == 0.0
+        assert stats.avg_model_calls == 0.0
+
     def test_pass_at_1_collapses_iterations(self):
         # Two instances, three iterations each. Iterations are samples of the
         # same instance, so pass@1 averages per-instance rates, not all 6 records.
@@ -266,6 +292,9 @@ def _make_run_data(records: list[dict]) -> RunData:
             pass_at_1=0.0,
             avg_input_tokens=0.0,
             avg_output_tokens=0.0,
+            avg_total_input_tokens=0.0,
+            avg_total_output_tokens=0.0,
+            avg_model_calls=0.0,
             avg_cost=0.0,
             avg_budget_remaining=0.0,
             accuracy_by_database={},

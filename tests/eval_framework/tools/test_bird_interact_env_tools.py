@@ -200,20 +200,21 @@ class TestExecuteSqlImpl:
 # _format_result / _format_cell
 # ---------------------------------------------------------------------------
 class TestFormatResult:
-    """``_format_result`` turns RealDictRow rows into the text table the agent
-    reads. These tests pin the two budget/clarity properties we rely on:
-    no separator rule, and compact full-precision JSON for container cells."""
+    """``_format_result`` renders RealDictRow rows as the GitHub-flavored
+    markdown table the agent reads. These tests pin the structural and clarity
+    properties we rely on: a header + ``| --- |`` separator + pipe-wrapped data
+    rows, and compact full-precision JSON for container cells."""
 
-    def test_no_separator_rule_between_header_and_rows(self):
-        """The dash rule carried no information and wasted the downstream
-        character budget — the first line after the header must be data."""
+    def test_markdown_table_header_separator_and_rows(self):
+        """Output is a GFM table: header row, ``| --- |`` separator with one
+        ``---`` per column, then pipe-wrapped data rows."""
         result = [{"sitekey": "SP9227", "sitelabel": "Solar Plant West"}]
         desc = (("sitekey",), ("sitelabel",))
         out = utils_db_execute._format_result(result, desc)
         lines = out.split("\n")
-        assert lines[0] == "sitekey | sitelabel"
-        assert lines[1] == "SP9227 | Solar Plant West"
-        assert "---" not in out
+        assert lines[0] == "| sitekey | sitelabel |"
+        assert lines[1] == "| --- | --- |"
+        assert lines[2] == "| SP9227 | Solar Plant West |"
 
     def test_container_cell_is_compact_json_not_python_repr(self):
         """JSON/array columns come back as dict/list; they must render as
@@ -222,7 +223,8 @@ class TestFormatResult:
         result = [{"stations": [{"station": "Observatory", "aoi": 0.0146324}]}]
         desc = (("stations",),)
         out = utils_db_execute._format_result(result, desc)
-        cell = out.split("\n")[1]
+        # Line 0 = header, line 1 = separator, line 2 = first data row.
+        cell = out.split("\n")[2].strip("| ")
         # Compact separators, sorted keys, no precision loss, valid JSON.
         assert cell == '[{"aoi":0.0146324,"station":"Observatory"}]'
         assert "'" not in cell
@@ -233,7 +235,9 @@ class TestFormatResult:
         result = [{"blob": {"k": "y" * 500}}]
         desc = (("blob",),)
         out = utils_db_execute._format_result(result, desc, max_characters=20)
-        assert len(out.split("\n")[1]) == 20
+        # Strip the "| " / " |" pipe wrapping to recover the raw cell.
+        cell = out.split("\n")[2].removeprefix("| ").removesuffix(" |")
+        assert len(cell) == 20
 
     def test_none_and_empty_results_have_dedicated_messages(self):
         assert utils_db_execute._format_result(None, ()) == "Query executed successfully."
@@ -429,17 +433,26 @@ def test_get_schema_wrapper_delegates_to_impl(task_data):
     assert json.loads(raw) == {"schema": task_data.ddl_database_schema}
 
 
-def test_execute_sql_wrapper_returns_serialized_response(task_data):
-    """Wiring check: the wrapper must serialise the ``ExecuteSQLResponse``
-    to JSON so it can be embedded in a tool message back to the model."""
-    with patch.object(env_tools, "_execute_query", return_value=([], [])):
+def test_execute_sql_wrapper_returns_table_on_success(task_data):
+    """On success the wrapper returns the bare formatted result (the markdown
+    table), not the serialised ``ExecuteSQLResponse`` envelope."""
+    rows = [{"id": 1}]
+    desc = [("id",)]
+    with patch.object(env_tools, "_execute_query", return_value=(rows, desc)):
         raw = _invoke_tool(
-            env_tools.execute_sql, sql="SELECT 1;", runtime=_Runtime(task_data)
+            env_tools.execute_sql, sql="SELECT id FROM t;", runtime=_Runtime(task_data)
         )
 
-    decoded = json.loads(raw)
-    assert decoded["success"] is True
-    assert decoded["error"] is None
+    assert raw == "| id |\n| --- |\n| 1 |"
+
+
+def test_execute_sql_wrapper_returns_error_message_on_failure(task_data):
+    """On failure the wrapper returns only the error string, no JSON envelope."""
+    raw = _invoke_tool(
+        env_tools.execute_sql, sql="DELETE FROM t;", runtime=_Runtime(task_data)
+    )
+
+    assert raw == "Only SELECT queries allowed in execute_sql"
 
 
 def test_get_column_meaning_wrapper_uses_selected_database(task_data):
