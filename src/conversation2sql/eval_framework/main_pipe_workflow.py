@@ -1,6 +1,7 @@
 import asyncio
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -127,6 +128,7 @@ def workflow_evaluation_pipeline(
         config_predictor,
         config_user,
         needs_user_sim=needs_user_sim,
+        concurrency=config_pipeline.concurrency,
     )
 
     effective_iterations = _resolve_iterations(
@@ -215,6 +217,15 @@ async def _run_tasks_concurrently(
     num_iterations: int,
     resume: bool = False,
 ) -> None:
+    # Each task runs the whole synchronous agent loop via `asyncio.to_thread`,
+    # which dispatches to the running loop's default executor. That default pool
+    # caps at min(32, cpu_count()+4) threads, so it silently throttles concurrency
+    # to ~32 regardless of the `concurrency` setting. Size the executor to the
+    # requested concurrency so the semaphore is the only real limit (these threads
+    # are I/O-bound on the LLM server + Postgres, so they're cheap to oversubscribe).
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=concurrency))
+
     sem = asyncio.Semaphore(concurrency)
     file_lock = threading.Lock()
 
@@ -294,11 +305,34 @@ async def _run_tasks_concurrently(
     )
 
 
+def _build_vllm_http_client(concurrency: int):
+    """A LiteLLM sync HTTP client whose connection pool is sized to `concurrency`.
+
+    LiteLLM's hosted_vllm path otherwise reuses a cached httpx client with the
+    httpx default pool (max_connections=100), which caps in-flight requests at
+    ~100 even when more tasks are running. Sizing the pool to the concurrency lets
+    every worker hold a connection so the vLLM-side `max_num_seqs` is the only
+    limit. Returns None on import failure so model creation still works.
+    """
+    try:
+        import httpx
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    except Exception as e:  # noqa: BLE001 - never let pooling break model init
+        logger.warning("Could not build sized vLLM HTTP client: %s", e)
+        return None
+    limits = httpx.Limits(
+        max_connections=concurrency, max_keepalive_connections=concurrency
+    )
+    return HTTPHandler(client=httpx.Client(limits=limits))
+
+
 def _init_models(
     config_predictor: ConfigPredictor,
     config_user: ConfigUserSimulator,
     needs_user_sim: bool,
+    concurrency: int = 1,
 ) -> tuple:
+    http_client = _build_vllm_http_client(concurrency)
     model_agent = utils_create_model(
         model_name=config_predictor.model_name,
         model_provider=config_predictor.model_provider,
@@ -314,6 +348,7 @@ def _init_models(
         reasoning_effort=config_predictor.reasoning_effort,
         request_timeout=config_predictor.request_timeout,
         num_retries=config_predictor.num_retries,
+        http_client=http_client,
     )
     if not needs_user_sim:
         return model_agent, (None, None)
@@ -326,6 +361,7 @@ def _init_models(
         api_base=config_user.user_simulator_vllm_api_base,
         request_timeout=config_user.request_timeout,
         num_retries=config_user.num_retries,
+        http_client=http_client,
     )
     model_user_generator = utils_create_model(
         model_name=config_user.model_name,
@@ -347,7 +383,18 @@ def _save_configs_as_yaml(
     filename: str = "config.yaml",
 ) -> None:
     output_folder.mkdir(parents=True, exist_ok=True)
+    if config_reader.make_data_ambiguous:
+        task_budget_formula = (
+            "task_budget = 6 + 2*m_amb + 2*user_patience_budget, where "
+            "m_amb = len(critical_ambiguity) + len(knowledge_ambiguity) per task"
+        )
+    else:
+        task_budget_formula = (
+            "task_budget = 6 + 2*user_patience_budget "
+            "(ambiguity not counted because make_data_ambiguous=False)"
+        )
     configs = {
+        "task_budget_formula": task_budget_formula,
         "pipeline": config_pipeline.model_dump(mode="json"),
         "reader": config_reader.model_dump(mode="json"),
         "predictor": config_predictor.model_dump(mode="json"),
