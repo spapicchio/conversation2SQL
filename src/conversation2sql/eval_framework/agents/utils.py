@@ -94,6 +94,11 @@ def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:
         # ToolMessage.content may be a list of content blocks (LangChain spec),
         # not just a str — normalise to text before the regex / JSON decode.
         content = utils_single_msg_to_str(message)
+        # The budget middleware appends "[SYSTEM NOTE: Remaining budget: x/y]" to
+        # the tool message before the next model call. Capture the numbers so the
+        # explorer can show how the budget diminishes, then strip the note from
+        # the content the same way it was stripped before.
+        budget = _parse_remaining_budget(content)
         clean = re.sub(r"\s*\[SYSTEM NOTE:.*?\]\s*$", "", content, flags=re.DOTALL)
         try:
             clean = json.loads(clean)
@@ -106,10 +111,34 @@ def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:
             # 'tool_call_id': message.tool_call_id,
             "status": message.status,  # 'success' | 'error'
             "content": clean,
+            **budget,
         }
 
     # HumanMessage / SystemMessage
     return base
+
+
+_REMAINING_BUDGET_RE = re.compile(
+    r"\[SYSTEM NOTE: Remaining budget:\s*(-?\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)\]"
+)
+
+
+def _parse_remaining_budget(content: str) -> dict:
+    """Extract the `[SYSTEM NOTE: Remaining budget: x/y]` note into fields.
+
+    The budget middleware (`wrap_model_append_tool_message`) annotates each tool
+    message with the patience budget the model saw on the next call. We surface
+    `remaining_budget` / `total_budget` so the explorer can show the budget
+    diminishing across the trace. Returns an empty dict when no note is present
+    (e.g. a terminal `submit_sql` message that no model call followed).
+    """
+    match = _REMAINING_BUDGET_RE.search(content)
+    if not match:
+        return {}
+    return {
+        "remaining_budget": float(match.group(1)),
+        "total_budget": float(match.group(2)),
+    }
 
 
 def utils_extract_ai_metadata(message: AIMessage, tool_costs: dict) -> dict:
@@ -204,6 +233,7 @@ def utils_create_model(
     reasoning_effort: str | None = None,
     request_timeout: float | None = None,
     num_retries: int | None = None,
+    http_client: object | None = None,
 ) -> ChatLiteLLM:
     """Create a configured `ChatLiteLLM` instance for agent use.
 
@@ -213,8 +243,10 @@ def utils_create_model(
     Parameters mirror the pipeline config and allow lightweight tuning:
     - `model_name` / `model_provider`: combined into the provider/model string
     - `temperature`, `top_p`, `top_k`: sampling controls
-    - `max_tokens`: maximum user-visible completion length (the function
-      also reserves extra `max_completion_tokens` for reasoning)
+    - `max_tokens`: maximum completion length, sent as `max_completion_tokens`.
+      Omitted on the local vLLM path (`api_base` set) where the server's
+      `--max-model-len` already bounds generation; only sent to hosted
+      providers, which have no server-side cap.
     - `enable_thinking`, `reasoning_effort`: provider-specific extras
 
     Returns
@@ -232,7 +264,15 @@ def utils_create_model(
         else f"{model_provider}/{model_name}"
     )
     # reasoning + result
-    model_kwargs: dict = {"max_completion_tokens": max_tokens}
+    # For local vLLM (hosted_vllm/, i.e. api_base set) we deliberately omit
+    # max_completion_tokens: the server's --max-model-len already bounds
+    # generation to (max_model_len - prompt_tokens), so letting vLLM fill the
+    # remaining context avoids both a fixed cap and the prompt+completion >
+    # max_model_len rejection. Hosted providers (OpenRouter, etc.) have no such
+    # server-side cap, so we still send max_tokens to bound their generation.
+    model_kwargs: dict = {}
+    if api_base is None:
+        model_kwargs["max_completion_tokens"] = max_tokens
     if reasoning_effort is not None:
         model_kwargs["reasoning_effort"] = reasoning_effort
 
@@ -244,6 +284,13 @@ def utils_create_model(
         model_kwargs["repetition_penalty"] = repetition_penalty
     if enable_thinking is not None:
         model_kwargs["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+    # When hitting a local vLLM (hosted_vllm/), LiteLLM otherwise reuses a single
+    # cached httpx client whose default pool caps at max_connections=100 — which
+    # silently throttles in-flight requests below the pipeline concurrency. Passing
+    # an explicit client (sized to the concurrency) lets LiteLLM use a wider pool.
+    # `client` is only honoured on the hosted_vllm/openai path, so gate on api_base.
+    if http_client is not None and api_base is not None:
+        model_kwargs["client"] = http_client
 
     kwargs = dict(
         model=litellm_model,

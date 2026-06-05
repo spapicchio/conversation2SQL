@@ -81,6 +81,7 @@ def run_baseline_no_tool(
         "total_tokens": total_tokens,
         "total_prompt_tokens": prompt_tokens,
         "total_completion_tokens": completion_tokens,
+        "num_model_calls": 1,
         "mean_prompt_tokens": float(prompt_tokens),
         "mean_completion_tokens": float(completion_tokens),
         "tool_calls_in_order": [],

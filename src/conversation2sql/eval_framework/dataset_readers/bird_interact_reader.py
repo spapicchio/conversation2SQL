@@ -275,6 +275,19 @@ def load_bird_interact_as_tasks(
             )
             user_patience_budget = 3
 
+    if make_data_ambiguous:
+        logger.info(
+            "task_budget (bird-coins) = 6 + 2*m_amb + 2*user_patience_budget, "
+            "where m_amb = len(critical_ambiguity) + len(knowledge_ambiguity) per task "
+            f"and user_patience_budget={user_patience_budget}.",
+        )
+    else:
+        logger.info(
+            "task_budget (bird-coins) = 6 + 2*user_patience_budget "
+            "(ambiguity not counted because make_data_ambiguous=False), "
+            f"with user_patience_budget={user_patience_budget}.",
+        )
+
     if read_only_gt_tables:
         logger.warning(
             "read_only_gt_tables is set to True, the agent will read from GT tables only (schema linking is performed automatically)"
