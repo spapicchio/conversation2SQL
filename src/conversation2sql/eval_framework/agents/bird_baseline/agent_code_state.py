@@ -22,5 +22,12 @@ class CustomAgentState(AgentState):
     # the block (-1) / terminal-submit (-2) branches in
     # `tool_wrapper_patience_and_submit` (the terminal value wins). Without a
     # reducer this raises InvalidUpdateError (INVALID_CONCURRENT_GRAPH_UPDATE).
-    updated_user_patience: Annotated[float, _keep_lowest_patience]
+    #
+    # The type MUST be `float | None`, not `float`: LangGraph maps a reduced
+    # channel to a BinaryOperatorAggregate whose initial value is `typ()`. For
+    # `float` that is `0.0`, so the seeded budget would be merged as
+    # `min(0.0, task_budget) == 0.0` and the conversation would start already
+    # exhausted. A union type is not instantiable, so the channel initialises to
+    # MISSING and takes the first write (the real budget) verbatim instead.
+    updated_user_patience: Annotated[float | None, _keep_lowest_patience]
     tool_called_patience: Annotated[list[float | int], add]
