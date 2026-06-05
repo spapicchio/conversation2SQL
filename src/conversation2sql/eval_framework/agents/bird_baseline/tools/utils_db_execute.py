@@ -125,20 +125,22 @@ def _format_cell(value: Any, max_characters: int) -> str:
 
 
 def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters=100) -> str:
-    """
+    """Render the result set as a GitHub-flavored markdown table.
+
     Output:
 
-    sitekey | sitelabel
-    SP9227 | Solar Plant West Davidport
-    SP6740 | Solar Plant Dillonmouth
-    SP7738 | Solar Plant North Xavier
-    SP7778 | Solar Plant East Alexandriaborough
-    SP9784 | Solar Plant East Jake
-    SP6230 | Solar Plant Gatesview
-    SP6166 | Solar Plant Jacksonport
-    SP9766 | Solar Plant Evanmouth
-    SP1937 | Solar Plant Brittanybury
-    SP6929 | Solar Plant Lake Kathrynburgh
+    | sitekey | sitelabel |
+    | --- | --- |
+    | SP9227 | Solar Plant West Davidport |
+    | SP6740 | Solar Plant Dillonmouth |
+    | SP7738 | Solar Plant North Xavier |
+    | SP7778 | Solar Plant East Alexandriaborough |
+    | SP9784 | Solar Plant East Jake |
+    | SP6230 | Solar Plant Gatesview |
+    | SP6166 | Solar Plant Jacksonport |
+    | SP9766 | Solar Plant Evanmouth |
+    | SP1937 | Solar Plant Brittanybury |
+    | SP6929 | Solar Plant Lake Kathrynburgh |
 
     result = [RealDictRow({'sitekey': 'SP9227', 'sitelabel': 'Solar Plant West Davidport'})]
 
@@ -152,14 +154,13 @@ def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters
         return "Query executed, empty result set."
 
     cols = [desc[0] for desc in cursor_desc]
-    header = " | ".join(cols)
+    header = "| " + " | ".join(cols) + " |"
+    separator = "| " + " | ".join("---" for _ in cols) + " |"
 
     # take the first 100 rows to avoid overwhelming the output, and truncate each cell to max_characters chars
     rows = [
-        " | ".join(_format_cell(row[col], max_characters) for col in cols)
+        "| " + " | ".join(_format_cell(row[col], max_characters) for col in cols) + " |"
         for row in result[:100]
     ]
 
-    # No separator rule: it carries no information for the model and a dash line
-    # padded to row width wastes the limited budget enforced downstream.
-    return "\n".join([header, *rows])
+    return "\n".join([header, separator, *rows])

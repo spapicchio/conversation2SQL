@@ -195,10 +195,15 @@ def execute_sql(sql: str, runtime: ToolRuntime[TaskData, CustomAgentState]) -> s
         sql: The PostgreSQL SQL query to execute.
 
     Returns:
-        The query results formatted as a table, or an error message.
+        The query results as a markdown table on success, or the error message
+        on failure.
     """
     response = execute_sql_impl(sql=sql, db_dsn=runtime.context.db_dsn)
-    return response.model_dump_json()
+    if response.success:
+        return response.result
+    # On failure ``error`` always holds the message; fall back to ``result``
+    # (which carries the "Error: ..." prefix) only if it were ever unset.
+    return response.error or response.result
 
 
 @tool
