@@ -103,7 +103,8 @@ def run_agent_bird_baseline(
             ContextEditingMiddleware(
                 edits=[
                     ClearToolUsesEdit(
-                        trigger=10_000,
+                        trigger=100_000,
+                        clear_at_least=25_000,
                         keep=3,
                         clear_tool_inputs=False,
                         exclude_tools=[],
@@ -172,7 +173,10 @@ def utils_process_agent_response(
     Returns
     A dictionary with keys:
     - `total_cost`, `total_tokens`, `total_prompt_tokens`,
-      `total_completion_tokens`, `mean_prompt_tokens`, `mean_completion_tokens`
+      `total_completion_tokens` (cumulative across every LLM call — the full
+      prompt is re-sent each turn, so this is the real billed token count),
+      `num_model_calls` (number of LLM calls), `mean_prompt_tokens`,
+      `mean_completion_tokens` (per-call averages: sum / `num_model_calls`)
     - `tool_calls_in_order`: flattened sequence of tool call entries
     - `execution_accuracy`: boolean derived from the last tool (submit)
     - `messages`: list of parsed message dicts (see `utils_process_single_msg`)
@@ -188,8 +192,12 @@ def utils_process_agent_response(
     ]
     total_cost = 0
     total_tokens = 0
-    mean_prompt_tokens = []
-    mean_completion_tokens = []
+    # Only AIMessages carry token counts (one entry per LLM call). Tool/human/
+    # system messages contribute nothing, so we collect prompt/completion tokens
+    # per AI call to keep the mean a true per-call average. The full prompt is
+    # re-sent every turn, so summing these gives the real cumulative token cost.
+    prompt_tokens_per_call = []
+    completion_tokens_per_call = []
     tool_calls_in_order = []
     passed = False
     for msg in messages:
@@ -199,19 +207,23 @@ def utils_process_agent_response(
         total_cost += msg.get("cost_usd", 0)
 
         total_tokens += msg.get("total_tokens", 0)
-        mean_prompt_tokens.append(msg.get("prompt_tokens", 0))
-        mean_completion_tokens.append(msg.get("completion_tokens", 0))
+        if msg["role"] == "ai":
+            prompt_tokens_per_call.append(msg.get("prompt_tokens", 0))
+            completion_tokens_per_call.append(msg.get("completion_tokens", 0))
         tool_calls_in_order.extend(msg.get("tool_calls", []))
 
+    n_calls = len(prompt_tokens_per_call)
     return {
         **response,
         "total_cost": total_cost,
         "total_tokens": total_tokens,
-        "total_prompt_tokens": sum(mean_prompt_tokens),
-        "total_completion_tokens": sum(mean_completion_tokens),
-        "mean_prompt_tokens": sum(mean_prompt_tokens) / len(mean_prompt_tokens),
-        "mean_completion_tokens": sum(mean_completion_tokens)
-        / len(mean_completion_tokens),
+        "total_prompt_tokens": sum(prompt_tokens_per_call),
+        "total_completion_tokens": sum(completion_tokens_per_call),
+        "num_model_calls": n_calls,
+        "mean_prompt_tokens": sum(prompt_tokens_per_call) / n_calls if n_calls else 0.0,
+        "mean_completion_tokens": (
+            sum(completion_tokens_per_call) / n_calls if n_calls else 0.0
+        ),
         "tool_calls_in_order": tool_calls_in_order,
         "execution_accuracy": passed,
         "messages": messages,
