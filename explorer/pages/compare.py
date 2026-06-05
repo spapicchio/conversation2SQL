@@ -72,6 +72,9 @@ _OPERATIONAL_ROWS: list[tuple[str, Callable[[object], str], bool | None]] = [
     ("Accuracy (pass@1)", lambda v: f"{v * 100:.1f}%", True),
     ("Avg Input Tokens", lambda v: f"{v:,.0f}", False),
     ("Avg Output Tokens", lambda v: f"{v:,.0f}", False),
+    ("Avg Input Tokens / call", lambda v: f"{v:,.0f}", False),
+    ("Avg Output Tokens / call", lambda v: f"{v:,.0f}", False),
+    ("Avg Model Calls", lambda v: f"{v:.1f}", False),
     ("Avg Cost", lambda v: f"${v:.5f}", False),
     ("Avg Budget Remaining", lambda v: f"{v:.1f}", True),
 ]
@@ -82,8 +85,11 @@ def _operational_value(run: RunData, metric: str):
     return {
         "Model": run.config.get("predictor", {}).get("model_name", "unknown"),
         "Accuracy (pass@1)": stats.pass_at_1,
-        "Avg Input Tokens": stats.avg_input_tokens,
-        "Avg Output Tokens": stats.avg_output_tokens,
+        "Avg Input Tokens": stats.avg_total_input_tokens,
+        "Avg Output Tokens": stats.avg_total_output_tokens,
+        "Avg Input Tokens / call": stats.avg_input_tokens,
+        "Avg Output Tokens / call": stats.avg_output_tokens,
+        "Avg Model Calls": stats.avg_model_calls,
         "Avg Cost": stats.avg_cost,
         "Avg Budget Remaining": stats.avg_budget_remaining,
     }[metric]
@@ -182,8 +188,8 @@ if has_tools:
 st.divider()
 st.subheader("Tool-interaction anti-patterns")
 st.caption(
-    "Sample-average rate among each pattern's *applicable* samples (denominator `n`). "
-    "Red = worst (highest) per row."
+    "Sample-average rate among each pattern's *applicable* samples; `n` is applicable "
+    "**instances** (the unit the rate is averaged over, not samples). Red = worst (highest) per row."
 )
 
 _pat_labels = dict(PATTERN_CATALOG)
@@ -200,7 +206,7 @@ pat_raw = pd.DataFrame(
 )
 pat_display = pd.DataFrame(
     {label: {_pat_labels[name]:
-             (f"{s.rate * 100:.1f}% (n={s.applicable_n})" if (s := _pat_stat(run, name)) else "—")
+             (f"{s.rate * 100:.1f}% (n={s.applicable_instances})" if (s := _pat_stat(run, name)) else "—")
              for name, _ in PATTERN_CATALOG}
      for label, run in runs.items()}
 )

@@ -23,9 +23,9 @@ marks — whereas Altair's ``mark_boxplot`` recomputes quartiles from raw data w
 from __future__ import annotations
 
 import plotly.graph_objects as go
-import plotly.express as px
 import streamlit as st
 
+from colors import stable_color
 from metrics import ReliabilityStats
 
 
@@ -65,11 +65,9 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
     tick is the median A⁵⁰. Fed to ``go.Box`` as precomputed quartiles/fences so
     it matches the metric cards exactly (no recomputation from raw data).
     """
-    palette = px.colors.qualitative.Plotly
     fig = go.Figure()
-    for i, (label, rel) in enumerate(
-        (lbl, r) for lbl, r in rels.items() if r.percentiles
-    ):
+    for label, rel in ((lbl, r) for lbl, r in rels.items() if r.percentiles):
+        color = stable_color(label, kind="run")
         p = rel.percentiles
         fig.add_trace(
             go.Box(
@@ -80,7 +78,7 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
                 q3=[p[75]],
                 lowerfence=[p[10]],
                 upperfence=[p[90]],
-                marker_color=palette[i % len(palette)],
+                marker_color=color,
                 width=0.5,
                 hovertext=[
                     f"<b>{label}</b><br>"
@@ -102,7 +100,7 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
                 showarrow=False,
                 xanchor="left",
                 xshift=22,
-                font=dict(size=11, color=palette[i % len(palette)]),
+                font=dict(size=11, color=color),
             )
 
     fig.update_layout(
@@ -123,10 +121,9 @@ def reliability_bars(rels: dict[str, ReliabilityStats]) -> go.Figure:
     runs (``barmode="group"``). All values are 0..1 and share the percentage
     y-axis. Note U₁₀⁹⁰ is *lower = better* while the others are *higher = better*.
     """
-    palette = px.colors.qualitative.Plotly
     metrics = ["Average P̄", "Aptitude A⁹⁰", "Unreliability U₁₀⁹⁰", "Reliability R", "pass@N"]
     fig = go.Figure()
-    for i, (label, rel) in enumerate(rels.items()):
+    for label, rel in rels.items():
         passk = rel.passk[max(rel.passk)] if rel.passk else 0.0
         values = [rel.avg_performance, rel.aptitude, rel.unreliability, rel.reliability, passk]
         fig.add_trace(
@@ -134,7 +131,7 @@ def reliability_bars(rels: dict[str, ReliabilityStats]) -> go.Figure:
                 name=label,
                 x=metrics,
                 y=values,
-                marker_color=palette[i % len(palette)],
+                marker_color=stable_color(label, kind="run"),
                 text=[f"{v:.1%}" for v in values],
                 textposition="outside",
                 hovertemplate="<b>%{fullData.name}</b><br>%{x}: %{y:.1%}<extra></extra>",

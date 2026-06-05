@@ -142,8 +142,17 @@ def render_conversation(record: dict, highlight_indices: set[int] | None = None)
             tool_name = msg.get("tool_name") or "tool"
             status = msg.get("status", "")
             status_badge = "✓ success" if status == "success" else f"✗ {status or 'error'}"
+            remaining = msg.get("remaining_budget")
+            total = msg.get("total_budget")
+            budget_badge = (
+                f" · 🪙 budget: **{remaining:g}/{total:g}**"
+                if remaining is not None and total is not None
+                else ""
+            )
             with st.chat_message("tool", avatar="🔧"):
-                st.markdown(f"**Tool result · `{tool_name}`** — {status_badge}")
+                st.markdown(
+                    f"**Tool result · `{tool_name}`** — {status_badge}{budget_badge}"
+                )
                 content = msg.get("content", "")
                 with st.expander("Tool output — click to expand"):
                     if isinstance(content, dict):

@@ -21,7 +21,8 @@ DEFAULT_CSV = _REPO_ROOT / "experiments.csv"
 COLUMNS = [
     "run_dir", "date", "time", "status", "baseline", "model", "args",
     "iters_present", "n_instances", "n_total", "accuracy", "avg_cost", "avg_in_tok",
-    "avg_out_tok", "avg_budget_remaining", "reliability", "aptitude", "unreliability",
+    "avg_out_tok", "avg_in_tok_per_call", "avg_out_tok_per_call", "avg_model_calls",
+    "avg_budget_remaining", "reliability", "aptitude", "unreliability",
     "Notes",
 ]
 
@@ -101,7 +102,9 @@ def _parse_time(run_key: str) -> str:
 def _blank_metrics() -> dict:
     return {
         "iters_present": "", "n_instances": "", "n_total": "", "accuracy": "",
-        "avg_cost": "", "avg_in_tok": "", "avg_out_tok": "", "avg_budget_remaining": "",
+        "avg_cost": "", "avg_in_tok": "", "avg_out_tok": "",
+        "avg_in_tok_per_call": "", "avg_out_tok_per_call": "", "avg_model_calls": "",
+        "avg_budget_remaining": "",
         "reliability": "", "aptitude": "", "unreliability": "",
     }
 
@@ -193,8 +196,11 @@ def _row_from_run(run_dir: str, date: str, time: str, run_path: Path, run: "RunD
         "n_total": st.n_total,
         "accuracy": round(st.pass_at_1, 4),
         "avg_cost": round(st.avg_cost, 6),
-        "avg_in_tok": round(st.avg_input_tokens, 1),
-        "avg_out_tok": round(st.avg_output_tokens, 1),
+        "avg_in_tok": round(st.avg_total_input_tokens, 1),
+        "avg_out_tok": round(st.avg_total_output_tokens, 1),
+        "avg_in_tok_per_call": round(st.avg_input_tokens, 1),
+        "avg_out_tok_per_call": round(st.avg_output_tokens, 1),
+        "avg_model_calls": round(st.avg_model_calls, 2),
         "avg_budget_remaining": round(st.avg_budget_remaining, 3),
         "reliability": round(rel.reliability, 4) if rel else "",
         "aptitude": round(rel.aptitude, 4) if rel else "",

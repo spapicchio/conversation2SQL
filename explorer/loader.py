@@ -31,8 +31,11 @@ class RunStats:
     n_passed: int
     n_instances: int       # unique instance_ids (records collapsed across iterations)
     pass_at_1: float       # mean over instances of (passes / samples); == accuracy for single-iter
-    avg_input_tokens: float
-    avg_output_tokens: float
+    avg_input_tokens: float   # per LLM call (mean over model calls)
+    avg_output_tokens: float  # per LLM call (mean over model calls)
+    avg_total_input_tokens: float   # cumulative per conversation (prompt re-sent each turn)
+    avg_total_output_tokens: float  # cumulative per conversation
+    avg_model_calls: float    # LLM calls per conversation
     avg_cost: float
     avg_budget_remaining: float
     accuracy_by_database: dict[str, float]  # database -> pass rate
@@ -124,6 +127,18 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
     avg_output = sum(r.get("mean_completion_tokens") or 0 for r in records) / max(
         n_total, 1
     )
+    # Cumulative tokens per conversation: the agent re-sends the whole prompt
+    # each turn, so these sums are the real billed token counts (much larger
+    # than the per-call means for tool-using baselines).
+    avg_total_input = sum(r.get("total_prompt_tokens") or 0 for r in records) / max(
+        n_total, 1
+    )
+    avg_total_output = sum(
+        r.get("total_completion_tokens") or 0 for r in records
+    ) / max(n_total, 1)
+    avg_model_calls = sum(r.get("num_model_calls") or 0 for r in records) / max(
+        n_total, 1
+    )
     avg_cost = sum(r.get("total_cost") or 0 for r in records) / max(n_total, 1)
     avg_budget = sum(r.get("updated_user_patience") or 0 for r in records) / max(
         n_total, 1
@@ -174,6 +189,9 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
         pass_at_1=pass_at_1,
         avg_input_tokens=avg_input,
         avg_output_tokens=avg_output,
+        avg_total_input_tokens=avg_total_input,
+        avg_total_output_tokens=avg_total_output,
+        avg_model_calls=avg_model_calls,
         avg_cost=avg_cost,
         avg_budget_remaining=avg_budget,
         accuracy_by_database=accuracy_by_database,

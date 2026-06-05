@@ -261,18 +261,25 @@ def _record_hits(record: dict) -> list[PatternHit]:
 
 @dataclass(frozen=True)
 class PatternStat:
-    """A pattern's rate and the denominator it was computed over.
+    """A pattern's rate and the denominators it was computed over.
 
     ``rate`` is the sample-average among *applicable* samples (mean over instances
-    of each instance's applicable-hit fraction); ``applicable_n`` is the total
-    number of applicable samples backing it. For patterns applicable to every
-    sample, ``rate`` matches the old frequency and ``applicable_n`` is all samples.
-    Reporting both makes patterns with different denominators comparable — a 38%
-    KB-blind rate over 120 KB-needing samples reads honestly next to a 12% rate
-    over all 412 samples.
+    of each instance's applicable-hit fraction). It is averaged over **instances**,
+    so the honest denominator is ``applicable_instances`` (instances with ≥1
+    applicable sample) — this is the ``N`` to show. ``applicable_n`` is the total
+    applicable *samples* (instance × iteration) backing it; for a multi-iteration
+    run ``applicable_n`` exceeds ``applicable_instances`` and is *not* the rate's
+    denominator, so it should not be presented as ``n=`` next to the rate.
+
+    The effective flagged-instance count consistent with the bar is
+    ``rate * applicable_instances`` (an integer for single-iteration runs, possibly
+    fractional otherwise). Reporting instances keeps patterns with different
+    denominators comparable — a 38% KB-blind rate over 120 KB-needing instances
+    reads honestly next to a 12% rate over all 412 instances.
     """
     rate: float
-    applicable_n: int
+    applicable_n: int            # total applicable samples (instance × iteration)
+    applicable_instances: int = 0  # instances with ≥1 applicable sample — the rate's N
 
 
 def aggregate_patterns(groups: dict[str, list[dict]]) -> dict[str, PatternStat]:
@@ -281,8 +288,9 @@ def aggregate_patterns(groups: dict[str, list[dict]]) -> dict[str, PatternStat]:
     The rate is the sample-average (mean over instances of the fraction of that
     instance's *applicable* samples hitting the pattern); instances with no
     applicable sample are excluded from the mean. Per record a pattern counts at
-    most once (presence, not occurrence count). ``applicable_n`` is the total
-    applicable samples across all instances — the denominator behind the rate.
+    most once (presence, not occurrence count). ``applicable_instances`` (the count
+    of instances contributing to the mean) is the rate's true denominator;
+    ``applicable_n`` is the total applicable samples behind those instances.
     """
     per_instance: dict[str, list[float]] = {n: [] for n in PATTERN_NAMES}
     applicable_n: dict[str, int] = {n: 0 for n in PATTERN_NAMES}
@@ -301,6 +309,7 @@ def aggregate_patterns(groups: dict[str, list[dict]]) -> dict[str, PatternStat]:
         name: PatternStat(
             rate=(sum(v) / len(v) if v else 0.0),
             applicable_n=applicable_n[name],
+            applicable_instances=len(v),  # one entry per instance with applicable samples
         )
         for name, v in per_instance.items()
     }
@@ -317,40 +326,205 @@ def clean_fraction(groups: dict[str, list[dict]]) -> float:
     return sum(per_instance) / len(per_instance) if per_instance else 0.0
 
 
-def positional_tool_distribution(
-    groups: dict[str, list[dict]], max_pos: int = 8
-) -> pd.DataFrame:
-    """Long-form frame [position, tool, share] for a 100%-stacked positional plot.
+def per_iteration_pattern_rates(records: list[dict]) -> pd.DataFrame:
+    """Per-iteration anti-pattern rate, long-form ``[iteration, pattern, rate, n]``.
 
-    Columns 1..max_pos-1 are individual call positions; the last column ">=max_pos"
-    shows the tool at position max_pos for still-active conversations. Each sample
-    contributes exactly one category per position (a tool name, or "(no call)" once
-    the sequence has ended), so shares per position sum to 1. Aggregated sample-average:
-    per-instance share averaged over ALL instances (missing categories imply 0).
+    Records are bucketed by their ``iteration`` field (one record per instance per
+    iteration). Within each bucket, ``rate`` is the fraction of *applicable* records
+    hitting the pattern and ``n`` is that applicable count. ``pattern`` carries the
+    human label (matching ``PATTERN_CATALOG``).
+
+    Exposes run-to-run variance the single sample-average bar hides; for a complete
+    run (every instance present in every iteration) the mean of ``rate`` over
+    iterations equals the per-instance sample-average from ``aggregate_patterns``.
     """
-    positions = [str(p) for p in range(1, max_pos)] + [f"≥{max_pos}"]
-    n_inst = sum(1 for s in groups.values() if s)
-    if n_inst == 0:
-        return pd.DataFrame(columns=["position", "tool", "share"])
+    labels = dict(PATTERN_CATALOG)
+    by_iter: dict[int, list[dict]] = {}
+    for r in records:
+        by_iter.setdefault(int(r.get("iteration", 0) or 0), []).append(r)
+    rows = []
+    for it in sorted(by_iter):
+        recs = by_iter[it]
+        present = [{h.name for h in _record_hits(r)} for r in recs]
+        for name in PATTERN_NAMES:
+            applicable = [i for i, r in enumerate(recs) if _is_applicable(name, r)]
+            n = len(applicable)
+            rate = (sum(name in present[i] for i in applicable) / n) if n else 0.0
+            rows.append({"iteration": it, "pattern": labels[name], "rate": rate, "n": n})
+    return pd.DataFrame(rows)
 
-    accum: dict[str, dict[str, float]] = {pos: {} for pos in positions}
+
+def repeated_identical_tool_counts(records: list[dict]) -> pd.DataFrame:
+    """Total surplus repeats per tool across the given records.
+
+    For each record, identical calls are grouped by (tool, normalized-args); a
+    group occurring ``k >= 2`` times contributes ``k - 1`` surplus repeats (the
+    re-issues beyond the first). Surplus repeats are summed per tool name across
+    all records. Returns a long-form frame ``[tool, repeats]`` sorted descending;
+    empty (with those columns) when nothing was repeated.
+
+    Intended for the ``repeated_identical_call`` drill-down: pass the records the
+    pattern flagged, then plot ``repeats`` by ``tool``.
+    """
+    counts: Counter = Counter()
+    for record in records:
+        grouped: dict[tuple[str, str], int] = {}
+        for e in extract_tool_events(record):
+            key = (e.tool_name, _norm_args(e.arguments))
+            grouped[key] = grouped.get(key, 0) + 1
+        for (tool, _), k in grouped.items():
+            if k >= 2:
+                counts[tool] += k - 1
+    rows = [{"tool": tool, "repeats": c} for tool, c in counts.items()]
+    if not rows:
+        return pd.DataFrame(columns=["tool", "repeats"])
+    return pd.DataFrame(rows).sort_values("repeats", ascending=False)
+
+
+def _quintile_labels(n_bins: int) -> list[str]:
+    """Percentage-range bucket labels, e.g. n_bins=5 → ['0-20%', …, '80-100%']."""
+    step = 100 // n_bins
+    return [f"{i * step}-{(i + 1) * step}%" for i in range(n_bins)]
+
+
+def _progress_bin(frac: float, n_bins: int) -> int:
+    """Map a fraction in [0, 1] to a bucket index 0..n_bins-1 (1.0 clamps to last)."""
+    return min(int(frac * n_bins), n_bins - 1)
+
+
+def first_submit_accuracy_by_quintile(
+    records: list[dict], n_bins: int = 5
+) -> pd.DataFrame:
+    """Accuracy bucketed by *when* the agent first answered — long-form [quintile, accuracy, n].
+
+    For each conversation, progress = (index of the first ``submit_sql`` call) /
+    (total tool calls); it is dropped into one of ``n_bins`` percentage buckets
+    (0-20% = answered almost immediately, 80-100% = answered only at the very end).
+    Conversations that never submit (no answer attempt) and those with no tool
+    calls are excluded. ``accuracy`` is the pooled pass-rate within a bucket — each
+    (instance, iteration) sample counts once — making the row a conditional accuracy
+    "of conversations that first answered in this quintile, what fraction passed";
+    ``n`` is that bucket's sample count. Every bucket is returned (``accuracy`` NaN
+    when empty) so the columns of a heatmap stay stable across runs.
+
+    Surfaces the "patience pays off" trend: accuracy typically climbs as the first
+    answer attempt moves later in the conversation.
+    """
+    labels = _quintile_labels(n_bins)
+    buckets: list[list[bool]] = [[] for _ in range(n_bins)]
+    for r in records:
+        events = extract_tool_events(r)
+        if not events:
+            continue
+        first_submit = next(
+            (i for i, e in enumerate(events) if e.tool_name == "submit_sql"), None
+        )
+        if first_submit is None:
+            continue
+        b = _progress_bin(first_submit / len(events), n_bins)
+        buckets[b].append(bool(r.get("execution_accuracy")))
+    rows = [
+        {
+            "quintile": labels[i],
+            "accuracy": (sum(vals) / len(vals)) if vals else float("nan"),
+            "n": len(vals),
+        }
+        for i, vals in enumerate(buckets)
+    ]
+    return pd.DataFrame(rows)
+
+
+def tool_position_accuracy(records: list[dict], n_bins: int = 5) -> pd.DataFrame:
+    """Accuracy cross-tabbed by tool × normalized call position — long-form [tool, quintile, accuracy, n].
+
+    For each conversation and each tool call at index ``i``, position = ``i / total
+    calls`` selects a percentage bucket. A conversation contributes (once) to
+    ``cell(tool, quintile)`` if it called that tool anywhere in that quintile — so a
+    conversation legitimately lands in several cells (that is the cross-tab). The
+    cell ``accuracy`` is the pooled pass-rate of the contributing conversations and
+    ``n`` their count. Only populated cells are returned.
+
+    Detects whether *where* a tool is used (early vs. late) correlates with success;
+    it is the accuracy-coloured companion to ``positional_tool_distribution``. The
+    correlation is exploratory: a good-looking cell may reflect the tool, the timing,
+    or a confound between them.
+    """
+    labels = _quintile_labels(n_bins)
+    cells: dict[tuple[str, str], list[bool]] = {}
+    for r in records:
+        events = extract_tool_events(r)
+        if not events:
+            continue
+        passed = bool(r.get("execution_accuracy"))
+        seen: set[tuple[str, str]] = {
+            (e.tool_name, labels[_progress_bin(i / len(events), n_bins)])
+            for i, e in enumerate(events)
+        }
+        for key in seen:
+            cells.setdefault(key, []).append(passed)
+    rows = [
+        {"tool": tool, "quintile": q, "accuracy": sum(v) / len(v), "n": len(v)}
+        for (tool, q), v in cells.items()
+    ]
+    if not rows:
+        return pd.DataFrame(columns=["tool", "quintile", "accuracy", "n"])
+    return pd.DataFrame(rows)
+
+
+def positional_tool_distribution(
+    groups: dict[str, list[dict]], n_bins: int = 5
+) -> pd.DataFrame:
+    """Long-form frame [quintile, tool, share] for a 100%-stacked positional plot.
+
+    Each conversation's tool sequence is mapped onto ``n_bins`` normalized position
+    buckets (``call index / total calls`` → 0-20% … 80-100%), matching the quintile
+    axis of the accuracy heatmaps. Within a bucket a conversation splits its weight
+    across the tools it called there (share = tool count / calls in the bucket), so
+    it contributes exactly 1.0 to every bucket it reaches. ``share`` is that split
+    averaged over the conversations that have a call in the bucket, so shares sum to
+    1 per quintile. A short conversation may not reach the later quintiles (it then
+    contributes to none of them); empty quintiles return no rows.
+
+    Using fractions of the conversation rather than absolute call indices means a
+    long run of one tool no longer "spills" into a trailing ``≥8`` bucket — it stays
+    inside the quintiles it actually spans.
+    """
+    labels = _quintile_labels(n_bins)
+    accum: dict[str, dict[str, float]] = {q: {} for q in labels}
+    reached: dict[str, int] = {q: 0 for q in labels}  # instances with a call in the bin
     for samples in groups.values():
         if not samples:
             continue
-        counts: dict[str, Counter] = {pos: Counter() for pos in positions}
+        # Average the instance's iterations into one per-bucket tool distribution.
+        inst_share: dict[str, dict[str, float]] = {q: {} for q in labels}
+        inst_reached: dict[str, int] = {q: 0 for q in labels}
         for r in samples:
             seq = [e.tool_name for e in extract_tool_events(r)]
-            for i, pos in enumerate(positions):
-                cat = seq[i] if i < len(seq) else "(no call)"
-                counts[pos][cat] += 1
-        n = len(samples)
-        for pos in positions:
-            for cat, c in counts[pos].items():
-                accum[pos][cat] = accum[pos].get(cat, 0.0) + (c / n)
+            if not seq:
+                continue
+            binned: dict[str, Counter] = {q: Counter() for q in labels}
+            for i, name in enumerate(seq):
+                binned[labels[_progress_bin(i / len(seq), n_bins)]][name] += 1
+            for q in labels:
+                total = sum(binned[q].values())
+                if total == 0:
+                    continue
+                inst_reached[q] += 1
+                for name, c in binned[q].items():
+                    inst_share[q][name] = inst_share[q].get(name, 0.0) + c / total
+        for q in labels:
+            if inst_reached[q] == 0:
+                continue
+            reached[q] += 1
+            for name, s in inst_share[q].items():
+                accum[q][name] = accum[q].get(name, 0.0) + s / inst_reached[q]
 
     rows = [
-        {"position": pos, "tool": cat, "share": total / n_inst}
-        for pos in positions
-        for cat, total in accum[pos].items()
+        {"quintile": q, "tool": name, "share": total / reached[q]}
+        for q in labels
+        for name, total in accum[q].items()
+        if reached[q] > 0
     ]
+    if not rows:
+        return pd.DataFrame(columns=["quintile", "tool", "share"])
     return pd.DataFrame(rows)

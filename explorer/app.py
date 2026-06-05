@@ -15,6 +15,7 @@ from loader import RunData
 from loader import load_run
 from loader import list_runs
 from render import render_conversation
+from run_selector import select_run_sidebar
 
 
 # Reads RESULTS_ROOT env var (exported by evaluate.sh); falls back to ../results
@@ -54,25 +55,12 @@ def _question(r: dict) -> str:
 st.set_page_config(page_title="Results Explorer", layout="wide")
 st.title("Results Explorer")
 
-# Sidebar: cascading run selector (date → run)
-with st.sidebar:
-    st.header("Select Run")
-    runs_tree = list_runs(RESULTS_ROOT)
-    if not runs_tree:
-        st.error(f"No results found in `{RESULTS_ROOT.resolve()}`")
-        st.stop()
-    def _fmt_run(key: str) -> str:
-        # "16-23-07/no_tool__Qwen3.5-9B__ddl" → "16:23:07  no_tool__Qwen3.5-9B__ddl"
-        # "16_23_07__no_tool__Qwen3.5-9B__ddl" → kept as-is (old layout)
-        if "/" in key:
-            time_part, slug = key.split("/", 1)
-            return f"{time_part.replace('-', ':')}  {slug}"
-        return key
-
-    dates = list(runs_tree.keys())
-    date = st.selectbox("Date", dates)
-    run_names = runs_tree[date]
-    run_key = st.selectbox("Run", run_names, index=0, format_func=_fmt_run)
+# Sidebar: cascading run selector (date → run), persisted across pages.
+runs_tree = list_runs(RESULTS_ROOT)
+if not runs_tree:
+    st.sidebar.error(f"No results found in `{RESULTS_ROOT.resolve()}`")
+    st.stop()
+date, run_key = select_run_sidebar(runs_tree)
 
 run_path = RESULTS_ROOT / date / run_key
 run = _load_run_cached(str(run_path))
@@ -105,8 +93,24 @@ with tab_results:
         f"{stats.pass_at_1 * 100:.1f}%  ·  n={stats.n_instances}",
         help=f"pass@1 over {stats.n_instances} samples (dataset size)",
     )
-    c2.metric("Avg Input Tokens", f"{stats.avg_input_tokens:,.0f}")
-    c3.metric("Avg Output Tokens", f"{stats.avg_output_tokens:,.0f}")
+    c2.metric(
+        "Avg Input Tokens",
+        f"{stats.avg_total_input_tokens:,.0f}",
+        help=(
+            "Cumulative input tokens per conversation (the full prompt is "
+            "re-sent each turn, so this is the real billed amount). "
+            f"Per-call mean: {stats.avg_input_tokens:,.0f} over "
+            f"{stats.avg_model_calls:.1f} model calls."
+        ),
+    )
+    c3.metric(
+        "Avg Output Tokens",
+        f"{stats.avg_total_output_tokens:,.0f}",
+        help=(
+            "Cumulative output tokens per conversation. "
+            f"Per-call mean: {stats.avg_output_tokens:,.0f}."
+        ),
+    )
     c4.metric("Avg Cost", f"${stats.avg_cost:.5f}")
     c5.metric("Avg Budget Remaining", f"{stats.avg_budget_remaining:.1f}")
 
@@ -291,8 +295,9 @@ with tab_results:
                     "Question": (q[:80] + "…") if len(q) > 80 else q,
                     "error_class": r.get("_error_class", ""),
                     "Accuracy": "✓" if r.get("execution_accuracy") else "✗",
-                    "input_tokens": r.get("mean_prompt_tokens", 0),
-                    "output_tokens": r.get("mean_completion_tokens", 0),
+                    "model_calls": r.get("num_model_calls", 0),
+                    "input_tokens": r.get("total_prompt_tokens", 0),
+                    "output_tokens": r.get("total_completion_tokens", 0),
                     "cost": r.get("total_cost", 0.0),
                 }
             )
