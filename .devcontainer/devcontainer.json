@@ -39,8 +39,8 @@
     "gpustat":    "uv pip install --system gpustat",
     
     // This installs the verl package in editable mode, so that changes to the code are reflected without needing to reinstall. It is installed at system level so that it is available in the PATH and can be used as a command line tool.
-    "verl_install_if_not_present": "if [ ! -d verl ]; then git clone https://github.com/volcengine/verl; fi",
-    "verl_install": "cd verl && uv pip install --system --no-deps -e .",
+    // "verl_install_if_not_present": "if [ ! -d verl ]; then git clone https://github.com/volcengine/verl; fi",
+    // "verl_install": "cd verl && uv pip install --system --no-deps -e .",
     
     // These are the flashinfer packages, which are needed to optimize inference.
     //  They are installed at system level so that they are available in the PATH.
