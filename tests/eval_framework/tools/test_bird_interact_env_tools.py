@@ -19,12 +19,18 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     KNOWLEDGE_VISIBLE_FIELDS,
     ExecuteSQLResponse,
     execute_sql_impl,
+    psql_console_impl,
     get_all_column_meanings_impl,
     get_all_external_knowledge_names_impl,
     get_all_knowledge_definitions_impl,
     get_column_meaning_impl,
     get_knowledge_definition_impl,
     get_schema_impl,
+    get_table_names_impl,
+    get_table_schema_impl,
+)
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
+    PSQL_GUARDRAIL_REFUSAL,
 )
 
 
@@ -560,4 +566,230 @@ def test_get_all_external_knowledge_names_same_regardless_of_linearized_flag(tas
     names_false = json.loads(_invoke_tool(env_tools.get_all_external_knowledge_names, runtime=_Runtime(task_data)))
     names_true  = json.loads(_invoke_tool(env_tools.get_all_external_knowledge_names, runtime=_Runtime(task_data_linearized)))
     assert sorted(names_false["names"]) == sorted(names_true["names"])
+
+
+# ---------------------------------------------------------------------------
+# Granular table-schema tools (get_table_names / get_table_schema)
+# ---------------------------------------------------------------------------
+
+# A miniature but faithful DDL blob: two CREATE TABLE blocks each with a
+# "First 3 rows" sample, followed by a trailing ALTER TABLE foreign-key block —
+# exactly the shape of the real {db}_ddl.txt files. "orders" is the FK *child*
+# and "customers" is the referenced *parent* of the single FK.
+SAMPLE_DDL = '''-- PostgreSQL schema dump for schema: public
+
+CREATE TABLE "orders" (
+    "order_id" text NOT NULL PRIMARY KEY,
+    "customer_id" text
+);
+First 3 rows:
+order_id | customer_id
+----------------------
+O1 | C1
+O2 | C2
+...
+
+CREATE TABLE "customers" (
+    "customer_id" text NOT NULL PRIMARY KEY,
+    "name" text
+);
+First 3 rows:
+customer_id | name
+------------------
+C1 | Alice
+...
+
+ALTER TABLE "orders" ADD CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "customers" ("customer_id") ON DELETE NO ACTION;
+'''
+
+
+def test_parse_ddl_splits_tables_and_captures_alters():
+    """The parser must split the blob on CREATE TABLE boundaries (preserving
+    each table's sample-rows block) and collect the trailing ALTER statements
+    separately so they can be re-attached per table."""
+    tables, alters = env_tools._parse_ddl(SAMPLE_DDL)
+
+    assert list(tables.keys()) == ["orders", "customers"]
+    # each block keeps its own CREATE TABLE + sample rows, and stops before
+    # the next table / the ALTER block
+    assert 'CREATE TABLE "orders"' in tables["orders"]
+    assert "First 3 rows" in tables["orders"]
+    assert "O1 | C1" in tables["orders"]
+    assert 'CREATE TABLE "customers"' not in tables["orders"]
+    assert "ALTER TABLE" not in tables["orders"]
+    # the FK lives in the alters list, not inside any table block
+    assert len(alters) == 1
+    assert alters[0].startswith("ALTER TABLE")
+
+
+def test_get_table_names_impl_lists_all_in_order():
+    """``get_table_names_impl`` mirrors ``get_all_external_knowledge_names`` —
+    a bare list of names, in DDL order, under a ``"names"`` key."""
+    assert get_table_names_impl(SAMPLE_DDL) == {"names": ["orders", "customers"]}
+
+
+def test_get_table_schema_impl_includes_create_block_and_sample_rows():
+    """A single-table fetch returns the CREATE TABLE block *and* its sample
+    rows — the user wants the rows available without spending execute_sql."""
+    result = get_table_schema_impl("orders", SAMPLE_DDL)
+    schema = result["schema"]
+    assert 'CREATE TABLE "orders"' in schema
+    assert "First 3 rows" in schema
+    assert "O1 | C1" in schema
+    # an unrelated table's definition must not leak in
+    assert 'CREATE TABLE "customers"' not in schema
+
+
+def test_get_table_schema_impl_includes_fk_when_table_is_child():
+    """When the looked-up table is the FK child (the ALTER TABLE target), the
+    FK statement must be attached so the agent sees the parent it can join to."""
+    schema = get_table_schema_impl("orders", SAMPLE_DDL)["schema"]
+    assert 'ALTER TABLE "orders" ADD CONSTRAINT' in schema
+    assert 'REFERENCES "customers"' in schema
+
+
+def test_get_table_schema_impl_includes_fk_when_table_is_parent():
+    """When the looked-up table is the referenced parent, the same FK must be
+    attached so joinability is visible from *both* sides of the relationship."""
+    schema = get_table_schema_impl("customers", SAMPLE_DDL)["schema"]
+    assert 'CREATE TABLE "customers"' in schema
+    assert 'ALTER TABLE "orders" ADD CONSTRAINT' in schema
+
+
+def test_get_table_schema_impl_unknown_table_returns_marker():
+    """Unknown names return the ``"Table not found."`` sentinel, mirroring the
+    KB tool's ``"Knowledge not found."`` contract."""
+    assert get_table_schema_impl("does_not_exist", SAMPLE_DDL) == {
+        "schema": "Table not found."
+    }
+
+
+def test_get_table_names_wrapper_delegates_to_impl(task_data):
+    """Wiring check: the wrapper reads ``ddl_database_schema`` from context."""
+    ctx = task_data.model_copy(update={"ddl_database_schema": SAMPLE_DDL})
+    raw = _invoke_tool(env_tools.get_table_names, runtime=_Runtime(ctx))
+    assert json.loads(raw) == {"names": ["orders", "customers"]}
+
+
+def test_get_table_schema_wrapper_delegates_to_impl(task_data):
+    """Wiring check: the wrapper passes the requested table name and context
+    DDL through to the impl and JSON-encodes the result."""
+    ctx = task_data.model_copy(update={"ddl_database_schema": SAMPLE_DDL})
+    raw = _invoke_tool(
+        env_tools.get_table_schema, table_name="orders", runtime=_Runtime(ctx)
+    )
+    assert json.loads(raw) == get_table_schema_impl("orders", SAMPLE_DDL)
+
+
+# ---------------------------------------------------------------------------
+# psql_console_impl
+# ---------------------------------------------------------------------------
+import subprocess
+from types import SimpleNamespace
+
+
+class TestPsqlGuardrail:
+    """Host-reaching backslash meta-commands must be refused before psql spawns."""
+
+    def test_shell_escape_is_refused_without_spawning(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("\\! echo pwned", db_dsn="dsn")
+        assert out == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_copy_to_file_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("\\copy t TO '/tmp/x.csv'", db_dsn="dsn")
+        assert out == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_output_redirect_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            assert psql_console_impl("\\o /tmp/x", db_dsn="dsn") == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_include_file_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            assert psql_console_impl("\\i /etc/passwd", db_dsn="dsn") == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_g_with_pipe_argument_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            assert psql_console_impl("SELECT 1 \\g | sh", db_dsn="dsn") == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_bare_g_is_allowed(self):
+        # Bare \g just re-runs the buffer — harmless, must reach psql.
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout="ok", stderr=""),
+        ):
+            assert psql_console_impl("SELECT 1 \\g", db_dsn="dsn") == "ok"
+
+    def test_dt_inspection_command_is_allowed(self):
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout="list", stderr=""),
+        ):
+            assert psql_console_impl("\\dt", db_dsn="dsn") == "list"
+
+
+class TestPsqlConsoleImpl:
+    def test_argv_and_readonly_env(self):
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout="rows", stderr=""),
+        ) as run_mock:
+            out = psql_console_impl("SELECT 1;", db_dsn="postgresql://x/y")
+        assert out == "rows"
+        args, kwargs = run_mock.call_args
+        assert args[0] == ["psql", "postgresql://x/y", "-X", "-c", "SELECT 1;"]
+        assert "default_transaction_read_only=on" in kwargs["env"]["PGOPTIONS"]
+        assert "statement_timeout=60s" in kwargs["env"]["PGOPTIONS"]
+        assert kwargs["timeout"] == env_tools.PSQL_TIMEOUT_S
+
+    def test_nonzero_exit_returns_stderr(self):
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr="ERROR: boom"),
+        ):
+            assert psql_console_impl("SELECT bad;", db_dsn="dsn") == "ERROR: boom"
+
+    def test_timeout_is_translated(self):
+        with patch.object(
+            env_tools.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired(cmd="psql", timeout=60),
+        ):
+            out = psql_console_impl("SELECT pg_sleep(99);", db_dsn="dsn")
+        assert "timed out" in out.lower()
+
+    def test_long_output_is_truncated(self):
+        big = "x" * (env_tools.MAX_RESULT_LENGTH + 50)
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=big, stderr=""),
+        ):
+            out = psql_console_impl("SELECT 1;", db_dsn="dsn")
+        assert out.endswith(env_tools.TRUNCATION_NOTICE)
+        assert len(out) == env_tools.MAX_RESULT_LENGTH + len(env_tools.TRUNCATION_NOTICE)
+
+
+def test_psql_console_select_real_db():
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    out = psql_console_impl("SELECT sitekey FROM plants LIMIT 1;", db_dsn)
+    assert "sitekey" in out
+
+
+def test_psql_console_dt_real_db():
+    # Filter to one table so the match is not lost to MAX_RESULT_LENGTH
+    # truncation of the full alphabetical table list.
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    out = psql_console_impl("\\dt plants", db_dsn)
+    assert "plants" in out
+
+
+def test_psql_console_write_rejected_by_readonly_real_db():
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    out = psql_console_impl("CREATE TABLE _should_not_exist (id int);", db_dsn)
+    assert "read-only" in out.lower()
 

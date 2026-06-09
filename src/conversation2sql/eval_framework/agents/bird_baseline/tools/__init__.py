@@ -4,8 +4,11 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute
 
 from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
     execute_sql,
+    psql_console,
     get_all_column_meanings,
     get_schema,
+    get_table_names,
+    get_table_schema,
     get_column_meaning,
     get_all_external_knowledge_names,
     get_knowledge_definition,
@@ -14,12 +17,15 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_en
     KNOWLEDGE_VISIBLE_FIELDS,
     ExecuteSQLResponse,
     execute_sql_impl,
+    psql_console_impl,
     get_all_column_meanings_impl,
     get_all_external_knowledge_names_impl,
     get_all_knowledge_definitions_impl,
     get_column_meaning_impl,
     get_knowledge_definition_impl,
     get_schema_impl,
+    get_table_names_impl,
+    get_table_schema_impl,
 )
 
 from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_user_tools import (
@@ -35,12 +41,25 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_us
 
 TOOL_COSTS: dict[str, float] = {**DB_TOOL_COSTS, **USER_TOOL_COSTS}
 
+# Content prefixes of the messages LangChain's built-in limit middlewares inject
+# when they fire (ToolCallLimitMiddleware in "continue" mode → a ToolMessage;
+# ModelCallLimitMiddleware in "end" mode → a final AIMessage). These are NOT our
+# own tool outputs — they mirror strings hard-coded inside LangChain — so they
+# are a one-way *detection contract*: `extract_middleware_events` matches on them
+# to know a limit fired. Changing a value here only changes the matcher; it does
+# not change what LangChain emits, so it must stay in sync with the library.
+TOOL_CALL_LIMIT_PREFIX = "Tool call limit exceeded."
+MODEL_CALL_LIMIT_PREFIX = "Model call limits exceeded:"
+
 __all__ = [
     # db execute helper
     "_execute_query",
     # env tools (LangGraph @tool wrappers)
     "execute_sql",
+    "psql_console",
     "get_schema",
+    "get_table_names",
+    "get_table_schema",
     "get_all_column_meanings",
     "get_column_meaning",
     "get_all_external_knowledge_names",
@@ -48,7 +67,10 @@ __all__ = [
     "get_all_knowledge_definitions",
     # env tools (pure *_impl functions)
     "execute_sql_impl",
+    "psql_console_impl",
     "get_schema_impl",
+    "get_table_names_impl",
+    "get_table_schema_impl",
     "get_all_column_meanings_impl",
     "get_column_meaning_impl",
     "get_all_external_knowledge_names_impl",
@@ -71,4 +93,7 @@ __all__ = [
     "USER_TOOL_COSTS",
     # merged
     "TOOL_COSTS",
+    # built-in limit-middleware message prefixes (detection contract)
+    "TOOL_CALL_LIMIT_PREFIX",
+    "MODEL_CALL_LIMIT_PREFIX",
 ]
