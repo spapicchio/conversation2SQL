@@ -29,9 +29,12 @@ The interaction ends when you submit the correct SQL query or the budget runs ou
 Each action costs bird-coins, so you should be efficient.
 
 Available tools and costs:
-- execute_sql: execute a PostgreSQL query. Cost: 1
-- get_schema: get the database schema. Cost: 1
-- get_all_column_meanings: get all column meanings. Cost: 1
+{% if enable_psql_console %}- psql_console: run ONE PostgreSQL statement or one read-only psql meta-command (\\dt list tables, \\d <table> describe, \\l list databases, \\df list functions). Read-only session. Cost: 1
+{% else %}- execute_sql: execute a PostgreSQL query. Cost: 1
+- get_schema: get the full database schema. Cost: 1
+{% if enable_table_schema_tools %}- get_table_names: list all table names in the database. Cost: 0.5
+- get_table_schema: get one table's schema (CREATE TABLE, sample rows, and foreign keys to joinable tables). Cost: 0.5
+{% endif %}{% endif %}- get_all_column_meanings: get all column meanings. Cost: 1
 - get_column_meaning: get the meaning of one column. Cost: 0.5
 - get_all_external_knowledge_names: get all external knowledge names. Cost: 0.5
 - get_knowledge_definition: get one external knowledge definition along with the knowledge it depends on (its prerequisites). Cost: 0.5
@@ -47,7 +50,7 @@ Important strategy tips:
 - Make sure the submitted SQL is valid and addresses all aspects of the question.
 - Keep track of the remaining budget and prioritize actions accordingly.
 - Be careful with broad retrieval tools such as get_all_column_meanings and get_all_knowledge_definitions because they may return a long context.
-- Test SQL with execute_sql before submit_sql when useful.
+- Test SQL with {{ "psql_console" if enable_psql_console else "execute_sql" }} before submit_sql when useful.
 - If a submission fails and budget remains, debug and try again.
 {% if enable_ask_user %}- After a successful phase-1 submission, you may receive a follow-up question for phase 2.
 {% endif %}"""

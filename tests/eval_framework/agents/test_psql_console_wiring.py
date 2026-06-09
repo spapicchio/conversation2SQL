@@ -33,3 +33,33 @@ def test_psql_console_replaces_db_tools():
 def test_both_flags_raise():
     with pytest.raises(ValueError, match="mutually exclusive"):
         _select_db_tools(_task(psql=True, table_tools=True))
+
+
+from conversation2sql.eval_framework.agents.bird_baseline.prompts import (
+    build_bird_interact_agent_messages,
+)
+
+
+def _system_prompt(**params) -> str:
+    base = {
+        "total_budget": 20,
+        "amb_user_query": "q",
+        "enable_ask_user": False,
+        "enable_table_schema_tools": False,
+        "enable_psql_console": False,
+    }
+    base.update(params)
+    return build_bird_interact_agent_messages(base)[0]["content"]
+
+
+def test_prompt_default_lists_execute_sql_not_psql():
+    text = _system_prompt()
+    assert "execute_sql" in text
+    assert "psql_console" not in text
+
+
+def test_prompt_psql_mode_lists_psql_not_execute_sql():
+    text = _system_prompt(enable_psql_console=True)
+    assert "psql_console" in text
+    assert "execute_sql" not in text
+    assert "get_schema" not in text
