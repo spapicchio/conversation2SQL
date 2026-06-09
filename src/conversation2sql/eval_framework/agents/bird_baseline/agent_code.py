@@ -24,13 +24,19 @@ from conversation2sql.eval_framework.agents.bird_baseline.agent_callback import 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import (
     CustomAgentState,
 )
+from conversation2sql.eval_framework.agents.bird_baseline.middleware_tracking import (
+    extract_middleware_events,
+)
 from conversation2sql.eval_framework.agents.bird_baseline.prompts import (
     build_bird_interact_agent_messages,
 )
 from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     execute_sql,
+    psql_console,
     get_all_column_meanings,
     get_schema,
+    get_table_names,
+    get_table_schema,
     get_column_meaning,
     get_all_external_knowledge_names,
     get_knowledge_definition,
@@ -45,6 +51,27 @@ from conversation2sql.eval_framework.state import TaskData
 from conversation2sql.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+def _select_db_tools(single_task: TaskData) -> list:
+    """Pick the database-facing tools for this task.
+
+    Default: execute_sql + get_schema (+ get_table_names/get_table_schema when
+    enable_table_schema_tools). When enable_psql_console is set, a single
+    read-only psql_console tool replaces all of them. The two ablation flags are
+    mutually exclusive (also enforced in ConfigReader).
+    """
+    if single_task.enable_psql_console and single_task.enable_table_schema_tools:
+        raise ValueError(
+            "enable_psql_console and enable_table_schema_tools are mutually "
+            "exclusive; enable at most one DB-tool ablation."
+        )
+    if single_task.enable_psql_console:
+        return [psql_console]
+    db_tools = [execute_sql, get_schema]
+    if single_task.enable_table_schema_tools:
+        db_tools.extend([get_table_names, get_table_schema])
+    return db_tools
 
 
 def run_agent_bird_baseline(
@@ -66,13 +93,14 @@ def run_agent_bird_baseline(
             "amb_user_query": single_task.task_question,
             # "amb_user_query": 'This is a debug message, call only ask_user as tool with an invented question and return without submitting'
             "enable_ask_user": enable_ask_user,
+            "enable_table_schema_tools": single_task.enable_table_schema_tools,
+            "enable_psql_console": single_task.enable_psql_console,
         }
     )
 
     tools = [
-        execute_sql,
+        *_select_db_tools(single_task),
         get_all_column_meanings,
-        get_schema,
         get_column_meaning,
         get_all_external_knowledge_names,
         get_knowledge_definition,
@@ -90,16 +118,16 @@ def run_agent_bird_baseline(
         middleware=[  # pyrefly: ignore
             ModelRetryMiddleware(max_delay=60.0, on_failure="error"),
             ToolRetryMiddleware(max_delay=60.0, on_failure="error"),
-            ModelCallLimitMiddleware(run_limit=single_task.task_budget + 5),
-            ToolCallLimitMiddleware(
+            # ModelCallLimitMiddleware(run_limit=single_task.task_budget + 5),
+            # ToolCallLimitMiddleware(
                 # Maximum tool calls per single invocation (one user message → response cycle).
                 # Resets with each new user message.
-                run_limit=single_task.task_budget + 5,
+                # run_limit=single_task.task_budget + 5,
                 # Maximum tool calls across all runs in a thread (conversation).
                 # Persists across multiple invocations with the same thread ID.
                 # Requires a checkpointer to maintain state. None means no thread limit.
-                thread_limit=single_task.task_budget * 2,
-            ),
+                # thread_limit=single_task.task_budget * 2,
+            # ),
             ContextEditingMiddleware(
                 edits=[
                     ClearToolUsesEdit(
@@ -186,9 +214,10 @@ def utils_process_agent_response(
     """
 
     tool_costs = tool_costs or {}
+    raw_messages = response.pop("messages")  # pyrefly: ignore
+    middleware_events = extract_middleware_events(raw_messages)
     messages = [
-        utils_process_single_msg(m, tool_costs=tool_costs)
-        for m in response.pop("messages")  # pyrefly: ignore
+        utils_process_single_msg(m, tool_costs=tool_costs) for m in raw_messages
     ]
     total_cost = 0
     total_tokens = 0
@@ -212,6 +241,22 @@ def utils_process_agent_response(
             completion_tokens_per_call.append(msg.get("completion_tokens", 0))
         tool_calls_in_order.extend(msg.get("tool_calls", []))
 
+    # finish_reason == "length" means the model hit the max-model-len cap and
+    # was silently truncated (no error is raised, since we no longer send
+    # max_tokens on the local vLLM path). Surface a count + flag so a truncated
+    # run is distinguishable from a clean one downstream / in the explorer.
+    num_truncated_calls = sum(
+        1
+        for msg in messages
+        if msg["role"] == "ai" and msg.get("finish_reason") == "length"
+    )
+    if num_truncated_calls:
+        logger.warning(
+            "%d model call(s) truncated by max-model-len (finish_reason='length'); "
+            "generation was cut off — check the run's token budget.",
+            num_truncated_calls,
+        )
+
     n_calls = len(prompt_tokens_per_call)
     return {
         **response,
@@ -220,11 +265,14 @@ def utils_process_agent_response(
         "total_prompt_tokens": sum(prompt_tokens_per_call),
         "total_completion_tokens": sum(completion_tokens_per_call),
         "num_model_calls": n_calls,
+        "num_truncated_calls": num_truncated_calls,
+        "was_truncated": num_truncated_calls > 0,
         "mean_prompt_tokens": sum(prompt_tokens_per_call) / n_calls if n_calls else 0.0,
         "mean_completion_tokens": (
             sum(completion_tokens_per_call) / n_calls if n_calls else 0.0
         ),
         "tool_calls_in_order": tool_calls_in_order,
         "execution_accuracy": passed,
+        "middleware_events": middleware_events,
         "messages": messages,
     }
