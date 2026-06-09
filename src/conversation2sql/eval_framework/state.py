@@ -59,6 +59,13 @@ class TaskData(BaseModel):
     masked_agent_kb: dict[str, ExternalKnowledgeEntry] = Field(default_factory=dict)
     # When True the KB tools linearize output via agents/utils_kb_linearize.py.
     is_kb_linearized: bool = False
+    # When True the agent gets the granular get_table_names / get_table_schema
+    # tools in addition to the full-dump get_schema (off = baseline behavior).
+    enable_table_schema_tools: bool = False
+    # When True the agent gets the single read-only psql_console tool INSTEAD of
+    # execute_sql/get_schema/get_table_* (ablation). Mutually exclusive with
+    # enable_table_schema_tools (enforced in ConfigReader + run_agent_bird_baseline).
+    enable_psql_console: bool = False
     gt_knowledge_base: dict[str, ExternalKnowledgeEntry] = Field(default_factory=dict)
     #  key = f"{db_name}|{req.table_name.lower()}|{req.column_name.lower()}"
     column_meanings: dict[str, ColumnMeaningEntry] = Field(default_factory=dict)

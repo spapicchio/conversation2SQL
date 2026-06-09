@@ -236,6 +236,8 @@ def load_bird_interact_as_tasks(
     read_only_gt_kb: bool = False,
     database_schema_type: str = "ddl",
     is_kb_linearized: bool = False,
+    enable_table_schema_tools: bool = False,
+    enable_psql_console: bool = False,
     *args,
     **kwargs,
 ) -> list[TaskData]:
@@ -246,6 +248,11 @@ def load_bird_interact_as_tasks(
      https://github.com/bird-bench/BIRD-Interact/blob/48805f00ff427983a57d7137650a8a04b8e5ffad/combine_public_with_gt.py#L65
     """
     dataset_path = Path(dataset_path)
+    if enable_psql_console:
+        logger.warning(
+            "PSQL-CONSOLE ABLATION ENABLED: replacing execute_sql/get_schema/"
+            "get_table_* with the single read-only psql_console tool."
+        )
     samples = []
     skipped_instance_id = {
         # DB FULL
@@ -383,6 +390,8 @@ def load_bird_interact_as_tasks(
                 table_in_gt_sql=table_in_gt_sql,
                 table_in_gt_sql_parse_error=table_in_gt_sql_parse_error,
                 is_kb_linearized=is_kb_linearized,
+                enable_table_schema_tools=enable_table_schema_tools,
+                enable_psql_console=enable_psql_console,
                 **line,
             )
             samples.append(sample)
