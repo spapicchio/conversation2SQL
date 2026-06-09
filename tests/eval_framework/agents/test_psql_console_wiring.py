@@ -63,3 +63,15 @@ def test_prompt_psql_mode_lists_psql_not_execute_sql():
     assert "psql_console" in text
     assert "execute_sql" not in text
     assert "get_schema" not in text
+
+
+def test_prompt_psql_mode_explains_how_to_explore():
+    text = _system_prompt(enable_psql_console=True)
+    assert "First explore the database with psql_console" in text
+    assert "\\dt" in text and "\\d <table>" in text
+
+
+def test_prompt_default_mode_keeps_generic_exploration_tip():
+    text = _system_prompt()
+    assert "First explore the database schema, column meanings" in text
+    assert "psql_console" not in text

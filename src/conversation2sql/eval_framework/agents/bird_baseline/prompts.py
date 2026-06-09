@@ -43,8 +43,9 @@ Available tools and costs:
 {% endif %}- submit_sql: submit the SQL for evaluation. Cost: 3
 
 Important strategy tips:
-- First explore the database schema, column meanings, and relevant external knowledge to understand the task.
-{% if enable_ask_user %}- If the user's intent is ambiguous, ask clarifying questions to figure out the real intent before committing to SQL.
+{% if enable_psql_console %}- First explore the database with psql_console: use \\dt to list tables and \\d <table> to inspect a table's columns and foreign keys, then check column meanings and relevant external knowledge to understand the task.
+{% else %}- First explore the database schema, column meanings, and relevant external knowledge to understand the task.
+{% endif %}{% if enable_ask_user %}- If the user's intent is ambiguous, ask clarifying questions to figure out the real intent before committing to SQL.
 - Ask one clarification question at a time.
 {% endif %}- Be efficient with your actions to conserve budget.
 - Make sure the submitted SQL is valid and addresses all aspects of the question.
