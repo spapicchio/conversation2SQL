@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -30,6 +30,17 @@ class ConfigReader(BaseModel):
     read_only_gt_kb: bool = False  # Whether to only include the tables/columns that are actually used in the GT SQL query when providing the schema to the model
     read_only_gt_tables: bool = False  # Whether to only include the tables that are actually used in the GT SQL query when providing the schema to the model   
     is_kb_linearized: bool = False  # Whether to linearize the KB schema into text or provide it in a structured format (e.g., JSON); linearization may be easier for LLMs to understand but less faithful to the original structure
+    enable_table_schema_tools: bool = False  # When True the agent additionally gets get_table_names + get_table_schema (granular per-table DDL access, mirroring the KB name/definition tools). Off by default so the baseline keeps only the full-dump get_schema; flip on for ablations.
+    enable_psql_console: bool = False  # Ablation: replace the DB tools (execute_sql/get_schema/get_table_*) with a single read-only psql terminal tool (psql_console). Mutually exclusive with enable_table_schema_tools.
+
+    @model_validator(mode="after")
+    def _check_db_tool_ablation_exclusivity(self) -> "ConfigReader":
+        if self.enable_psql_console and self.enable_table_schema_tools:
+            raise ValueError(
+                "enable_psql_console and enable_table_schema_tools are mutually "
+                "exclusive; enable at most one DB-tool ablation."
+            )
+        return self
 # ---------------------------------------------------------------------------
 # Input Data for Predictor
 # ---------------------------------------------------------------------------
