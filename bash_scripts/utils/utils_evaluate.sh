@@ -89,8 +89,21 @@ build_run_slug() {
   [[ "${gt_db}"  == "true" ]] && slug="${slug}__gt-db"
   [[ "${gt_kb}"  == "true" ]] && slug="${slug}__gt-kb"
   slug="${slug}__iter${num_iterations}"
+  # Ablation: the single read-only psql_console tool is passed via --extra
+  # (not a VARIANT), so detect it directly from EXTRA and tag the slug.
+  [[ "${EXTRA:-}" =~ --enable_psql_console[[:space:]]+true ]] && slug="${slug}__psql"
   # IF DEBUG IS SET and it is TRUE, add a suffix to distinguish these runs without needing a separate VARIANT for debug configs.
   [[ -n "${DEBUG:-}" && "${DEBUG:-}" == "true" ]] && slug="${slug}__debug"
+
+  # Optional free-form suffix from `just ... --append-name <name>` (APPEND_NAME env),
+  # e.g. to tag an ablation/experiment. Sanitize it for use in a path and strip any
+  # leading underscores so we always control the "__" separator (the user can pass
+  # either "exp1" or "__exp1" and get the same "${slug}__exp1").
+  local append_name="${APPEND_NAME:-}"
+  if [[ -n "${append_name}" ]]; then
+    append_name=$(printf '%s' "${append_name}" | sed 's/[^A-Za-z0-9._-]/-/g; s/^_*//')
+    [[ -n "${append_name}" ]] && slug="${slug}__${append_name}"
+  fi
 
   echo "${slug}"
 }
