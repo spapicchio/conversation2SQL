@@ -28,7 +28,7 @@ Reference values (from current `bash_scripts/eval_payload.sh`):
 | profile | model_name | max_len | think temp/top_p/top_k/pres/rep | non-think temp/top_p/top_k/pres/rep | default_thinking |
 |---|---|---|---|---|---|
 | qwen35 | `Qwen/Qwen3.5-9B` | 50000 | 0.6/0.95/20/0.0/1.0 | 1.0/0.95/20/1.5/1.0 | true |
-| gemma4 | `google/gemma-4-26B-A4B-it` | 32000 | 1.0/0.95/64/0.0/1.0 | 1.0/0.95/64/0.0/1.0 | false |
+| gemma4-12B | `google/gemma-4-12B-it` | 32000 | 1.0/0.95/64/0.0/1.0 | 1.0/0.95/64/0.0/1.0 | true |
 
 | variant | schema_type | gt_tables | gt_kb | linearized |
 |---|---|---|---|---|
@@ -99,10 +99,10 @@ def test_resolve_profile_qwen_non_thinking():
 
 
 def test_resolve_profile_default_thinking_per_model():
-    # qwen defaults to thinking, gemma to non-thinking
+    # qwen defaults to thinking, gemma4-12B to thinking
     qwen = resolve_profile("qwen35", enable_thinking=None)
     assert qwen[qwen.index("--predictor_temperature") + 1] == "0.6"
-    gemma = resolve_profile("gemma4", enable_thinking=None)
+    gemma = resolve_profile("gemma4-12B", enable_thinking=None)
     assert gemma[gemma.index("--predictor_top_k") + 1] == "64"
 
 
@@ -168,7 +168,7 @@ MODEL_PROFILES: dict[str, dict] = {
             "predictor_repetition_penalty": "1.0",
         },
     },
-    "gemma4": {
+    "gemma4-12B": {
         "predictor_model_name": "google/gemma-4-26B-A4B-it",
         "default_thinking": False,
         "thinking": {
@@ -420,7 +420,7 @@ def run(
     ctx: typer.Context,
     config: Optional[Path] = typer.Option(None, "--config", help="Path to YAML config file."),
     model_profile: Optional[str] = typer.Option(
-        None, "--model-profile", help="Named model preset (e.g. qwen35, gemma4) — expands to predictor sampling flags."
+        None, "--model-profile", help="Named model preset (e.g. qwen35, gemma4-12B) — expands to predictor sampling flags."
     ),
     variant: Optional[str] = typer.Option(
         None, "--variant", help="Named dataset variant (e.g. all_db_all_kb) — expands to reader schema flags."

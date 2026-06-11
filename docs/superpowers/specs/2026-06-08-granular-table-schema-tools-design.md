@@ -98,6 +98,23 @@ New unit tests in `tests/eval_framework/tools/`:
 
 Run `uv run pytest tests/` after implementation.
 
+## Addendum — flaggable for ablations
+
+The two granular tools are an opt-in **variation** from the baseline, gated by a
+new `enable_table_schema_tools` flag (default `False` → baseline keeps only the
+full-dump `get_schema`). Implemented exactly like `is_kb_linearized`:
+
+- `ConfigReader.enable_table_schema_tools: bool = False` — rides the existing
+  `load_bird_interact_as_tasks(**config_reader.model_dump())` call.
+- Reader threads it onto `TaskData.enable_table_schema_tools`.
+- `run_agent_bird_baseline` reads `single_task.enable_table_schema_tools` to
+  decide whether to append `get_table_names` + `get_table_schema` to the tool
+  list, and passes it into the prompt params (the two tool lines are wrapped in
+  `{% if enable_table_schema_tools %}`).
+
+Driven ad-hoc per the existing convention (no new named variants):
+`just eval --variant <v> --extra "--enable_table_schema_tools true"`.
+
 ## Out of scope
 
 - No DB-side `information_schema`/`pg_indexes` querying — all data comes from the
