@@ -9,6 +9,10 @@ import json
 from functools import cache
 from pathlib import Path
 
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
+    apply_column_comments_impl,
+)
+
 import tqdm
 
 from conversation2sql.eval_framework.dataset_readers.sql_usage_extractor import (
@@ -75,6 +79,17 @@ def _get_external_knowledge(
                 entry["children_knowledge"] = []
             kb[entry["knowledge"]] = ExternalKnowledgeEntry(**entry)
     return kb
+
+
+@cache
+def _apply_column_comments_once(dataset_path: Path, db_name: str, db_dsn: str) -> None:
+    """Apply COMMENT ON COLUMN for all column meanings of db_name to the DB.
+
+    Cached so the write runs exactly once per (dataset_path, db_name, db_dsn)
+    combination regardless of how many tasks share the same database.
+    """
+    column_meanings = _get_column_meanings(dataset_path, db_name)
+    apply_column_comments_impl(db_dsn, column_meanings)
 
 
 def _build_table_to_columns(
@@ -345,6 +360,13 @@ def load_bird_interact_as_tasks(
                     read_only_gt_tables,
                 )
             )
+
+            if enable_psql_console:
+                _apply_column_comments_once(
+                    dataset_path,
+                    db_name,
+                    db_dsn_template.format(database=db_name),
+                )
 
             kb_full, masked_agent_kb, gt_knowledge_base = _resolve_kb_context(
                 dataset_path,

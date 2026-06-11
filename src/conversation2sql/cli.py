@@ -65,7 +65,7 @@ def run(
     ctx: typer.Context,
     config: Optional[Path] = typer.Option(None, "--config", help="Path to YAML config file."),
     model_profile: Optional[str] = typer.Option(
-        None, "--model-profile", help="Named model preset (e.g. qwen35, gemma4) — expands to predictor sampling flags."
+        None, "--model-profile", help="Named model preset (e.g. qwen35, gemma4-12B) — expands to predictor sampling flags."
     ),
     variant: Optional[str] = typer.Option(
         None, "--variant", help="Named dataset variant (e.g. all_db_all_kb) — expands to reader schema flags."

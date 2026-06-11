@@ -21,16 +21,25 @@ import json
 import os
 import sys
 
+# Fraction of a profile's `max_model_len` reserved for the model's completion.
+# The predictor's `max_new_tokens` (the request's `max_completion_tokens`) is
+# derived from this in `resolve_profile`, so `max_model_len` stays the single
+# knob: vLLM rejects any request whose `max_completion_tokens > max_model_len`.
+#  max_completion_tokens = max_model_len * _COMPLETION_RATIO
+# A profile may override this with its own `completion_ratio`.
+_COMPLETION_RATIO = 0.25 # consider that the promp is the bottleneck and reaches ~24k for long runs
+
 # --- Model profiles --------------------------------------------------------
 # Sampling params differ by thinking mode for qwen; gemma is identical either way.
 # `default_thinking` is used when the caller does not pass enable_thinking.
 # `max_model_len` and `server` drive the vLLM server launch (see resolve_server_args).
+# `max_model_len` also drives the predictor's `max_new_tokens` (see _COMPLETION_RATIO).
 MODEL_PROFILES: dict[str, dict] = {
     "qwen35": {
         # https://huggingface.co/Qwen/Qwen3.5-9B
         "predictor_model_name": "Qwen/Qwen3.5-9B",
         "default_thinking": True,
-        "max_model_len": 50000,
+        "max_model_len": 32_000,  # Total context, PROMPT + comp;
         "server": {
             "reasoning_parser": "qwen3",
             "language_model_only": True,
@@ -63,30 +72,50 @@ MODEL_PROFILES: dict[str, dict] = {
             "predictor_repetition_penalty": "1.0",
         },
     },
-    "gemma4": {
-        # https://huggingface.co/google/gemma-4-26B-A4B-it
-        "predictor_model_name": "google/gemma-4-26B-A4B-it",
-        "default_thinking": False,
+    "gemma4-12B": {
+        # https://huggingface.co/google/gemma-4-12B-it
+        "predictor_model_name": "google/gemma-4-12B-it",
+        "default_thinking": True,
         "max_model_len": 32000,
+        # https://docs.vllm.ai/projects/recipes/en/latest/Google/Gemma4.html
         "server": {
             "reasoning_parser": "gemma4",
             # Path is relative to BASE_WORK; resolve_server_args joins it.
             "chat_template": "bash_scripts/utils/tool_chat_template_gemma4.jinja",
             "limit_mm_per_prompt": {"image": 0, "audio": 0},
+            
+            # Tool calling is only wired up for the tool baselines; see
+            # _TOOL_BASELINES / resolve_server_args.
+            "tool_call_parser": "gemma4",
         },
         "thinking": {
             "predictor_temperature": "1.0",
             "predictor_top_p": "0.95",
             "predictor_top_k": "64",
-            "predictor_presence_penalty": "0.0",
-            "predictor_repetition_penalty": "1.0",
         },
-        "non_thinking": {
+    },
+    "gemma4-26B-A4B": {
+        # https://huggingface.co/google/gemma-4-26B-A4B-it
+        # MoE variant: ~26B total params, ~4B active. Same gemma4 server family
+        # (reasoning/tool parsers, chat template) and sampling as gemma4-12B.
+        "predictor_model_name": "google/gemma-4-26B-A4B-it",
+        "default_thinking": True,
+        "max_model_len": 32000,
+        # https://docs.vllm.ai/projects/recipes/en/latest/Google/Gemma4.html
+        "server": {
+            "reasoning_parser": "gemma4",
+            # Path is relative to BASE_WORK; resolve_server_args joins it.
+            "chat_template": "bash_scripts/utils/tool_chat_template_gemma4.jinja",
+            "limit_mm_per_prompt": {"image": 0, "audio": 0},
+
+            # Tool calling is only wired up for the tool baselines; see
+            # _TOOL_BASELINES / resolve_server_args.
+            "tool_call_parser": "gemma4",
+        },
+        "thinking": {
             "predictor_temperature": "1.0",
             "predictor_top_p": "0.95",
             "predictor_top_k": "64",
-            "predictor_presence_penalty": "0.0",
-            "predictor_repetition_penalty": "1.0",
         },
     },
 }
@@ -184,9 +213,14 @@ def resolve_profile(
     prof = MODEL_PROFILES[name]
     think = resolve_effective_thinking(name, enable_thinking, baseline)
     sampling = prof["thinking" if think else "non_thinking"]
+    # Derive the completion budget from the server context length so the two
+    # stay in sync from a single edit to `max_model_len`.
+    ratio = prof.get("completion_ratio", _COMPLETION_RATIO)
+    max_new_tokens = round(prof["max_model_len"] * ratio)
     flags = [
         "--predictor_model_name", prof["predictor_model_name"],
         "--predictor_enable_thinking", "true" if think else "false",
+        "--predictor_max_new_tokens", str(max_new_tokens),
     ]
     flags.extend(_dict_to_flags(sampling))
     return flags

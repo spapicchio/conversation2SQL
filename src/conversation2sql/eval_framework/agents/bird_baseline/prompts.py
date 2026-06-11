@@ -9,6 +9,7 @@ Template variables use ``{{ jinja2 }}`` delimiters.
 
 from __future__ import annotations
 
+from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COSTS
 from conversation2sql.eval_framework.agents.utils import utils_build_messages
 
 # =============================================================================
@@ -29,18 +30,18 @@ The interaction ends when you submit the correct SQL query or the budget runs ou
 Each action costs bird-coins, so you should be efficient.
 
 Available tools and costs:
-{% if enable_psql_console %}- psql_console: run ONE PostgreSQL statement or one read-only psql meta-command (\\dt list tables, \\d <table> describe, \\l list databases, \\df list functions). Read-only session. Cost: 1
-{% else %}- execute_sql: execute a PostgreSQL query. Cost: 1
-- get_schema: get the full database schema. Cost: 1
-{% if enable_table_schema_tools %}- get_table_names: list all table names in the database. Cost: 0.5
-- get_table_schema: get one table's schema (CREATE TABLE, sample rows, and foreign keys to joinable tables). Cost: 0.5
-{% endif %}{% endif %}- get_all_column_meanings: get all column meanings. Cost: 1
-- get_column_meaning: get the meaning of one column. Cost: 0.5
-- get_all_external_knowledge_names: get all external knowledge names. Cost: 0.5
-- get_knowledge_definition: get one external knowledge definition along with the knowledge it depends on (its prerequisites). Cost: 0.5
-- get_all_knowledge_definitions: get all external knowledge definitions. Cost: 1
-{% if enable_ask_user %}- ask_user: ask the user a clarification question. Cost: 2
-{% endif %}- submit_sql: submit the SQL for evaluation. Cost: 3
+{% if enable_psql_console %}- psql_console: run ONE PostgreSQL statement or one read-only psql meta-command (\\dt list tables, \\d <table> describe, \\l list databases, \\df list functions). Read-only session. Cost: {{ tool_costs['psql_console'] }}
+{% else %}- execute_sql: execute a PostgreSQL query. Cost: {{ tool_costs['execute_sql'] }}
+- get_schema: get the full database schema. Cost: {{ tool_costs['get_schema'] }}
+{% if enable_table_schema_tools %}- get_table_names: list all table names in the database. Cost: {{ tool_costs['get_table_names'] }}
+- get_table_schema: get one table's schema (CREATE TABLE, sample rows, and foreign keys to joinable tables). Cost: {{ tool_costs['get_table_schema'] }}
+{% endif %}{% endif %}- get_all_column_meanings: get all column meanings. Cost: {{ tool_costs['get_all_column_meanings'] }}
+- get_column_meaning: get the meaning of one column. Cost: {{ tool_costs['get_column_meaning'] }}
+- get_all_external_knowledge_names: get all external knowledge names. Cost: {{ tool_costs['get_all_external_knowledge_names'] }}
+- get_knowledge_definition: get one external knowledge definition along with the knowledge it depends on (its prerequisites). Cost: {{ tool_costs['get_knowledge_definition'] }}
+- get_all_knowledge_definitions: get all external knowledge definitions. Cost: {{ tool_costs['get_all_knowledge_definitions'] }}
+{% if enable_ask_user %}- ask_user: ask the user a clarification question. Cost: {{ tool_costs['ask_user'] }}
+{% endif %}- submit_sql: submit the SQL for evaluation. Cost: {{ tool_costs['submit_sql'] }}
 
 Important strategy tips:
 {% if enable_psql_console %}- First explore the database with psql_console: use \\dt to list tables and \\d <table> to inspect a table's columns and foreign keys, then check column meanings and relevant external knowledge to understand the task.
@@ -64,7 +65,19 @@ User's Question:
 """
 
 
+def _fmt_cost(cost: float) -> str:
+    """Render a coin cost without a trailing ``.0`` (e.g. ``1.0`` -> ``"1"``)."""
+    return str(int(cost)) if cost == int(cost) else str(cost)
+
+
 def build_bird_interact_agent_messages(
         params: dict,
 ) -> list[dict]:
+    # Inject the formatted tool costs so the prompt renders them straight from
+    # TOOL_COSTS (the single source of truth used by the middleware) instead of
+    # hardcoding the numbers in the template, where they could drift out of sync.
+    params = {
+        **params,
+        "tool_costs": {name: _fmt_cost(cost) for name, cost in TOOL_COSTS.items()},
+    }
     return utils_build_messages(_BIRD_AGENT_SYSTEM, _BIRD_AGENT_USER, params)
