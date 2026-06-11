@@ -34,6 +34,7 @@ import re
 import subprocess
 
 import psycopg2
+import psycopg2.sql as pgsql
 from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 from pydantic import BaseModel
@@ -80,7 +81,7 @@ DB_TOOL_COSTS: dict[str, float] = {
     "get_all_knowledge_definitions": 1.0,
     # Single read-only psql terminal tool (ablation). Replaces the four DB
     # tools above when enable_psql_console is set; flat cost like execute_sql.
-    "psql_console": 1.0,
+    "psql_console": 0.5,
 }
 
 KNOWLEDGE_VISIBLE_FIELDS = ["id", "knowledge", "description", "definition"]
@@ -139,6 +140,20 @@ def _violates_psql_guardrail(command: str) -> bool:
     return False
 
 
+def _is_psql_meta_command(command: str) -> bool:
+    """True if ``command`` is a psql backslash meta-command (``\\dt``, ``\\d``,
+    ``\\l``, ``\\df`` …) rather than a SQL query.
+
+    Schema-inspection meta-commands list table/column/function *names*, so a
+    500-char cut would silently drop names off the end of the listing (the agent
+    then can't see tables it needs). Only SQL queries — which can return
+    arbitrarily many data rows — are truncated. Detection mirrors how psql
+    dispatches: the first non-blank character being a backslash makes it a
+    meta-command (a ``SELECT … \\g`` still starts with SQL and stays truncatable).
+    """
+    return command.lstrip().startswith("\\")
+
+
 def psql_console_impl(command: str, db_dsn: str) -> str:
     if _violates_psql_guardrail(command):
         return PSQL_GUARDRAIL_REFUSAL
@@ -159,9 +174,43 @@ def psql_console_impl(command: str, db_dsn: str) -> str:
         return f"Error: psql timed out after {PSQL_TIMEOUT_S}s."
 
     output = proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)
-    if len(output) > MAX_RESULT_LENGTH:
+    if not _is_psql_meta_command(command) and len(output) > MAX_RESULT_LENGTH:
         output = output[:MAX_RESULT_LENGTH] + TRUNCATION_NOTICE
     return output
+
+
+def apply_column_comments_impl(
+        db_dsn: str,
+        column_meanings: dict[str, "ColumnMeaningEntry"],
+) -> None:
+    """Write COMMENT ON COLUMN for every entry in column_meanings to the DB.
+
+    Called once per database at eval startup when enable_psql_console=True so
+    that \\d+ shows column descriptions, closing the information gap with
+    get_table_schema (which embeds meanings as DDL inline comments).
+
+    The key format is ``{db_name}|{table}|{column}`` (from the column-meaning
+    JSON); entries that do not match this form are skipped silently.
+    Idempotent: PostgreSQL overwrites an existing comment with the same value.
+    """
+    conn = psycopg2.connect(db_dsn)
+    try:
+        with conn.cursor() as cur:
+            for key, entry in column_meanings.items():
+                parts = key.split("|")
+                if len(parts) != 3:
+                    continue
+                _, table, column = parts
+                cur.execute(
+                    pgsql.SQL("COMMENT ON COLUMN {}.{} IS %s").format(
+                        pgsql.Identifier(table),
+                        pgsql.Identifier(column),
+                    ),
+                    (entry.column_meaning,),
+                )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # ---------------------------------------------------------------------------

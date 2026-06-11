@@ -16,6 +16,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_en
     DB_TOOL_COSTS,
     KNOWLEDGE_VISIBLE_FIELDS,
     ExecuteSQLResponse,
+    apply_column_comments_impl,
     execute_sql_impl,
     psql_console_impl,
     get_all_column_meanings_impl,
@@ -66,6 +67,7 @@ __all__ = [
     "get_knowledge_definition",
     "get_all_knowledge_definitions",
     # env tools (pure *_impl functions)
+    "apply_column_comments_impl",
     "execute_sql_impl",
     "psql_console_impl",
     "get_schema_impl",
