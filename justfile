@@ -9,11 +9,12 @@
 #   just --list                                                                       # list available recipes
 #   just eval --variant all_db_all_kb                                                 # local, qwen35, GPU 1, hosted_vllm
 #   just eval --variant all_db_all_kb --model qwen35                                  # explicit model
-#   just eval --variant gt_db_gt_kb --model gemma4 --gpus 0,1                        # gemma4, two GPUs
+#   just eval --variant gt_db_gt_kb --model gemma4-12B --gpus 0,1                   # gemma4-12B, two GPUs
 #   just eval --variant all_db_all_kb --model qwen35 --provider openai               # qwen35 profile, OpenAI provider
 #   just eval --variant all_db_all_kb --model qwen35 --provider openrouter           # via OpenRouter
 #   just eval --variant all_db_all_kb --model qwen35 --provider together_ai          # via Together AI
 #   just eval --variant all_db_all_kb --num-iterations 5                             # 5 statistical iterations
+#   just eval --variant all_db_all_kb --append-name exp1                             # tag run dir: ...__iter1__exp1
 #   RUNNER=slurm just eval --variant all_db_all_kb                                   # submit via sbatch instead of local tmux
 #   just sequential all_db_all_kb all_db_toon_all_kb
 #   just sequential --model qwen35 --provider openrouter all_db_all_kb               # sequential with OpenRouter provider
@@ -70,11 +71,13 @@ variants:
 #
 # Parameters (all have defaults — only --variant is required):
 #   --variant        — one of the keys printed by `just variants`  (e.g. all_db_all_kb)
-#   --model          — "qwen35" or "gemma4"                        (default: qwen35)
+#   --model          — "qwen35" or "gemma4-12B"                    (default: qwen35)
 #                      Selects sampling params and server args; model name can be overridden
 #                      at the shell level with EVAL_MODEL_NAME= if needed for external APIs.
 #   --gpus           — comma-separated CUDA device IDs             (default: "1" → device 1)
 #                      e.g.  --gpus 0,1  to use two GPUs
+#                      The vLLM data-parallel size (DP) defaults to the number of
+#                      GPUs given here; override with DP=<n> if you want otherwise.
 #                      Ignored (but harmless) when provider != hosted_vllm.
 #   --debug          — "true" to enable debug logging              (default: false)
 #   --provider       — LiteLLM provider for the predictor          (default: hosted_vllm)
@@ -89,6 +92,10 @@ variants:
 #   --num-iterations — repeat the dataset N times for statistical  (default: 1)
 #                      relevance; collapses to 1 when predictor
 #                      temperature=0 (deterministic runs add no info)
+#   --append-name    — free-form suffix appended to the results     (default: "")
+#                      folder slug, to tag an ablation/experiment.
+#                      e.g. --append-name exp1 → <ts>/<slug>__iter1__exp1
+#                      A leading "__" is optional (we add the separator).
 #
 # Under RUNNER=local  the job runs in a new detached tmux session.
 # Under RUNNER=slurm  sbatch receives a job name of "eval_<model>_<variant>_<provider>".
@@ -106,7 +113,7 @@ variants:
 #   └────────────┴─────────────────────┴─────────────────────────┴──────────┴─────────────────┘
 
 [arg("variant", long="variant", help="one of the keys printed by `just variants` (e.g. all_db_all_kb_linearized)")]
-[arg("model", long="model", help="model profile: qwen35 or gemma4 (default: qwen35)")]
+[arg("model", long="model", help="model profile: qwen35, gemma4-12B, or gemma4-26B-A4B (default: qwen35)")]
 [arg("gpus", long="gpus", help="comma-separated CUDA device IDs (default: 1)")]
 [arg("debug", long="debug", help="true to enable debug logging (default: false)")]
 [arg("provider", long="provider", help="LiteLLM provider: hosted_vllm | openai | openrouter | together_ai (default: hosted_vllm)")]
@@ -114,7 +121,8 @@ variants:
 [arg("concurrency", long="concurrency", help="tasks processed concurrently by the Python pipeline (default: 16)")]
 [arg("num_iterations", long="num-iterations", help="repeat dataset N times for statistical relevance (default 1); collapses to 1 when predictor temperature=0")]
 [arg("extra", long="extra", help="extra flags forwarded verbatim to `conv2sql run`, quoted (e.g. --extra \"--predictor_top_p 0.8\")")]
-eval variant="all_db_all_kb_linearized" model="qwen35" gpus="1" debug="false" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="":
+[arg("append_name", long="append-name", help="free-form suffix appended to the results folder slug (e.g. --append-name exp1 → ...__iter1__exp1); leading underscores are optional")]
+eval variant="all_db_all_kb_linearized" model="qwen35" gpus="1" debug="false" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="" append_name="":
     #!/usr/bin/env bash
     set -Eeuo pipefail
     # Export env vars read by eval_payload.sh and the Python pipeline.
@@ -127,6 +135,7 @@ eval variant="all_db_all_kb_linearized" model="qwen35" gpus="1" debug="false" pr
     export CUDA_VISIBLE_DEVICES="{{gpus}}"   # which GPU(s) the vLLM server may use
     export DEBUG="{{debug}}"
     export EXTRA="{{extra}}"                 # ad-hoc flags forwarded to conv2sql run
+    export APPEND_NAME="{{append_name}}"     # optional suffix appended to the results folder slug
     if [ "{{runner}}" = "slurm" ]; then
         # Pass a human-readable job name to sbatch so it appears in squeue output.
         {{dispatch}} "eval_{{model}}_{{variant}}_{{provider}}"
@@ -170,21 +179,22 @@ index:
 # Print the vLLM server command + run_suite command that `eval` would execute,
 # without actually launching anything. Useful for inspecting the resolved config.
 [arg("variant", long="variant", help="one of the keys printed by `just variants` (e.g. all_db_all_kb_linearized)")]
-[arg("model", long="model", help="model profile: qwen35 or gemma4 (default: qwen35)")]
+[arg("model", long="model", help="model profile: qwen35, gemma4-12B, or gemma4-26B-A4B (default: qwen35)")]
 [arg("provider", long="provider", help="LiteLLM provider: hosted_vllm | openai | openrouter | together_ai (default: hosted_vllm)")]
 [arg("baseline", long="baseline", help="evaluation mode: no_tool | tools_only | tools_user | bird_full (default: no_tool)")]
 [arg("concurrency", long="concurrency", help="tasks processed concurrently by the Python pipeline (default: 16)")]
 [arg("num_iterations", long="num-iterations", help="repeat dataset N times for statistical relevance (default 1)")]
 [arg("extra", long="extra", help="extra flags forwarded verbatim to `conv2sql run`")]
-dry variant="all_db_all_kb_linearized" model="qwen35" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="":
-    DRY_RUN=1 MODEL="{{model}}" VARIANT="{{variant}}" BASELINE="{{baseline}}" PREDICTOR_MODEL_PROVIDER="{{provider}}" CONCURRENCY="{{concurrency}}" NUM_ITERATIONS="{{num_iterations}}" EXTRA="{{extra}}" bash bash_scripts/eval_payload.sh
+[arg("append_name", long="append-name", help="free-form suffix appended to the results folder slug (e.g. --append-name exp1)")]
+dry variant="all_db_all_kb_linearized" model="qwen35" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="" append_name="":
+    DRY_RUN=1 MODEL="{{model}}" VARIANT="{{variant}}" BASELINE="{{baseline}}" PREDICTOR_MODEL_PROVIDER="{{provider}}" CONCURRENCY="{{concurrency}}" NUM_ITERATIONS="{{num_iterations}}" EXTRA="{{extra}}" APPEND_NAME="{{append_name}}" bash bash_scripts/eval_payload.sh
 
 # ── sequential ────────────────────────────────────────────────────────────────
 # Run several variants one after another (waits for each to finish before starting
 # the next when RUNNER=local; under SLURM all jobs are queued immediately).
 #
 # Parameters (all apply to every variant in the list):
-#   --model          — "qwen35" or "gemma4"               (default: qwen35)
+#   --model          — "qwen35" or "gemma4-12B"           (default: qwen35)
 #   --gpus           — comma-separated CUDA device IDs    (default: "1")
 #   --provider       — LiteLLM provider (see `eval`)      (default: hosted_vllm)
 #   --baseline       — evaluation mode (see `eval`)       (default: no_tool)
@@ -195,17 +205,18 @@ dry variant="all_db_all_kb_linearized" model="qwen35" provider="hosted_vllm" bas
 # Usage examples:
 #   just sequential all_db_all_kb all_db_toon_all_kb                                        # defaults
 #   just sequential                                                                          # default pair
-#   just sequential --model gemma4 --gpus 0,1 --provider hosted_vllm all_db_all_kb         # explicit flags
+#   just sequential --model gemma4-12B --gpus 0,1 --provider hosted_vllm all_db_all_kb      # explicit flags
 #   just sequential --model qwen35 --provider openrouter --concurrency 8 all_db_all_kb gt_db_gt_kb
 #   just sequential --num-iterations 5 all_db_all_kb all_db_toon_all_kb                    # 5 iterations
-[arg("model", long="model", help="model profile: qwen35 or gemma4 (default: qwen35)")]
+[arg("model", long="model", help="model profile: qwen35, gemma4-12B, or gemma4-26B-A4B (default: qwen35)")]
 [arg("gpus", long="gpus", help="comma-separated CUDA device IDs (default: 1)")]
 [arg("provider", long="provider", help="LiteLLM provider: hosted_vllm | openai | openrouter | together_ai (default: hosted_vllm)")]
 [arg("baseline", long="baseline", help="evaluation mode: no_tool | tools_only | tools_user | bird_full (default: no_tool)")]
 [arg("concurrency", long="concurrency", help="tasks processed concurrently by the Python pipeline (default: 16)")]
 [arg("num_iterations", long="num-iterations", help="iterations per variant (default 1); see eval --num-iterations")]
 [arg("extra", long="extra", help="extra flags forwarded verbatim to each variant's `conv2sql run`")]
-sequential model="qwen35" gpus="1" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="" *variants:
+[arg("append_name", long="append-name", help="free-form suffix appended to each variant's results folder slug (e.g. --append-name exp1)")]
+sequential model="qwen35" gpus="1" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="" append_name="" *variants:
     #!/usr/bin/env bash
     set -Eeuo pipefail
     # Expand the variadic just parameter into a bash array.
@@ -221,7 +232,7 @@ sequential model="qwen35" gpus="1" provider="hosted_vllm" baseline="no_tool" con
         echo "============================================================"
         # Delegate to the single-variant `eval` recipe; capture combined stdout+stderr.
         # Named-arg syntax avoids positional coupling with debug (kept at its default).
-        if ! out=$(just eval variant="${variant}" model="{{model}}" gpus="{{gpus}}" provider="{{provider}}" baseline="{{baseline}}" concurrency="{{concurrency}}" --num-iterations "{{num_iterations}}" --extra "{{extra}}" 2>&1); then
+        if ! out=$(just eval variant="${variant}" model="{{model}}" gpus="{{gpus}}" provider="{{provider}}" baseline="{{baseline}}" concurrency="{{concurrency}}" --num-iterations "{{num_iterations}}" --extra "{{extra}}" --append-name "{{append_name}}" 2>&1); then
             echo "$out"
             echo "[sequential] ERROR launching ${variant} — skipping."
             failed+=("${variant}")

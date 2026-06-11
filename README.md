@@ -44,6 +44,12 @@ uv sync
 source .venv/bin/activate
 ```
 
+if you want to update a single package:
+```bash
+source .venv/bin/activate
+uv pip install --system --upgrade transformers
+```
+
 # Running Experiments
 
 ## Evaluation pipeline
