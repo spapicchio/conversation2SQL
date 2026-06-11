@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import tempfile
 from pathlib import Path
@@ -23,6 +24,7 @@ COLUMNS = [
     "iters_present", "n_instances", "n_total", "accuracy", "avg_cost", "avg_in_tok",
     "avg_out_tok", "avg_in_tok_per_call", "avg_out_tok_per_call", "avg_model_calls",
     "avg_budget_remaining", "reliability", "aptitude", "unreliability",
+    "truncated_frac",
     "Notes",
 ]
 
@@ -67,10 +69,39 @@ def render_args(config: dict) -> str:
     return " ".join(parts)
 
 
-def derive_status(run_path: Path, config: dict, n_present: int) -> str:
-    """running | partial | done | error for one run dir."""
-    if run_path.name.endswith("__error") or (run_path / "results_error.jsonl").exists():
+def _all_errors_recovered(run_path: Path, records: list[dict]) -> bool:
+    """True when every (instance_id, iteration) pair in results_error.jsonl is
+    now present in the run's records (i.e. `just recover` re-ran them all)."""
+    present = {(r.get("instance_id"), r.get("iteration", 0)) for r in records}
+    errored: set[tuple] = set()
+    with (run_path / "results_error.jsonl").open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                return False  # unreadable error line — can't verify recovery
+            if "instance_id" not in rec:
+                return False
+            errored.add((rec["instance_id"], rec.get("iteration", 0)))
+    return bool(errored) and errored <= present
+
+
+def derive_status(
+    run_path: Path, config: dict, n_present: int, records: list[dict] | None = None
+) -> str:
+    """running | partial | done | error for one run dir.
+
+    A run dir holding results_error.jsonl counts as recovered (not "error")
+    when ``records`` is provided and every errored pair is present in it.
+    """
+    if run_path.name.endswith("__error"):
         return "error"
+    if (run_path / "results_error.jsonl").exists():
+        if records is None or not _all_errors_recovered(run_path, records):
+            return "error"
     pipeline = config.get("pipeline") or {}
     predictor = config.get("predictor") or {}
     expected = pipeline.get("num_iterations") or 0
@@ -187,7 +218,7 @@ def _row_from_run(run_dir: str, date: str, time: str, run_path: Path, run: "RunD
     predictor = config.get("predictor") or {}
     return {
         "run_dir": run_dir, "date": date, "time": time,
-        "status": derive_status(run_path, config, run.n_iterations),
+        "status": derive_status(run_path, config, run.n_iterations, records=run.records),
         "baseline": pipeline.get("baseline", ""),
         "model": predictor.get("model_name", ""),
         "args": render_args(config),
@@ -205,6 +236,7 @@ def _row_from_run(run_dir: str, date: str, time: str, run_path: Path, run: "RunD
         "reliability": round(rel.reliability, 4) if rel else "",
         "aptitude": round(rel.aptitude, 4) if rel else "",
         "unreliability": round(rel.unreliability, 4) if rel else "",
+        "truncated_frac": round(st.truncated_fraction, 4),
     }
 
 

@@ -14,6 +14,7 @@ from loader import RunData, list_runs, load_run
 from patterns import (
     PATTERN_CATALOG,
     first_submit_accuracy_by_quintile,
+    pattern_cooccurrence,
     per_iteration_pattern_rates,
     positional_tool_distribution,
     repeated_identical_tool_counts,
@@ -29,13 +30,17 @@ _LABELS = dict(PATTERN_CATALOG)  # name -> human label
 
 # Per-pattern explanation: what it flags and how it is detected from the tool-call trace.
 _DESCRIPTIONS: dict[str, str] = {
-    "blind_submit": "Agent calls `submit_sql` without ever running `execute_sql` first — it never validated the query against the DB. **Detected:** a `submit_sql` event appears with no preceding `execute_sql`.",
+    "blind_submit": "Agent calls `submit_sql` without ever running the query against the DB first — it never validated it. **Detected:** a `submit_sql` event appears with no preceding `execute_sql` (or, in the `psql_console` ablation, no preceding `psql_console` SQL query — backslash meta-commands like `\\dt` don't count).",
     "repeated_identical_call": "Agent issues the exact same call twice — a sign it isn't tracking what it already did. **Detected:** the same tool name + identical arguments occurs ≥2 times (SQL compared with whitespace collapsed).",
     "submit_after_error": "Agent submits a query that already failed when run. **Detected:** the submitted SQL is identical (whitespace-collapsed) to an `execute_sql` whose result had an error status.",
     "unrecovered_error_loop": "Agent keeps re-running broken SQL without recovering. **Detected:** ≥3 consecutive `execute_sql` errors with no successful run in between (the streak resets on any success).",
     "kb_blind": "The task's answer needs external knowledge but the agent ignored it. **Detected:** the gold solution depends on ≥1 KB entry (`gt_knowledge_base` non-empty) yet `get_knowledge_definition` is never called. *Only applicable to KB-needing tasks* — its rate is measured over that subset, not all samples.",
-    "budget_death": "Agent runs out of patience budget before landing a successful answer. **Detected:** no successful `submit_sql`, and either a tool message reports the budget exhausted or `updated_user_patience` ≤ 0.",
+    "budget_death": "Agent runs out of patience budget before landing a *passing* answer (a forced out-of-budget submit that fails still counts as a death). **Detected:** `execution_accuracy` is false, and either a tool call was budget-blocked or the final budget state is ≤ 0.",
     "no_submission": "Conversation ends without the agent ever answering. **Detected:** no `submit_sql` call appears anywhere in the trace.",
+    "tool_call_limit": "Agent burned past the safety-net tool-call cap (set well above the patience budget), so LangChain's `ToolCallLimitMiddleware` blocked a tool. **Detected:** a `tool_call_limit` entry in the run's `middleware_events`.",
+    "model_call_limit": "Agent hit the safety-net model-call cap before finishing on its own, so LangChain's `ModelCallLimitMiddleware` ended the run. **Detected:** a `model_call_limit` entry in the run's `middleware_events`.",
+    "context_editing": "The conversation grew large enough that `ContextEditingMiddleware` cleared old tool outputs to stay under the context limit — a sign of a very long, context-heavy run. **Detected:** a `context_editing` entry in the run's `middleware_events`.",
+    "truncated_generation": "A model call was cut off by the server's max-model-len cap rather than finishing on its own — its output (possibly a tool call) is incomplete. No error is raised on truncation, so this is the only signal it happened. **Detected:** an AIMessage with `finish_reason` == `length` in the trace.",
 }
 
 
@@ -96,15 +101,40 @@ for name, _ in PATTERN_CATALOG:
         "Label": f"{rate * 100:.0f}%  ({_count(rate * inst)}/{inst})",
     })
 freq_df = pd.DataFrame(_freq_rows).sort_values("Rate", ascending=False)
-pattern_order = freq_df["Pattern"].tolist()  # shared sort for both views
+pattern_order = freq_df["Pattern"].tolist()  # real patterns only; shared sort for both views
 
-# Toggle between the aggregate bar and a per-iteration breakdown. Only offered
-# when the run has >1 iteration (otherwise the two views are identical).
-view = "Aggregate"
+# Display-only "No anti-pattern" bar for the Aggregate view: the sample-average
+# fraction of conversations that hit zero anti-patterns (stats.clean_fraction), in
+# the same rate (flagged/N) style as the real patterns. Its N is *all* instances —
+# every conversation is eligible to be clean — so the denominator is n_instances.
+# Appended after pattern_order so it stays out of the per-iteration / co-occurrence
+# views, which enumerate real detectors only.
+_CLEAN_LABEL = "No anti-pattern"
+_clean_rate, _clean_n = stats.clean_fraction, stats.n_instances
+freq_df = pd.concat(
+    [
+        freq_df,
+        pd.DataFrame([{
+            "Pattern": _CLEAN_LABEL,
+            "Rate": _clean_rate,
+            "n": _clean_n,
+            "Label": f"{_clean_rate * 100:.0f}%  ({_count(_clean_rate * _clean_n)}/{_clean_n})",
+        }]),
+    ],
+    ignore_index=True,
+)
+
+# Toggle between the aggregate bar, a per-iteration breakdown, and the pattern
+# co-occurrence matrix. "Per iteration" is only offered when the run has >1
+# iteration (otherwise it is identical to Aggregate); "Co-occurrence" is always
+# available since patterns are non-mutually-exclusive within a single run.
+view_options = ["Aggregate"]
 if run.n_iterations > 1:
-    view = st.radio(
-        "View", ["Aggregate", "Per iteration"], horizontal=True, label_visibility="collapsed",
-    )
+    view_options.append("Per iteration")
+view_options.append("Co-occurrence")
+view = "Aggregate"
+if len(view_options) > 1:
+    view = st.radio("View", view_options, horizontal=True, label_visibility="collapsed")
 
 if view == "Per iteration":
     iter_df = per_iteration_pattern_rates(run.records)
@@ -132,6 +162,51 @@ if view == "Per iteration":
         f"Each iteration's rate over its applicable records ({run.n_iterations} iterations). "
         "Their mean matches the Aggregate view for a complete run; gaps reveal run-to-run variance."
     )
+elif view == "Co-occurrence":
+    co_df = pattern_cooccurrence(run.records)
+    if co_df.empty:
+        st.info("No anti-patterns fired in this run, so there is nothing to co-occur.")
+    else:
+        co_df["Label"] = co_df["count"].map(lambda c: str(int(c)))
+        co_base = alt.Chart(co_df).encode(
+            x=alt.X("pattern:N", sort=pattern_order, title="…also hit this pattern"),
+            y=alt.Y("given:N", sort=pattern_order, title="Conversations hitting…"),
+        )
+        co_heat = co_base.mark_rect(stroke="white").encode(
+            color=alt.Color(
+                "conditional:Q", scale=alt.Scale(scheme="oranges", domain=[0, 1]),
+                legend=alt.Legend(format="%", title="P(col | row)"),
+            ),
+            tooltip=[
+                alt.Tooltip("given:N", title="Given pattern (row)"),
+                alt.Tooltip("pattern:N", title="Co-occurring pattern (col)"),
+                alt.Tooltip("count:Q", title="Both fired", format="d"),
+                alt.Tooltip("n_given:Q", title="Given fired", format="d"),
+                alt.Tooltip("conditional:Q", title="P(col | row)", format=".0%"),
+            ],
+        )
+        co_text = co_base.mark_text(baseline="middle", fontSize=11).encode(
+            text="Label:N",
+            color=alt.condition("datum.conditional > 0.5", alt.value("white"), alt.value("black")),
+        )
+        n_active = co_df["given"].nunique()
+        st.altair_chart(
+            (co_heat + co_text).properties(height=max(46 * n_active, 200)),
+            use_container_width=True,
+        )
+        st.caption(
+            "Anti-patterns are **not mutually exclusive** — one conversation can hit "
+            "several. Each cell is **P(column | row)**: of the records that hit the row "
+            "pattern, the fraction that *also* hit the column pattern (cell text = the raw "
+            "count of records hitting both). The diagonal is each pattern's own total. A "
+            "bright off-diagonal cell means those two failure modes tend to strike the same "
+            "conversation. The matrix is asymmetric (the denominator is the row's total), "
+            "and only patterns that fired at least once appear. "
+            "**How to read it:** look at individual cells, not row/column sums — "
+            "a conversation that fires k patterns contributes to k cells in the same row "
+            "simultaneously, so row sums have no meaningful interpretation. "
+            "The diagonal cell is the only value that equals each pattern's total count."
+        )
 else:
     freq_base = alt.Chart(freq_df).encode(y=alt.Y("Pattern:N", sort="-x"))
     st.altair_chart(
@@ -150,7 +225,9 @@ else:
         "hitting the pattern, averaged over instances. The label reads "
         "**rate (flagged / N)** where **N is applicable instances** (not samples) — the "
         "unit the rate is averaged over. `flagged` = rate × N (the effective number of "
-        "flagged instances; whole for single-iteration runs, fractional when iterations > 1)."
+        "flagged instances; whole for single-iteration runs, fractional when iterations > 1). "
+        "The **No anti-pattern** bar is the complement: the same sample-average over *all* "
+        "instances of the fraction of conversations hitting **zero** anti-patterns."
     )
 
 # Shared quintile ordering for the positional plot and the two accuracy heatmaps.
@@ -178,7 +255,9 @@ if not pos_df.empty:
     pos_bars = pos_base.mark_bar().encode(
         y=alt.Y("share:Q", stack="normalize", axis=alt.Axis(format="%"), title="Share"),
         color=alt.Color("tool:N", title="Tool",
-                        scale=color_scale(pos_df["tool"], kind="tool")),
+                        scale=color_scale(pos_df["tool"], kind="tool"),
+                        # Full tool names are long; don't ellipse the legend labels.
+                        legend=alt.Legend(labelLimit=0)),
         tooltip=[
             alt.Tooltip("quintile:N", title="Call position"),
             alt.Tooltip("tool:N", title="Tool"),
@@ -261,7 +340,9 @@ else:
     tp_base = alt.Chart(tp_df).encode(
         x=alt.X("quintile:N", sort=_QUINTILE_ORDER,
                 title="Call position (share of conversation)"),
-        y=alt.Y("tool:N", sort=tool_order, title="Tool"),
+        # labelLimit=0 keeps long tool names (e.g. get_all_external_knowledge_names)
+        # from being truncated with an ellipsis on the axis.
+        y=alt.Y("tool:N", sort=tool_order, title="Tool", axis=alt.Axis(labelLimit=0)),
     )
     tp_heat = tp_base.mark_rect(stroke="white").encode(
         color=alt.Color("accuracy:Q", scale=alt.Scale(scheme="blues", domain=[0, 1]),
@@ -308,7 +389,9 @@ if pattern_name == "repeated_identical_call":
     repeat_df = repeated_identical_tool_counts(flagged)
     if not repeat_df.empty:
         st.markdown("**Most repeated calls by tool** (total re-issues across flagged samples)")
-        repeat_base = alt.Chart(repeat_df).encode(y=alt.Y("tool:N", sort="-x", title="Tool"))
+        repeat_base = alt.Chart(repeat_df).encode(
+            y=alt.Y("tool:N", sort="-x", title="Tool", axis=alt.Axis(labelLimit=0))
+        )
         st.altair_chart(
             (
                 repeat_base.mark_bar().encode(
@@ -323,7 +406,9 @@ if pattern_name == "repeated_identical_call":
 
 rows = []
 for i, r in enumerate(flagged):
-    hit = next(h for h in r["_pattern_hits"] if h.name == pattern_name)
+    hits = r["_pattern_hits"]
+    hit = next(h for h in hits if h.name == pattern_name)
+    others = [h.label for h in hits if h.name != pattern_name]
     q = _question(r)
     rows.append({
         "#": i + 1,
@@ -332,6 +417,9 @@ for i, r in enumerate(flagged):
         "database": r.get("selected_database", ""),
         "Question": (q[:70] + "…") if len(q) > 70 else q,
         "Evidence": hit.detail,
+        # Co-flagged patterns on the same conversation (this drill-down filters by
+        # one pattern, but a conversation is rarely flagged by only one).
+        "Also flagged": ", ".join(others) if others else "—",
         "Accuracy": "✓" if r.get("execution_accuracy") else "✗",
     })
 event = st.dataframe(
@@ -346,4 +434,6 @@ record = flagged[selected[0]]
 hit = next(h for h in record["_pattern_hits"] if h.name == pattern_name)
 st.divider()
 st.warning(f"**{pattern_label}** — {hit.detail}  ·  flagged messages: {hit.message_indices}")
-render_conversation(record, highlight_indices=set(hit.message_indices))
+# Pass *all* of the conversation's hits so the trace shows every pattern it hit
+# (banner + per-turn tags), not just the one selected in the drill-down.
+render_conversation(record, pattern_hits=record["_pattern_hits"])

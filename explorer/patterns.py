@@ -31,6 +31,13 @@ def _message_text(content: object) -> str:
     return ""
 
 
+# Verbatim prefix of the ToolMessage the budget middleware emits when it blocks
+# a tool call (`tool_wrapper_patience_and_submit` in agent_callback.py). The
+# message is *named after the blocked tool* with success status, but that tool
+# never ran — events matching this prefix are pseudo-events, not real calls.
+BUDGET_BLOCKED_PREFIX = "Budget exhausted"
+
+
 @dataclass(frozen=True)
 class ToolEvent:
     message_index: int   # index into record["messages"] of the tool-result message
@@ -39,6 +46,7 @@ class ToolEvent:
     status: str          # "success" or an error status
     is_error: bool       # status != "success"
     result_text: str     # tool message content as text
+    blocked: bool = False  # budget middleware blocked the call; the tool never ran
 
 
 def extract_tool_events(record: dict) -> list[ToolEvent]:
@@ -66,6 +74,7 @@ def extract_tool_events(record: dict) -> list[ToolEvent]:
                     pending.pop(j)
                     break
             status = msg.get("status", "")
+            result_text = _message_text(msg.get("content"))
             events.append(
                 ToolEvent(
                     message_index=idx,
@@ -73,7 +82,8 @@ def extract_tool_events(record: dict) -> list[ToolEvent]:
                     arguments=args,
                     status=status,
                     is_error=status != "success",
-                    result_text=_message_text(msg.get("content")),
+                    result_text=result_text,
+                    blocked=result_text.startswith(BUDGET_BLOCKED_PREFIX),
                 )
             )
     return events
@@ -101,16 +111,37 @@ def _norm_args(arguments: dict) -> str:
     return json.dumps(a, sort_keys=True, ensure_ascii=False)
 
 
+def _validates_query(event: ToolEvent) -> bool:
+    """True if this tool call ran the query against the DB (i.e. validated it).
+
+    ``execute_sql`` always runs SQL. Under the ``psql_console`` ablation the query
+    is run in the terminal instead, so a ``psql_console`` call validates too —
+    *unless* the command is a backslash meta-command (``\\dt``, ``\\d`` …), which
+    only inspects the schema and never runs the query. Detection mirrors
+    ``_is_psql_meta_command`` in the tool: the first non-blank char being a
+    backslash makes it a meta-command. A budget-blocked call never ran anything.
+    """
+    if event.blocked:
+        return False
+    if event.tool_name == "execute_sql":
+        return True
+    if event.tool_name == "psql_console":
+        command = event.arguments.get("command")
+        return isinstance(command, str) and not command.lstrip().startswith("\\")
+    return False
+
+
 def _detect_blind_submit(events: list[ToolEvent], record: dict) -> PatternHit | None:
-    seen_execute = False
+    seen_validation = False
     for e in events:
-        if e.tool_name == "execute_sql":
-            seen_execute = True
+        if _validates_query(e):
+            seen_validation = True
         elif e.tool_name == "submit_sql":
-            if not seen_execute:
+            if not seen_validation:
                 return PatternHit(
                     "blind_submit", "Blind submit",
-                    "submitted without any prior execute_sql", [e.message_index],
+                    "submitted without running the query against the DB first",
+                    [e.message_index],
                 )
             return None  # first submission was validated
     return None
@@ -119,6 +150,8 @@ def _detect_blind_submit(events: list[ToolEvent], record: dict) -> PatternHit | 
 def _detect_repeated_identical_call(events: list[ToolEvent], record: dict) -> PatternHit | None:
     seen: dict[tuple[str, str], list[int]] = {}
     for e in events:
+        if e.blocked:  # the re-issue never executed
+            continue
         seen.setdefault((e.tool_name, _norm_args(e.arguments)), []).append(e.message_index)
     for (name, _), idxs in seen.items():
         if len(idxs) >= 2:
@@ -148,7 +181,8 @@ def _detect_submit_after_error(events: list[ToolEvent], record: dict) -> Pattern
 def _detect_unrecovered_error_loop(events: list[ToolEvent], record: dict) -> PatternHit | None:
     streak: list[int] = []
     for e in events:
-        if e.tool_name != "execute_sql":
+        # A budget-blocked pseudo-event neither extends nor resets the streak.
+        if e.tool_name != "execute_sql" or e.blocked:
             continue
         if e.is_error:
             streak.append(e.message_index)
@@ -187,10 +221,13 @@ def _detect_kb_blind(events: list[ToolEvent], record: dict) -> PatternHit | None
 
 
 def _detect_budget_death(events: list[ToolEvent], record: dict) -> PatternHit | None:
-    if any(e.tool_name == "submit_sql" and not e.is_error for e in events):
+    # "Successful" means the answer passed, not that the submit tool ran without
+    # erroring: a forced out-of-budget submit whose SQL fails has success status
+    # but is still a budget death.
+    if record.get("execution_accuracy"):
         return None
     budget = record.get("updated_user_patience")
-    exhausted = any("budget exhausted" in e.result_text.lower() for e in events) or (
+    exhausted = any(e.blocked for e in events) or (
         isinstance(budget, (int, float)) and budget <= 0
     )
     if exhausted:
@@ -210,6 +247,96 @@ def _detect_no_submission(events: list[ToolEvent], record: dict) -> PatternHit |
     return None
 
 
+def _middleware_event_types(record: dict) -> set[str]:
+    """The set of built-in-middleware activation types recorded for this run.
+
+    Sourced from the ``middleware_events`` field the agent pipeline writes
+    (``extract_middleware_events``). Records from runs predating that field carry
+    no key — for the two *limit* patterns the trace fallback below still fires;
+    ``context_editing`` has no trace footprint and so cannot fire on them.
+    """
+    return {e.get("type") for e in record.get("middleware_events") or []}
+
+
+# Content prefixes the built-in limit middlewares emit into the message trace
+# (mirrors TOOL_CALL_LIMIT_PREFIX / MODEL_CALL_LIMIT_PREFIX in the eval package's
+# tools/__init__.py, which in turn mirror LangChain). Kept as a local copy — like
+# colors.TOOL_COLORS mirrors TOOL_COSTS — so this analysis module stays free of the
+# heavy eval-package import chain (langchain, psycopg). Must match those strings.
+_TOOL_CALL_LIMIT_TEXT = "Tool call limit exceeded."
+_MODEL_CALL_LIMIT_TEXT = "Model call limits exceeded:"
+
+
+def _ai_indices_starting_with(record: dict, prefix: str) -> list[int]:
+    """Trace indices of AIMessages whose (string) content starts with ``prefix``."""
+    out = []
+    for idx, msg in enumerate(record.get("messages", [])):
+        if msg.get("role") == "ai":
+            content = msg.get("content")
+            if isinstance(content, str) and content.startswith(prefix):
+                out.append(idx)
+    return out
+
+
+def _detect_tool_call_limit(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    # Trace is the primary source (always present); the field is a cross-check that
+    # also covers any future variant whose text we don't match.
+    idxs = [e.message_index for e in events if e.result_text.startswith(_TOOL_CALL_LIMIT_TEXT)]
+    if idxs or "tool_call_limit" in _middleware_event_types(record):
+        return PatternHit(
+            "tool_call_limit", "Tool-call limit",
+            "ToolCallLimitMiddleware blocked a tool — the agent burned past the "
+            "safety-net tool-call cap (well above the patience budget)",
+            idxs,
+        )
+    return None
+
+
+def _detect_model_call_limit(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    idxs = _ai_indices_starting_with(record, _MODEL_CALL_LIMIT_TEXT)
+    if idxs or "model_call_limit" in _middleware_event_types(record):
+        return PatternHit(
+            "model_call_limit", "Model-call limit",
+            "ModelCallLimitMiddleware ended the run — the agent hit the safety-net "
+            "model-call cap before finishing on its own",
+            idxs,
+        )
+    return None
+
+
+def _detect_context_editing(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    # No trace footprint (the serialized record drops response_metadata), so this
+    # pattern relies solely on the middleware_events field and cannot fire on runs
+    # produced before that field was added.
+    if "context_editing" in _middleware_event_types(record):
+        return PatternHit(
+            "context_editing", "Context editing",
+            "ContextEditingMiddleware cleared old tool outputs — the conversation "
+            "grew large enough to trip the context-clearing trigger",
+        )
+    return None
+
+
+def _detect_truncated_generation(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    # An AIMessage with finish_reason == "length" was cut off by the max-model-len
+    # cap. No error is raised (we no longer send max_tokens on the local vLLM path),
+    # so this is the only signal the generation — possibly a tool call — was
+    # incomplete. Sourced from the per-message field, so old runs are covered.
+    idxs = [
+        idx
+        for idx, msg in enumerate(record.get("messages", []))
+        if msg.get("role") == "ai" and msg.get("finish_reason") == "length"
+    ]
+    if idxs:
+        return PatternHit(
+            "truncated_generation", "Truncated generation",
+            f"{len(idxs)} model call(s) cut off by the max-model-len cap "
+            "(finish_reason='length') — the generation was incomplete",
+            idxs,
+        )
+    return None
+
+
 Detector = Callable[[list[ToolEvent], dict], "PatternHit | None"]
 
 ANTI_PATTERNS: list[Detector] = [
@@ -220,6 +347,10 @@ ANTI_PATTERNS: list[Detector] = [
     _detect_kb_blind,
     _detect_budget_death,
     _detect_no_submission,
+    _detect_tool_call_limit,
+    _detect_model_call_limit,
+    _detect_context_editing,
+    _detect_truncated_generation,
 ]
 
 # (name, label) for display + enumeration independent of whether a detector fires.
@@ -231,6 +362,10 @@ PATTERN_CATALOG: list[tuple[str, str]] = [
     ("kb_blind", "KB-blind"),
     ("budget_death", "Budget death"),
     ("no_submission", "No submission"),
+    ("tool_call_limit", "Tool-call limit"),
+    ("model_call_limit", "Model-call limit"),
+    ("context_editing", "Context editing"),
+    ("truncated_generation", "Truncated generation"),
 ]
 PATTERN_NAMES: list[str] = [name for name, _ in PATTERN_CATALOG]
 
@@ -354,6 +489,50 @@ def per_iteration_pattern_rates(records: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def pattern_cooccurrence(records: list[dict]) -> pd.DataFrame:
+    """Pattern×pattern co-occurrence across records — long-form ``[given, pattern, count, n_given, conditional]``.
+
+    For each record the set of distinct anti-pattern names present is collected
+    (presence, not occurrence count). ``count`` is the number of records where
+    **both** ``given`` and ``pattern`` fire; ``n_given`` the number where ``given``
+    fires; ``conditional = count / n_given`` is P(pattern | given) — of the records
+    hitting ``given``, the fraction that also hit ``pattern``. The diagonal is
+    ``given`` against itself (``count = n_given``, ``conditional = 1``).
+
+    Only patterns that fire at least once appear on either axis, so a run with no
+    occurrences of a pattern carries no empty row/column. ``given``/``pattern`` use
+    the human labels (matching ``PATTERN_CATALOG``). Empty frame (with the columns)
+    when nothing fired.
+
+    Surfaces that anti-patterns are **not mutually exclusive**: a bright off-diagonal
+    cell means the two failure modes tend to strike the same conversation.
+    """
+    labels = dict(PATTERN_CATALOG)
+    totals: Counter = Counter()
+    pair: Counter = Counter()
+    for r in records:
+        names = {h.name for h in _record_hits(r)}
+        for a in names:
+            totals[a] += 1
+            for b in names:
+                pair[(a, b)] += 1
+    active = [name for name in PATTERN_NAMES if totals[name] > 0]
+    rows = [
+        {
+            "given": labels[a],
+            "pattern": labels[b],
+            "count": pair.get((a, b), 0),
+            "n_given": totals[a],
+            "conditional": pair.get((a, b), 0) / totals[a],
+        }
+        for a in active
+        for b in active
+    ]
+    if not rows:
+        return pd.DataFrame(columns=["given", "pattern", "count", "n_given", "conditional"])
+    return pd.DataFrame(rows)
+
+
 def repeated_identical_tool_counts(records: list[dict]) -> pd.DataFrame:
     """Total surplus repeats per tool across the given records.
 
@@ -370,6 +549,8 @@ def repeated_identical_tool_counts(records: list[dict]) -> pd.DataFrame:
     for record in records:
         grouped: dict[tuple[str, str], int] = {}
         for e in extract_tool_events(record):
+            if e.blocked:  # never executed, so not a real re-issue
+                continue
             key = (e.tool_name, _norm_args(e.arguments))
             grouped[key] = grouped.get(key, 0) + 1
         for (tool, _), k in grouped.items():
@@ -413,7 +594,7 @@ def first_submit_accuracy_by_quintile(
     labels = _quintile_labels(n_bins)
     buckets: list[list[bool]] = [[] for _ in range(n_bins)]
     for r in records:
-        events = extract_tool_events(r)
+        events = [e for e in extract_tool_events(r) if not e.blocked]
         if not events:
             continue
         first_submit = next(
@@ -452,7 +633,7 @@ def tool_position_accuracy(records: list[dict], n_bins: int = 5) -> pd.DataFrame
     labels = _quintile_labels(n_bins)
     cells: dict[tuple[str, str], list[bool]] = {}
     for r in records:
-        events = extract_tool_events(r)
+        events = [e for e in extract_tool_events(r) if not e.blocked]
         if not events:
             continue
         passed = bool(r.get("execution_accuracy"))
@@ -499,7 +680,7 @@ def positional_tool_distribution(
         inst_share: dict[str, dict[str, float]] = {q: {} for q in labels}
         inst_reached: dict[str, int] = {q: 0 for q in labels}
         for r in samples:
-            seq = [e.tool_name for e in extract_tool_events(r)]
+            seq = [e.tool_name for e in extract_tool_events(r) if not e.blocked]
             if not seq:
                 continue
             binned: dict[str, Counter] = {q: Counter() for q in labels}

@@ -22,11 +22,21 @@ marks — whereas Altair's ``mark_boxplot`` recomputes quartiles from raw data w
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
+
 import plotly.graph_objects as go
 import streamlit as st
 
-from colors import stable_color
-from metrics import ReliabilityStats
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from colors import stable_color
+except ModuleNotFoundError:
+    from explorer.colors import stable_color
+
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from metrics import ReliabilityStats
+except ModuleNotFoundError:
+    from explorer.metrics import ReliabilityStats
 
 
 RELIABILITY_EXPLANATION = """
@@ -48,8 +58,25 @@ the **top whisker = A⁹⁰ (Aptitude)**, the **bottom whisker = A¹⁰**, so th
 is the Unreliability**. The box spans A²⁵–A⁷⁵ and the tick is the median A⁵⁰.
 
 *Caveat:* scores are binary and *N* is small, so per-task percentiles are coarse — read
-these as indicative, not precise.
+these as indicative, not precise. In partial/recovered runs, tasks present in fewer
+iterations contribute zero-spread percentiles, biasing Reliability upward.
 """
+
+
+def disambiguate_run_labels(labels: Iterable[str]) -> dict[str, str]:
+    """Map each full run label (``date / time/slug``) to a short display label.
+
+    Uses the bare slug when it is unique among the given labels; on a collision
+    (same variant slug run on several dates/checkpoints) every colliding label
+    stays fully qualified, so no two runs silently merge into one chart key.
+    """
+    labels = list(labels)
+    slugs = {label: label.rsplit("/", 1)[-1].strip() for label in labels}
+    counts = Counter(slugs.values())
+    return {
+        label: (slug if counts[slug] == 1 else label)
+        for label, slug in slugs.items()
+    }
 
 
 def reliability_explainer() -> None:
@@ -111,38 +138,4 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
     fig.update_yaxes(
         title_text="Per-task score", range=[0, 1], tickformat=".0%"
     )
-    return fig
-
-
-def reliability_bars(rels: dict[str, ReliabilityStats]) -> go.Figure:
-    """Grouped bar chart of the headline reliability metrics, one group per metric.
-
-    X-axis is the metric (P̄, A⁹⁰, U₁₀⁹⁰, R, pass@N); bars within a group are the
-    runs (``barmode="group"``). All values are 0..1 and share the percentage
-    y-axis. Note U₁₀⁹⁰ is *lower = better* while the others are *higher = better*.
-    """
-    metrics = ["Average P̄", "Aptitude A⁹⁰", "Unreliability U₁₀⁹⁰", "Reliability R", "pass@N"]
-    fig = go.Figure()
-    for label, rel in rels.items():
-        passk = rel.passk[max(rel.passk)] if rel.passk else 0.0
-        values = [rel.avg_performance, rel.aptitude, rel.unreliability, rel.reliability, passk]
-        fig.add_trace(
-            go.Bar(
-                name=label,
-                x=metrics,
-                y=values,
-                marker_color=stable_color(label, kind="run"),
-                text=[f"{v:.1%}" for v in values],
-                textposition="outside",
-                hovertemplate="<b>%{fullData.name}</b><br>%{x}: %{y:.1%}<extra></extra>",
-            )
-        )
-
-    fig.update_layout(
-        barmode="group",
-        height=360,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        margin=dict(t=40, b=10, l=10, r=10),
-    )
-    fig.update_yaxes(range=[0, 1], tickformat=".0%")
     return fig

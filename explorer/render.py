@@ -2,9 +2,38 @@
 
 from __future__ import annotations
 
+import html
 import json
 
 import streamlit as st
+
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from colors import stable_color
+except ModuleNotFoundError:
+    from explorer.colors import stable_color
+
+
+def _pattern_badge(label: str) -> str:
+    """Inline colored HTML chip for an anti-pattern label (color pinned in colors.py)."""
+    color = stable_color(label, kind="pattern")
+    return (
+        f"<span style='background:{color};color:white;border-radius:6px;"
+        f"padding:1px 7px;font-size:0.8em;white-space:nowrap'>{html.escape(label)}</span>"
+    )
+
+
+def _pattern_banner_html(hits: list) -> str:
+    """A banner listing every anti-pattern a conversation hit, with its evidence."""
+    items = "".join(
+        f"<div style='margin:3px 0'>{_pattern_badge(h.label)} "
+        f"<span style='color:#666;font-size:0.85em'>{html.escape(h.detail)}</span></div>"
+        for h in hits
+    )
+    return (
+        "<div style='border-left:4px solid #d62728;padding:6px 12px;margin:8px 0;"
+        f"background:#fff5f5;border-radius:4px'>🚩 <b>Anti-patterns flagged "
+        f"({len(hits)})</b>{items}</div>"
+    )
 
 
 def render_ai_content(content) -> None:
@@ -28,13 +57,35 @@ def render_ai_content(content) -> None:
         st.text(str(content))
 
 
-def render_conversation(record: dict, highlight_indices: set[int] | None = None) -> None:
+def render_conversation(
+    record: dict,
+    highlight_indices: set[int] | None = None,
+    pattern_hits: list | None = None,
+) -> None:
+    """Render a conversation trace.
+
+    ``highlight_indices`` flags individual message rows (a generic emphasis).
+    ``pattern_hits`` (a list of ``PatternHit``) additionally renders a banner of
+    every anti-pattern the conversation hit and tags each flagged turn with the
+    label(s) of the pattern(s) that fired there — so a single conversation shows
+    *all* its (non-mutually-exclusive) patterns at once. Conversation-level
+    patterns (no ``message_indices``) appear in the banner only.
+    """
+    hits = list(pattern_hits or [])
+    # message index -> labels of the pattern(s) that flagged that exact turn.
+    idx_labels: dict[int, list[str]] = {}
+    for h in hits:
+        for mi in getattr(h, "message_indices", None) or []:
+            idx_labels.setdefault(mi, []).append(getattr(h, "label", ""))
+
     acc = record.get("execution_accuracy", False)
     badge = "✓ PASS" if acc else "✗ FAIL"
     st.subheader(
         f"Conversation: `{record.get('instance_id', '')}` · "
         f"db: `{record.get('selected_database', '')}` · **{badge}**"
     )
+    if hits:
+        st.markdown(_pattern_banner_html(hits), unsafe_allow_html=True)
 
     # Questions
     clean_q = record.get("not_ambiguos_query", "")
@@ -60,9 +111,10 @@ def render_conversation(record: dict, highlight_indices: set[int] | None = None)
     # kb_linearized: dict = record.get("masked_agent_kb_linearized") or {}
     kb_linearized: dict = {}
     kb_raw: dict = record.get("masked_agent_kb") or {}
+    gt_kb: dict = record.get("gt_knowledge_base") or {}
     col_meanings: dict = record.get("column_meanings") or {}
 
-    ctx_cols = st.columns(3)
+    ctx_cols = st.columns(4)
     with ctx_cols[0]:
         with st.expander("Schema (DDL)"):
             with st.container(height=300):
@@ -79,6 +131,13 @@ def render_conversation(record: dict, highlight_indices: set[int] | None = None)
                 else:
                     st.text("(none)")
     with ctx_cols[2]:
+        with st.expander(f"Ground-truth KB ({len(gt_kb)} entries)"):
+            with st.container(height=300):
+                if gt_kb:
+                    st.json(gt_kb)
+                else:
+                    st.text("(none)")
+    with ctx_cols[3]:
         with st.expander(f"Column meanings ({len(col_meanings)} entries)"):
             with st.container(height=300):
                 if col_meanings:
@@ -93,11 +152,18 @@ def render_conversation(record: dict, highlight_indices: set[int] | None = None)
     # the long system prompt stays collapsed; the user question, each assistant
     # turn (reasoning + text + tool-call chips), and each tool result render as
     # their own distinctly-styled turn.
-    highlight = highlight_indices or set()
+    highlight = (highlight_indices or set()) | set(idx_labels)
     for i, msg in enumerate(record.get("messages", [])):
         role = msg.get("role")
         if i in highlight:
-            st.markdown("\U0001f6a9 **flagged turn**")
+            labels = idx_labels.get(i)
+            if labels:
+                st.markdown(
+                    "🚩 " + " ".join(_pattern_badge(lbl) for lbl in labels),
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown("\U0001f6a9 **flagged turn**")
 
         if role == "system":
             with st.expander("⚙️ System prompt — click to expand"):

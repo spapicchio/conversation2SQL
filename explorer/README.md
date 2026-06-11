@@ -48,12 +48,12 @@ Error classes are assigned by `classify_submit_error()` in `loader.py`. The func
 |---|---|
 | `Passed` | `execution_accuracy` is truthy |
 | `No Submission` | No `submit_sql*` tool message found |
+| `Target Error` | Message contains `[TARGET ERROR]` (the gold SQL failed — a dataset problem; checked first) |
 | `Empty Query` | Message contains *"empty query"* |
 | `Syntax Error` | Message matches `syntax error` |
 | `Column/Relation Not Found` | Message matches `does not exist` |
 | `Wrong SQL` | Message is *"Your SQL is not correct."* |
 | `DB Error` | Other `DatabaseError` |
-| `[TARGET ERROR]` | Target error executions |
 | `Other` | None of the above |
 
 To add a new class, add a branch in `classify_submit_error()` before the final `return "Other"` line.

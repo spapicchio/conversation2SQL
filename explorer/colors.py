@@ -24,7 +24,37 @@ from collections.abc import Iterable
 
 import altair as alt
 
-from patterns import PATTERN_CATALOG
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from patterns import PATTERN_CATALOG
+except ModuleNotFoundError:
+    from explorer.patterns import PATTERN_CATALOG
+
+
+# ── Global Altair theme: never drop axis labels ──────────────────────────────
+# By default Vega-Lite sets ``labelOverlap`` to ``true`` on quantitative axes, so
+# it silently *removes* tick labels that would collide — the "missing axis values"
+# in dense charts (e.g. the anti-pattern plots). We force ``labelOverlap: false``
+# so every label is always rendered, and trim the label font a notch so the now
+# guaranteed-present labels still fit. ``labelLimit: 0`` stops long labels from
+# being ellipsed (matches the per-chart overrides already used for tool names).
+#
+# Registering + enabling our own theme also means it survives Streamlit: Streamlit
+# only discards the Altair theme while the active one is still "default"
+# (see streamlit/elements/vega_charts.py), so an explicitly enabled theme is kept.
+_AXIS_LABEL_FONT_SIZE = 9  # one notch below Vega's default of 10
+
+
+@alt.theme.register("labels_always_on", enable=True)
+def _labels_always_on_theme() -> dict:
+    return {
+        "config": {
+            "axis": {
+                "labelOverlap": False,
+                "labelFontSize": _AXIS_LABEL_FONT_SIZE,
+                "labelLimit": 0,
+            }
+        }
+    }
 
 # Shared 24-color qualitative palette (Plotly/D3 "category20"-style). The first
 # ten match Plotly's default so the pinned colors below blend with anything that

@@ -37,13 +37,15 @@ class RunStats:
     avg_total_output_tokens: float  # cumulative per conversation
     avg_model_calls: float    # LLM calls per conversation
     avg_cost: float
-    avg_budget_remaining: float
+    avg_budget_remaining: float  # from the last trace budget note (state is a sentinel; see _remaining_budget)
     accuracy_by_database: dict[str, float]  # database -> pass rate
     error_distribution: Counter[str]  # error_class -> count
     tool_usage: Counter[str]  # tool_name -> total calls
     pattern_stats: dict[str, PatternStat] = field(default_factory=dict)  # name -> rate + applicable N
     clean_fraction: float = 0.0  # sample-avg fraction of samples with zero hits
     reliability: ReliabilityStats | None = None
+    n_truncated: int = 0  # records with >=1 model call cut off by max-model-len
+    truncated_fraction: float = 0.0  # n_truncated / n_total
 
 
 @dataclass
@@ -55,6 +57,7 @@ class RunData:
     source_file: str = "results.jsonl"
     groups: dict[str, list[dict]] = field(default_factory=dict)
     n_iterations: int = 0
+    duplicate_count: int = 0  # dropped repeats of an (instance_id, iteration) pair
 
 
 def classify_submit_error(record: dict) -> str:
@@ -70,15 +73,12 @@ def classify_submit_error(record: dict) -> str:
     content = last_msg.get("content", {})
     message = content.get("message", "") if isinstance(content, dict) else str(content)
     message_lower = message.lower()
-    if (
-        "empty query" in message_lower
-        or "empty" in message_lower
-        and "query" in message_lower
-    ):
-        return "Empty Query"
+    # Target-side failures are dataset problems — classify them first so a DB
+    # error that happens to mention e.g. an empty query isn't mislabeled.
     if "[TARGET ERROR]" in message:
         return "Target Error"
-        
+    if "empty query" in message_lower:
+        return "Empty Query"
     if re.search(r"syntax error", message_lower):
         return "Syntax Error"
     if re.search(r"column .+ does not exist|does not exist", message_lower):
@@ -100,6 +100,34 @@ def _tool_message_text(content: object) -> str:
     if isinstance(content, str):
         return content
     return ""
+
+
+def _remaining_budget(record: dict) -> float | None:
+    """Best-effort remaining patience budget at the end of a conversation.
+
+    The record-level ``updated_user_patience`` cannot be averaged: the agent
+    middleware overwrites it with terminal sentinels (-2 after a terminal
+    submit_sql, -1 when a tool was budget-blocked), so it reflects *how* the
+    episode ended, not how much budget was left. The budget the agent actually
+    saw lives in the ``[SYSTEM NOTE: Remaining budget: x/y]`` annotations,
+    parsed into ``remaining_budget`` on tool messages at serialization time —
+    take the last one. Records without a note fall back to the non-sentinel
+    state value, then to the initial budget (nothing was ever deducted).
+    Returns None when no budget information exists (e.g. no_tool baseline).
+    """
+    remaining = None
+    for msg in record.get("messages", []):
+        if msg.get("role") == "tool" and msg.get("remaining_budget") is not None:
+            remaining = msg["remaining_budget"]
+    if remaining is not None:
+        return float(remaining)
+    updated = record.get("updated_user_patience")
+    if isinstance(updated, (int, float)) and updated >= 0:
+        return float(updated)
+    initial = record.get("initial_user_patience")
+    if isinstance(initial, (int, float)):
+        return float(initial)
+    return None
 
 
 def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = None) -> RunStats:
@@ -140,9 +168,11 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
         n_total, 1
     )
     avg_cost = sum(r.get("total_cost") or 0 for r in records) / max(n_total, 1)
-    avg_budget = sum(r.get("updated_user_patience") or 0 for r in records) / max(
-        n_total, 1
-    )
+    # Mean over the records that carry budget information (see _remaining_budget).
+    budget_values = [
+        b for b in (_remaining_budget(r) for r in records) if b is not None
+    ]
+    avg_budget = sum(budget_values) / len(budget_values) if budget_values else 0.0
 
     db_totals: dict[str, int] = {}
     db_passed: dict[str, int] = {}
@@ -178,6 +208,20 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
     if budget_exhausted:
         tool_usage["budget_exhausted"] += budget_exhausted
 
+    # Truncation: an AI message with finish_reason == "length" was cut off by the
+    # max-model-len cap (no error is raised). Derived from the per-message field
+    # so old runs — which predate the record-level was_truncated flag — are
+    # covered without rewriting any historical JSONL.
+    n_truncated = sum(
+        1
+        for r in records
+        if any(
+            msg.get("role") == "ai" and msg.get("finish_reason") == "length"
+            for msg in r.get("messages", [])
+        )
+    )
+    truncated_fraction = n_truncated / n_total if n_total else 0.0
+
     g = groups or {}
     pattern_stats = aggregate_patterns(g)
     clean = clean_fraction(g)
@@ -200,6 +244,8 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
         pattern_stats=pattern_stats,
         clean_fraction=clean,
         reliability=reliability_metrics(groups or {}),
+        n_truncated=n_truncated,
+        truncated_fraction=truncated_fraction,
     )
 
 
@@ -285,6 +331,23 @@ def load_run(path: Path) -> RunData:
             records, malformed = _read_jsonl(source)
         source_file = source.name
 
+    # A resume/recover double-write would otherwise count as an extra sample
+    # and silently inflate pass@1 / pass@k / reliability: keep the first record
+    # of each (instance_id, iteration) pair and count the dropped repeats.
+    seen_pairs: set[tuple[str, object]] = set()
+    deduped: list[dict] = []
+    duplicate_count = 0
+    for r in records:
+        iid = r.get("instance_id")
+        key = (iid, r.get("iteration", 0))
+        if iid and key in seen_pairs:
+            duplicate_count += 1
+            continue
+        if iid:
+            seen_pairs.add(key)
+        deduped.append(r)
+    records = deduped
+
     for r in records:
         r["_error_class"] = classify_submit_error(r)
         r["_pattern_hits"] = detect_patterns(r)
@@ -311,6 +374,7 @@ def load_run(path: Path) -> RunData:
         source_file=source_file,
         groups=groups,
         n_iterations=n_iterations,
+        duplicate_count=duplicate_count,
     )
 
 
