@@ -96,6 +96,26 @@ def test_blind_submit_quiet_when_execute_precedes():
     assert "blind_submit" not in _hits(rec)
 
 
+def test_blind_submit_quiet_when_psql_console_query_precedes():
+    # In the psql_console ablation the query is validated by running SQL in the
+    # terminal, not via execute_sql.
+    rec = _record(
+        _ai(("psql_console", {"command": "SELECT 1"})), _tool("psql_console"),
+        _ai(("submit_sql", {"sql": "SELECT 1"})), _tool("submit_sql"),
+    )
+    assert "blind_submit" not in _hits(rec)
+
+
+def test_blind_submit_fires_when_only_psql_meta_command_precedes():
+    # A backslash meta-command (\dt, \d …) inspects schema but never runs the
+    # query, so it does not count as validation.
+    rec = _record(
+        _ai(("psql_console", {"command": "\\dt"})), _tool("psql_console"),
+        _ai(("submit_sql", {"sql": "SELECT 1"})), _tool("submit_sql"),
+    )
+    assert "blind_submit" in _hits(rec)
+
+
 def test_repeated_identical_call_ignores_whitespace_in_sql():
     rec = _record(
         _ai(("execute_sql", {"sql": "SELECT  1"})), _tool("execute_sql"),
@@ -180,10 +200,184 @@ def test_budget_death_fires_without_successful_submit_and_low_budget():
     assert "budget_death" in _hits(rec)
 
 
-def test_budget_death_quiet_after_successful_submit():
+# Verbatim shape of the message the budget middleware emits when it blocks a
+# tool call (`tool_wrapper_patience_and_submit` in agent_callback.py).
+_BLOCKED_TEXT = "Budget exhausted (1.0 remaining). You MUST call submit_sql now with your best SQL."
+
+
+def test_budget_death_quiet_when_answer_passed():
     rec = _record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql", status="success"))
+    rec["execution_accuracy"] = True
     rec["updated_user_patience"] = -2
     assert "budget_death" not in _hits(rec)
+
+
+def test_budget_death_fires_on_failed_forced_submit():
+    # The classic death: budget-blocked tool → forced submit → SQL fails. The
+    # submit's *tool status* is "success" (the tool ran fine), but no passing
+    # answer landed, so this is still a budget death.
+    rec = _record(
+        _ai(("execute_sql", {"sql": "x"})),
+        _tool("execute_sql", content=_BLOCKED_TEXT),
+        _ai(("submit_sql", {"sql": "x"})),
+        _tool("submit_sql", content={"passed": False, "message": "Your SQL is not correct."}),
+    )
+    rec["execution_accuracy"] = False
+    rec["updated_user_patience"] = -2
+    assert "budget_death" in _hits(rec)
+
+
+# ── budget-blocked pseudo-events ────────────────────────────────────────────────
+# When the budget middleware blocks a tool it emits a ToolMessage *named after
+# the blocked tool* ("Budget exhausted… You MUST call submit_sql…") with success
+# status — but that tool never ran, so detectors must not treat it as a real call.
+
+
+def test_extract_marks_budget_blocked_events():
+    rec = _record(
+        _ai(("execute_sql", {"sql": "x"})),
+        _tool("execute_sql", content=_BLOCKED_TEXT),
+    )
+    e = extract_tool_events(rec)[0]
+    assert e.blocked is True
+    assert extract_tool_events(
+        _record(_ai(("execute_sql", {"sql": "x"})), _tool("execute_sql"))
+    )[0].blocked is False
+
+
+def test_blind_submit_fires_when_only_validation_was_budget_blocked():
+    # A budget-blocked execute_sql never ran the query, so the following
+    # submit is still blind.
+    rec = _record(
+        _ai(("execute_sql", {"sql": "SELECT 1"})),
+        _tool("execute_sql", content=_BLOCKED_TEXT),
+        _ai(("submit_sql", {"sql": "SELECT 1"})),
+        _tool("submit_sql"),
+    )
+    assert "blind_submit" in _hits(rec)
+
+
+def test_error_loop_streak_survives_budget_blocked_call():
+    # The blocked pseudo-event has success status; it must neither extend nor
+    # reset the consecutive-error streak.
+    rec = _record(
+        _ai(("execute_sql", {"sql": "a"})), _tool("execute_sql", status="error"),
+        _ai(("execute_sql", {"sql": "b"})), _tool("execute_sql", status="error"),
+        _ai(("execute_sql", {"sql": "c"})), _tool("execute_sql", content=_BLOCKED_TEXT),
+        _ai(("execute_sql", {"sql": "d"})), _tool("execute_sql", status="error"),
+    )
+    assert "unrecovered_error_loop" in _hits(rec)
+
+
+def test_repeated_identical_call_quiet_when_repeat_was_budget_blocked():
+    # The re-issue never executed (it was blocked), so it is not a real repeat.
+    rec = _record(
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "SELECT 1"})), _tool("execute_sql", content=_BLOCKED_TEXT),
+    )
+    assert "repeated_identical_call" not in _hits(rec)
+
+
+def test_truncated_generation_in_catalog():
+    assert "truncated_generation" in PATTERN_NAMES
+
+
+def test_truncated_generation_fires_on_finish_reason_length():
+    rec = _record(
+        {"role": "ai", "finish_reason": "stop", "tool_calls": []},
+        _tool("execute_sql"),
+        {"role": "ai", "finish_reason": "length", "tool_calls": []},
+    )
+    hits = detect_patterns(rec)
+    hit = next(h for h in hits if h.name == "truncated_generation")
+    assert hit.message_indices == [2]  # the truncated AIMessage's trace index
+
+
+def test_truncated_generation_quiet_when_no_length_finish():
+    rec = _record(
+        {"role": "ai", "finish_reason": "stop", "tool_calls": []},
+        {"role": "ai", "finish_reason": "tool_calls", "tool_calls": []},
+    )
+    assert "truncated_generation" not in _hits(rec)
+
+
+def _with_events(*types):
+    """A record carrying middleware_events of the given types."""
+    rec = _record()
+    rec["middleware_events"] = [{"type": t, "message_id": f"m-{i}"} for i, t in enumerate(types)]
+    return rec
+
+
+def test_middleware_patterns_in_catalog():
+    for name in ("tool_call_limit", "model_call_limit", "context_editing"):
+        assert name in PATTERN_NAMES
+
+
+def test_tool_call_limit_fires_from_middleware_event():
+    assert "tool_call_limit" in _hits(_with_events("tool_call_limit"))
+
+
+def test_model_call_limit_fires_from_middleware_event():
+    assert "model_call_limit" in _hits(_with_events("model_call_limit"))
+
+
+def test_context_editing_fires_from_middleware_event():
+    assert "context_editing" in _hits(_with_events("context_editing"))
+
+
+def test_middleware_patterns_quiet_without_events():
+    # No middleware_events key at all (e.g. an old run) → none fire.
+    quiet = _hits(_record(_ai(("submit_sql", {"sql": "x"})), _tool("submit_sql")))
+    assert {"tool_call_limit", "model_call_limit", "context_editing"} & quiet == set()
+
+
+def test_middleware_patterns_independent():
+    # Only the event types present fire; others stay quiet.
+    hits = _hits(_with_events("context_editing"))
+    assert "context_editing" in hits
+    assert "tool_call_limit" not in hits
+    assert "model_call_limit" not in hits
+
+
+def test_model_call_limit_fires_from_trace_without_events_field():
+    # Reproduces museum_4: run generated before `middleware_events` existed, so the
+    # field is absent — but the injected AIMessage is right there in the trace.
+    rec = _record(
+        _ai(("execute_sql", {"sql": "x"})),
+        _tool("execute_sql"),
+        {"role": "ai", "content": "Model call limits exceeded: run limit (17/17)"},
+    )
+    assert "middleware_events" not in rec
+    hits = detect_patterns(rec)
+    hit = next(h for h in hits if h.name == "model_call_limit")
+    assert hit.message_indices == [2]  # the offending AIMessage's trace index
+
+
+def test_tool_call_limit_fires_from_trace_without_events_field():
+    # The tool-limit ToolMessage serializes to {"content": "...", "parse_error": ...};
+    # its text still starts with the limit prefix.
+    rec = _record(
+        _ai(("execute_sql", {"sql": "x"})),
+        _tool(
+            "execute_sql",
+            status="error",
+            content={
+                "content": "Tool call limit exceeded. Do not make additional tool calls.",
+                "parse_error": "Expecting value: line 1 column 1",
+            },
+        ),
+    )
+    assert "middleware_events" not in rec
+    hits = detect_patterns(rec)
+    hit = next(h for h in hits if h.name == "tool_call_limit")
+    assert hit.message_indices == [1]
+
+
+def test_context_editing_only_from_field_not_trace():
+    # No trace footprint exists for context editing, so a record without the field
+    # cannot fire it (documented limitation for pre-wiring runs).
+    rec = _record({"role": "tool", "tool_name": "x", "status": "success", "content": "[cleared]"})
+    assert "context_editing" not in _hits(rec)
 
 
 from explorer.patterns import (
@@ -274,6 +468,15 @@ def test_positional_distribution_shares_sum_to_one_per_quintile():
     sums = df.groupby("quintile")["share"].sum()
     for q, total in sums.items():
         assert abs(total - 1.0) < 1e-9, f"quintile {q} sums to {total}"
+
+
+def test_positional_distribution_excludes_budget_blocked_calls():
+    rec = _record(
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql"),
+        _ai(("get_schema", {})), _tool("get_schema", content=_BLOCKED_TEXT),
+    )
+    df = positional_tool_distribution({"inst1": [rec]})
+    assert "get_schema" not in set(df["tool"])
 
 
 def test_positional_distribution_bins_by_normalized_position():
@@ -417,7 +620,30 @@ def test_first_submit_accuracy_returns_all_bins_in_order():
     assert list(df["quintile"]) == ["0-20%", "20-40%", "40-60%", "60-80%", "80-100%"]
 
 
+def test_first_submit_accuracy_ignores_budget_blocked_calls():
+    # A blocked call never ran; with it excluded the submit is the 1st of 2
+    # real events (1/2 → 40-60%), not the 2nd of 3 (2/3 → 60-80%).
+    rec = _passed(_record(
+        _ai(("execute_sql", {"sql": "a"})), _tool("execute_sql"),
+        _ai(("execute_sql", {"sql": "b"})), _tool("execute_sql", content=_BLOCKED_TEXT),
+        _ai(("submit_sql", {"sql": "x"})), _tool("submit_sql"),
+    ), ok=True)
+    df = first_submit_accuracy_by_quintile([rec]).set_index("quintile")
+    assert df.loc["40-60%", "n"] == 1
+    assert df.loc["60-80%", "n"] == 0
+
+
 from explorer.patterns import tool_position_accuracy
+
+
+def test_tool_position_accuracy_excludes_budget_blocked_calls():
+    rec = _passed(_record(
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql"),
+        _ai(("get_schema", {})), _tool("get_schema", content=_BLOCKED_TEXT),
+    ), ok=True)
+    df = tool_position_accuracy([rec])
+    assert "get_schema" not in set(df["tool"])
+    assert "execute_sql" in set(df["tool"])
 
 
 def test_tool_position_accuracy_places_tools_by_normalized_position():
@@ -455,3 +681,56 @@ def test_tool_position_accuracy_pooled_across_conversations():
     cell = tool_position_accuracy([a, b]).set_index(["tool", "quintile"])
     assert cell.loc[("submit_sql", "0-20%"), "accuracy"] == 0.5
     assert cell.loc[("submit_sql", "0-20%"), "n"] == 2
+
+
+from explorer.patterns import pattern_cooccurrence
+
+
+def test_cooccurrence_diagonal_is_pattern_total():
+    # One conversation hits both no_submission and unrecovered_error_loop (3 errors).
+    rec = _record(
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql", status="error"),
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql", status="error"),
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql", status="error"),
+    )
+    df = pattern_cooccurrence([rec]).set_index(["given", "pattern"])
+    # Diagonal: each present pattern's own total over the records.
+    assert df.loc[("No submission", "No submission"), "count"] == 1
+    assert df.loc[("No submission", "No submission"), "conditional"] == 1.0
+
+
+def test_cooccurrence_offdiagonal_counts_shared_conversations():
+    # Both records share no_submission; only the first also loops.
+    looped = _record(
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql", status="error"),
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql", status="error"),
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql", status="error"),
+    )
+    plain = _record(_ai(("get_schema", {})), _tool("get_schema"))  # no_submission only
+    df = pattern_cooccurrence([looped, plain]).set_index(["given", "pattern"])
+    # 2 records hit no_submission; of those, 1 also loops → P(loop | no_submission)=0.5.
+    cell = df.loc[("No submission", "Unrecovered error loop")]
+    assert cell["count"] == 1
+    assert cell["n_given"] == 2
+    assert cell["conditional"] == 0.5
+    # Asymmetric: every looped record also has no_submission → P=1.0.
+    assert df.loc[("Unrecovered error loop", "No submission"), "conditional"] == 1.0
+
+
+def test_cooccurrence_only_active_patterns_appear():
+    rec = _record(_ai(("execute_sql", {"sql": "x"})), _tool("execute_sql"))  # no_submission only
+    df = pattern_cooccurrence([rec])
+    assert set(df["given"]) == {"No submission"}
+    assert set(df["pattern"]) == {"No submission"}
+
+
+def test_cooccurrence_empty_frame_has_columns():
+    # A clean conversation (execute then successful submit fires no pattern) yields
+    # no rows but stable columns.
+    clean = _record(
+        _ai(("execute_sql", {"sql": "x"})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": "x"})), _tool("submit_sql"),
+    )
+    df = pattern_cooccurrence([clean])
+    assert df.empty
+    assert list(df.columns) == ["given", "pattern", "count", "n_given", "conditional"]

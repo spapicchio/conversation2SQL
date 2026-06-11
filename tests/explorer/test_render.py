@@ -102,3 +102,47 @@ def test_render_no_marker_without_highlight(monkeypatch):
     record = {"instance_id": "i1", "messages": [{"role": "ai", "content": "hi", "tool_calls": []}]}
     render.render_conversation(record)
     assert not any("\U0001f6a9" in c for c in cap.markdown_calls)
+
+
+class _Hit:
+    """Minimal PatternHit duck-type for render tests."""
+
+    def __init__(self, label, detail, message_indices):
+        self.label = label
+        self.detail = detail
+        self.message_indices = message_indices
+
+
+def test_render_pattern_hits_banner_lists_every_pattern(monkeypatch):
+    import explorer.render as render
+
+    cap = _CapturingSt()
+    monkeypatch.setattr(render, "st", cap)
+    record = {"instance_id": "i1", "messages": [{"role": "ai", "content": "hi", "tool_calls": []}]}
+    hits = [
+        _Hit("Blind submit", "submitted blind", [0]),
+        _Hit("Budget death", "ran out of budget", []),  # conversation-level, no index
+    ]
+    render.render_conversation(record, pattern_hits=hits)
+    banner = "\n".join(cap.markdown_calls)
+    # Banner names every pattern, including the index-less conversation-level one.
+    assert "Anti-patterns flagged (2)" in banner
+    assert "Blind submit" in banner and "Budget death" in banner
+
+
+def test_render_pattern_hits_tag_the_flagged_turn(monkeypatch):
+    import explorer.render as render
+
+    cap = _CapturingSt()
+    monkeypatch.setattr(render, "st", cap)
+    record = {
+        "instance_id": "i1",
+        "messages": [
+            {"role": "ai", "content": "first", "tool_calls": []},
+            {"role": "ai", "content": "second", "tool_calls": []},
+        ],
+    }
+    render.render_conversation(record, pattern_hits=[_Hit("Blind submit", "x", [1])])
+    # The label badge appears as an in-trace turn tag (not only in the banner).
+    tag_calls = [c for c in cap.markdown_calls if "\U0001f6a9" in c and "Blind submit" in c]
+    assert tag_calls

@@ -5,7 +5,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from explorer.loader import RunData, RunStats, _compute_stats, list_runs, load_run, join_runs
+from explorer.loader import (
+    RunData,
+    RunStats,
+    _compute_stats,
+    classify_submit_error,
+    list_runs,
+    load_run,
+    join_runs,
+)
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -167,11 +175,110 @@ class TestComputeStats:
         assert stats.tool_usage["execute_sql"] == 1
         assert stats.tool_usage["budget_exhausted"] == 1
 
+    def test_avg_budget_remaining_reads_last_trace_note_not_sentinel(self):
+        # The record-level updated_user_patience is overwritten with terminal
+        # sentinels by the agent middleware (-2 after a terminal submit, -1 on
+        # a budget block), so the metric must come from the last [SYSTEM NOTE]
+        # budget annotation parsed into the tool messages.
+        records = [make_record(
+            updated_user_patience=-2,
+            messages=[
+                {"role": "tool", "tool_name": "execute_sql", "status": "success",
+                 "content": {}, "remaining_budget": 9.0, "total_budget": 12.0},
+                {"role": "tool", "tool_name": "execute_sql", "status": "success",
+                 "content": {}, "remaining_budget": 5.0, "total_budget": 12.0},
+                {"role": "tool", "tool_name": "submit_sql", "status": "success",
+                 "content": {"passed": True, "message": "ok"}},
+            ],
+        )]
+        stats = _compute_stats(records)
+        assert stats.avg_budget_remaining == 5.0
+
+    def test_avg_budget_remaining_falls_back_to_initial_budget(self):
+        # Sentinel state and no budget note anywhere (terminal on the very
+        # first tool call): nothing was ever deducted → the initial budget.
+        records = [make_record(updated_user_patience=-2, initial_user_patience=12)]
+        stats = _compute_stats(records)
+        assert stats.avg_budget_remaining == 12.0
+
+    def test_avg_budget_remaining_excludes_records_without_budget_info(self):
+        # no_tool baseline records carry updated_user_patience=None and no
+        # trace notes — they must not drag the average toward 0.
+        records = [
+            make_record(
+                updated_user_patience=-2,
+                messages=[
+                    {"role": "tool", "tool_name": "execute_sql", "status": "success",
+                     "content": {}, "remaining_budget": 4.0, "total_budget": 12.0},
+                ],
+            ),
+            make_record(updated_user_patience=None),
+        ]
+        stats = _compute_stats(records)
+        assert stats.avg_budget_remaining == 4.0
+
     def test_missing_fields_default_to_zero(self):
         stats = _compute_stats([{"execution_accuracy": False}])
         assert stats.avg_input_tokens == 0.0
         assert stats.avg_output_tokens == 0.0
         assert stats.avg_cost == 0.0
+
+    def test_truncated_records_counted_from_message_finish_reason(self):
+        """Conversations with an AI message cut off by the max-model-len cap
+        (finish_reason='length') must be counted — derived on-read from the
+        per-message field, so old runs without record-level flags are covered."""
+        records = [
+            make_record(
+                messages=[
+                    {"role": "ai", "finish_reason": "stop"},
+                    {"role": "ai", "finish_reason": "length"},
+                ]
+            ),
+            make_record(
+                messages=[{"role": "ai", "finish_reason": "tool_calls"}]
+            ),
+        ]
+        stats = _compute_stats(records)
+        assert stats.n_truncated == 1
+        assert stats.truncated_fraction == pytest.approx(0.5)
+
+    def test_no_truncation_defaults_to_zero(self):
+        stats = _compute_stats([make_record()])
+        assert stats.n_truncated == 0
+        assert stats.truncated_fraction == 0.0
+
+
+# ── classify_submit_error ──────────────────────────────────────────────────────
+
+class TestClassifySubmitError:
+    def _rec(self, message, passed=False):
+        return {
+            "execution_accuracy": passed,
+            "messages": [
+                {"role": "tool", "tool_name": "submit_sql", "status": "success",
+                 "content": {"passed": passed, "message": message}},
+            ],
+        }
+
+    def test_target_error_wins_over_empty_query_words(self):
+        # A target-side failure is a dataset problem even when the underlying
+        # DB error happens to mention an empty query.
+        rec = self._rec(
+            "[TARGET ERROR] DatabaseError executing submitted SQL: "
+            "can't execute an empty query"
+        )
+        assert classify_submit_error(rec) == "Target Error"
+
+    def test_prediction_empty_query(self):
+        rec = self._rec(
+            "[PREDICTION ERROR] DatabaseError executing submitted SQL: "
+            "can't execute an empty query"
+        )
+        assert classify_submit_error(rec) == "Empty Query"
+
+    def test_empty_and_query_words_apart_do_not_mean_empty_query(self):
+        rec = self._rec("Your SQL is not correct. The query returned an empty result set.")
+        assert classify_submit_error(rec) == "Wrong SQL"
 
 
 # ── list_runs ──────────────────────────────────────────────────────────────────
@@ -252,9 +359,9 @@ class TestLoadRun:
 
     def test_malformed_lines_counted(self, tmp_path):
         content = (
-            json.dumps(make_record()) + "\n"
+            json.dumps(make_record(instance_id="t1")) + "\n"
             + "NOT JSON\n"
-            + json.dumps(make_record()) + "\n"
+            + json.dumps(make_record(instance_id="t2")) + "\n"
         )
         (tmp_path / "results_smaller.jsonl").write_text(content, encoding="utf-8")
         run = load_run(tmp_path)
@@ -268,11 +375,32 @@ class TestLoadRun:
         assert run.config == {}
 
     def test_stats_computed(self, tmp_path):
-        records = [make_record(execution_accuracy=True), make_record(execution_accuracy=False)]
+        records = [
+            make_record(execution_accuracy=True, instance_id="t1"),
+            make_record(execution_accuracy=False, instance_id="t2"),
+        ]
         self._write_jsonl(tmp_path / "results_smaller.jsonl", records)
         run = load_run(tmp_path)
         assert run.stats.n_total == 2
         assert run.stats.n_passed == 1
+
+    def test_duplicate_instance_iteration_pairs_deduped(self, tmp_path):
+        # A resume/recover double-write must not silently count as an extra
+        # sample (it would inflate pass@1 / pass@k / reliability).
+        rec = make_record(iteration=0)
+        self._write_jsonl(tmp_path / "results_iter0.jsonl", [rec, rec])
+        run = load_run(tmp_path)
+        assert len(run.records) == 1
+        assert run.duplicate_count == 1
+        assert run.stats.n_total == 1
+        assert len(run.groups["test_001"]) == 1
+
+    def test_same_instance_across_iterations_not_deduped(self, tmp_path):
+        self._write_jsonl(tmp_path / "results_iter0.jsonl", [make_record(iteration=0)])
+        self._write_jsonl(tmp_path / "results_iter1.jsonl", [make_record(iteration=1)])
+        run = load_run(tmp_path)
+        assert len(run.records) == 2
+        assert run.duplicate_count == 0
 
 
 # ── join_runs ──────────────────────────────────────────────────────────────────

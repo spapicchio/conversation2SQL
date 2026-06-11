@@ -60,7 +60,7 @@ def test_resolve_profile_qwen_non_thinking():
 def test_resolve_profile_default_thinking_per_model():
     qwen = resolve_profile("qwen35", enable_thinking=None)
     assert qwen[qwen.index("--predictor_temperature") + 1] == "0.6"
-    gemma = resolve_profile("gemma4", enable_thinking=None)
+    gemma = resolve_profile("gemma4-12B", enable_thinking=None)
     assert gemma[gemma.index("--predictor_top_k") + 1] == "64"
 
 
@@ -87,7 +87,7 @@ def test_expand_presets_allows_none_selectors():
 
 def test_resolve_effective_thinking_uses_profile_default():
     assert resolve_effective_thinking("qwen35", None) is True
-    assert resolve_effective_thinking("gemma4", None) is False
+    assert resolve_effective_thinking("gemma4-12B", None) is True
     assert resolve_effective_thinking("qwen35", False) is False
 
 
@@ -97,7 +97,7 @@ def test_resolve_server_args_qwen_thinking():
         "--tensor-parallel-size", "1",
         "--data-parallel-size", "1",
         "--reasoning-parser", "qwen3",
-        "--default-chat-template-kwargs", '{"enable_thinking": true}',
+        "--chat-template", "/bw/bash_scripts/utils/tool_chat_template_qwen35.jinja",
         "--language-model-only",
     ]
 
@@ -109,12 +109,31 @@ def test_resolve_server_args_qwen_non_thinking_flips_json():
 
 
 def test_resolve_server_args_gemma_joins_chat_template_and_limits_mm():
-    args = resolve_server_args("gemma4", enable_thinking=None, tp=1, dp=1, base_work="/bw")
+    args = resolve_server_args("gemma4-12B", enable_thinking=None, tp=1, dp=1, base_work="/bw")
     assert args[args.index("--chat-template") + 1] == (
         "/bw/bash_scripts/utils/tool_chat_template_gemma4.jinja"
     )
     assert args[args.index("--limit-mm-per-prompt") + 1] == '{"image": 0, "audio": 0}'
     assert "--language-model-only" not in args
+
+
+def test_resolve_server_args_gemma_26b_a4b_matches_gemma_family():
+    # MoE variant shares the gemma4 server family: same parsers + chat template.
+    args = resolve_server_args("gemma4-26B-A4B", enable_thinking=None, tp=1, dp=1, base_work="/bw")
+    assert args[args.index("--reasoning-parser") + 1] == "gemma4"
+    assert args[args.index("--chat-template") + 1] == (
+        "/bw/bash_scripts/utils/tool_chat_template_gemma4.jinja"
+    )
+    assert args[args.index("--limit-mm-per-prompt") + 1] == '{"image": 0, "audio": 0}'
+    assert "--language-model-only" not in args
+
+
+def test_resolve_server_args_gemma_26b_a4b_tool_baseline_adds_tool_calling_flags():
+    args = resolve_server_args(
+        "gemma4-26B-A4B", enable_thinking=None, tp=1, dp=1, base_work="/bw", baseline="bird_full"
+    )
+    assert "--enable-auto-tool-choice" in args
+    assert args[args.index("--tool-call-parser") + 1] == "gemma4"
 
 
 def test_resolve_server_args_unknown_profile_lists_valid_keys():
@@ -145,12 +164,13 @@ def test_resolve_server_args_qwen_no_tool_omits_tool_calling_flags():
     assert "--tool-call-parser" not in args
 
 
-def test_resolve_server_args_gemma_tool_baseline_has_no_parser_so_no_flags():
-    # gemma4 declares no tool_call_parser, so tool baselines don't add flags.
+def test_resolve_server_args_gemma_tool_baseline_adds_tool_calling_flags():
+    # gemma4-12B declares tool_call_parser="gemma4", so tool baselines add the flags.
     args = resolve_server_args(
-        "gemma4", enable_thinking=None, tp=1, dp=1, base_work="/bw", baseline="bird_full"
+        "gemma4-12B", enable_thinking=None, tp=1, dp=1, base_work="/bw", baseline="bird_full"
     )
-    assert "--enable-auto-tool-choice" not in args
+    assert "--enable-auto-tool-choice" in args
+    assert args[args.index("--tool-call-parser") + 1] == "gemma4"
 
 
 # --- profile_for_model_name ------------------------------------------------

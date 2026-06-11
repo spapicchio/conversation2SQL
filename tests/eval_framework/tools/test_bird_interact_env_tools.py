@@ -31,6 +31,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import (
 )
 from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
     PSQL_GUARDRAIL_REFUSAL,
+    apply_column_comments_impl,
 )
 
 
@@ -773,6 +774,19 @@ class TestPsqlConsoleImpl:
         assert out.endswith(env_tools.TRUNCATION_NOTICE)
         assert len(out) == env_tools.MAX_RESULT_LENGTH + len(env_tools.TRUNCATION_NOTICE)
 
+    def test_meta_command_output_is_not_truncated(self):
+        # \dt (and other backslash meta-commands) list table/schema *names* —
+        # truncating would drop names off the end of the listing, so the full
+        # output must come through untouched even past MAX_RESULT_LENGTH.
+        big = "x" * (env_tools.MAX_RESULT_LENGTH + 50)
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=big, stderr=""),
+        ):
+            out = psql_console_impl("\\dt", db_dsn="dsn")
+        assert out == big
+        assert env_tools.TRUNCATION_NOTICE not in out
+
 
 def test_psql_console_select_real_db():
     db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
@@ -781,10 +795,9 @@ def test_psql_console_select_real_db():
 
 
 def test_psql_console_dt_real_db():
-    # Filter to one table so the match is not lost to MAX_RESULT_LENGTH
-    # truncation of the full alphabetical table list.
+    # \dt is a meta-command, so its full table listing is returned untruncated.
     db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
-    out = psql_console_impl("\\dt plants", db_dsn)
+    out = psql_console_impl("\\dt", db_dsn)
     assert "plants" in out
 
 
@@ -792,4 +805,91 @@ def test_psql_console_write_rejected_by_readonly_real_db():
     db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
     out = psql_console_impl("CREATE TABLE _should_not_exist (id int);", db_dsn)
     assert "read-only" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# apply_column_comments_impl
+# ---------------------------------------------------------------------------
+class TestApplyColumnCommentsImpl:
+    """apply_column_comments_impl writes COMMENT ON COLUMN to the DB so that
+    \\d+ shows column descriptions, closing the gap with get_table_schema."""
+
+    def test_issues_comment_on_column_for_each_valid_key(self):
+        """One COMMENT ON COLUMN execute call per valid db|table|column key,
+        then a single commit."""
+        from conversation2sql.eval_framework.state import ColumnMeaningEntry
+        from unittest.mock import MagicMock, patch
+
+        column_meanings = {
+            "mydb|users|id": ColumnMeaningEntry(column_meaning="primary key"),
+            "mydb|orders|total": ColumnMeaningEntry(column_meaning="order total"),
+        }
+
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(env_tools.psycopg2, "connect", return_value=mock_conn):
+            apply_column_comments_impl("dsn://x", column_meanings)
+
+        assert mock_cur.execute.call_count == 2
+        # Each call must carry the column meaning as the SQL parameter.
+        params = [c[0][1] for c in mock_cur.execute.call_args_list]
+        assert ("primary key",) in params
+        assert ("order total",) in params
+        mock_conn.commit.assert_called_once()
+        mock_conn.close.assert_called_once()
+
+    def test_skips_keys_with_wrong_format(self):
+        """Keys that are not in db|table|column form are ignored silently —
+        malformed entries in the JSON must not crash the setup step."""
+        from conversation2sql.eval_framework.state import ColumnMeaningEntry
+        from unittest.mock import MagicMock, patch
+
+        column_meanings = {
+            "not_a_valid_key": ColumnMeaningEntry(column_meaning="ignored"),
+            "only|two": ColumnMeaningEntry(column_meaning="also ignored"),
+        }
+
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(env_tools.psycopg2, "connect", return_value=mock_conn):
+            apply_column_comments_impl("dsn://x", column_meanings)
+
+        mock_cur.execute.assert_not_called()
+        mock_conn.commit.assert_called_once()
+
+    def test_empty_dict_commits_with_no_execute_calls(self):
+        """Empty column_meanings: connect, do nothing, commit, close."""
+        from unittest.mock import MagicMock, patch
+
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(env_tools.psycopg2, "connect", return_value=mock_conn):
+            apply_column_comments_impl("dsn://x", {})
+
+        mock_cur.execute.assert_not_called()
+        mock_conn.commit.assert_called_once()
+
+
+def test_apply_column_comments_visible_in_psql_describe_real_db():
+    """Integration: after applying a comment, \\d+ <table> shows the description."""
+    from conversation2sql.eval_framework.state import ColumnMeaningEntry
+
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    test_meanings = {
+        "solar_panel|plants|sitekey": ColumnMeaningEntry(
+            column_meaning="unique site identifier"
+        )
+    }
+    apply_column_comments_impl(db_dsn, test_meanings)
+    out = psql_console_impl("\\d+ plants", db_dsn)
+    assert "unique site identifier" in out
 

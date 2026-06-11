@@ -96,6 +96,28 @@ class TestDeriveStatus:
         (d / "results_error.jsonl").write_text("{}\n")
         assert derive_status(d, _cfg(), n_present=3) == "error"
 
+    def test_error_cleared_when_all_errored_pairs_recovered(self, tmp_path):
+        # `just recover` re-runs errored instances but leaves results_error.jsonl
+        # behind; once every errored (instance, iteration) pair is present in the
+        # results, the run is no longer in an error state.
+        d = tmp_path / "run"
+        d.mkdir()
+        (d / "results_error.jsonl").write_text(
+            json.dumps({"instance_id": "a", "iteration": 0, "error": "boom"}) + "\n"
+        )
+        records = [{"instance_id": "a", "iteration": 0}]
+        cfg = _cfg(pipeline={"num_iterations": 1})
+        assert derive_status(d, cfg, n_present=1, records=records) == "done"
+
+    def test_error_kept_when_errored_pair_still_missing(self, tmp_path):
+        d = tmp_path / "run"
+        d.mkdir()
+        (d / "results_error.jsonl").write_text(
+            json.dumps({"instance_id": "a", "iteration": 0, "error": "boom"}) + "\n"
+        )
+        cfg = _cfg(pipeline={"num_iterations": 1})
+        assert derive_status(d, cfg, n_present=1, records=[]) == "error"
+
     def test_done_when_all_iterations_present(self, tmp_path):
         d = tmp_path / "run"
         d.mkdir()
