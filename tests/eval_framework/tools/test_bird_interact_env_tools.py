@@ -170,37 +170,18 @@ class TestExecuteSqlImpl:
         assert response.error is not None
         assert "syntax bad" in response.error
 
-    def test_long_result_is_truncated_to_max_length(self):
-        """Result truncation is enforced so the agent's context cannot be
-        flooded by huge result sets. The body is cut to exactly
-        MAX_RESULT_LENGTH chars (catches a regression where truncation
-        becomes a no-op) and an explicit notice is appended so the agent
-        knows the cut happened rather than mistaking it for a failed query."""
-        # Pick a length strictly larger than the cap so we can detect a
-        # missing truncation step (it would leave the surplus 100 chars).
-        long_text = "x" * (env_tools.MAX_RESULT_LENGTH + 100)
+    def test_result_is_returned_verbatim_from_format_result(self):
+        """Row-aware truncation now lives entirely inside ``_format_result``;
+        ``execute_sql_impl`` must pass that string through untouched (no extra
+        character-level cut layered on top)."""
+        formatted = "| id |\n| --- |\n| 1 |"
         with (
             patch.object(env_tools, "_execute_query", return_value=("ignored", None)),
-            patch.object(env_tools, "_format_result", return_value=long_text),
+            patch.object(env_tools, "_format_result", return_value=formatted),
         ):
             response = execute_sql_impl("SELECT 1;", db_dsn="dsn")
         assert response.success is True
-        # Body cut to the cap, then the truncation notice appended.
-        assert response.result == long_text[: env_tools.MAX_RESULT_LENGTH] + env_tools.TRUNCATION_NOTICE
-
-    def test_short_result_is_not_marked_as_truncated(self):
-        """The truncation notice must be appended *only* when the output is
-        actually cut — a result at or under the cap is returned verbatim so
-        the agent never sees a spurious "truncated" message."""
-        short_text = "x" * (env_tools.MAX_RESULT_LENGTH - 1)
-        with (
-            patch.object(env_tools, "_execute_query", return_value=("ignored", None)),
-            patch.object(env_tools, "_format_result", return_value=short_text),
-        ):
-            response = execute_sql_impl("SELECT 1;", db_dsn="dsn")
-        assert response.success is True
-        assert response.result == short_text
-        assert env_tools.TRUNCATION_NOTICE not in response.result
+        assert response.result == formatted
 
 
 # ---------------------------------------------------------------------------
@@ -237,14 +218,44 @@ class TestFormatResult:
         assert "'" not in cell
         assert json.loads(cell) == [{"station": "Observatory", "aoi": 0.0146324}]
 
-    def test_cells_are_truncated_to_max_characters(self):
-        """The per-cell cap still applies after JSON serialisation."""
+    def test_cells_are_not_truncated(self):
+        """Width is intentionally unbounded so ``execute_sql`` and
+        ``psql_console`` output stay comparable: a long text/JSON cell renders
+        in full rather than being clipped to a per-cell cap."""
         result = [{"blob": {"k": "y" * 500}}]
         desc = (("blob",),)
-        out = utils_db_execute._format_result(result, desc, max_characters=20)
-        # Strip the "| " / " |" pipe wrapping to recover the raw cell.
+        out = utils_db_execute._format_result(result, desc)
         cell = out.split("\n")[2].removeprefix("| ").removesuffix(" |")
-        assert len(cell) == 20
+        assert cell == '{"k":"' + "y" * 500 + '"}'
+
+    def test_result_over_max_rows_is_row_truncated_with_note(self):
+        """Beyond ``MAX_RESULT_ROWS`` the table keeps exactly that many data
+        rows and appends a note stating the true total, so the agent sees whole
+        rows (not a mid-row character cut) and knows more rows existed."""
+        result = [{"id": i} for i in range(5)]
+        desc = (("id",),)
+        out = utils_db_execute._format_result(result, desc)
+        lines = out.split("\n")
+        # header + separator + MAX_RESULT_ROWS data rows, then the note.
+        assert lines[:2] == ["| id |", "| --- |"]
+        data_rows = [ln for ln in lines if ln.startswith("| ") and "---" not in ln and "id" not in ln]
+        assert len(data_rows) == utils_db_execute.MAX_RESULT_ROWS
+        assert f"showing first {utils_db_execute.MAX_RESULT_ROWS} of 5 rows" in out
+
+    def test_result_at_max_rows_has_no_note(self):
+        """A result at or below the row cap renders verbatim with no note."""
+        result = [{"id": i} for i in range(utils_db_execute.MAX_RESULT_ROWS)]
+        desc = (("id",),)
+        out = utils_db_execute._format_result(result, desc)
+        assert "showing first" not in out
+
+    def test_fetch_limit_total_is_reported_with_plus(self):
+        """When the row count hits the fetch cap the true total is unknown, so
+        the note reports it as ``<limit>+`` rather than an exact (capped) count."""
+        result = [{"id": i} for i in range(utils_db_execute.RESULT_FETCH_LIMIT)]
+        desc = (("id",),)
+        out = utils_db_execute._format_result(result, desc)
+        assert f"of {utils_db_execute.RESULT_FETCH_LIMIT}+ rows" in out
 
     def test_none_and_empty_results_have_dedicated_messages(self):
         assert utils_db_execute._format_result(None, ()) == "Query executed successfully."
@@ -764,28 +775,64 @@ class TestPsqlConsoleImpl:
             out = psql_console_impl("SELECT pg_sleep(99);", db_dsn="dsn")
         assert "timed out" in out.lower()
 
-    def test_long_output_is_truncated(self):
-        big = "x" * (env_tools.MAX_RESULT_LENGTH + 50)
+    def test_select_output_over_max_rows_is_row_truncated(self):
+        """Aligned SQL output is truncated by *rows*: the header, separator and
+        first ``MAX_RESULT_ROWS`` data rows are kept (so column names AND real
+        data survive), the rest is dropped, and the ``(N rows)`` footer count is
+        echoed in the note."""
+        aligned = (
+            " id | name \n"
+            "----+------\n"
+            " 1  | a    \n"
+            " 2  | b    \n"
+            " 3  | c    \n"
+            " 4  | d    \n"
+            " 5  | e    \n"
+            "(5 rows)\n"
+        )
         with patch.object(
             env_tools.subprocess, "run",
-            return_value=SimpleNamespace(returncode=0, stdout=big, stderr=""),
+            return_value=SimpleNamespace(returncode=0, stdout=aligned, stderr=""),
         ):
             out = psql_console_impl("SELECT 1;", db_dsn="dsn")
-        assert out.endswith(env_tools.TRUNCATION_NOTICE)
-        assert len(out) == env_tools.MAX_RESULT_LENGTH + len(env_tools.TRUNCATION_NOTICE)
+        lines = out.split("\n")
+        assert lines[0] == " id | name "
+        assert lines[1] == "----+------"
+        kept_data = [ln for ln in lines if ln.startswith(" ") and "|" in ln and "name" not in ln]
+        assert len(kept_data) == env_tools.MAX_RESULT_ROWS
+        assert " 4  | d    " not in out and " 5  | e    " not in out
+        assert f"showing first {env_tools.MAX_RESULT_ROWS} of 5 rows" in out
+
+    def test_select_output_at_or_under_max_rows_is_untouched(self):
+        """A result with no more than ``MAX_RESULT_ROWS`` rows is returned
+        verbatim (footer and all) — no note."""
+        aligned = (
+            " id \n"
+            "----\n"
+            " 1  \n"
+            " 2  \n"
+            "(2 rows)\n"
+        )
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=aligned, stderr=""),
+        ):
+            out = psql_console_impl("SELECT 1;", db_dsn="dsn")
+        assert out == aligned
+        assert "showing first" not in out
 
     def test_meta_command_output_is_not_truncated(self):
         # \dt (and other backslash meta-commands) list table/schema *names* —
         # truncating would drop names off the end of the listing, so the full
-        # output must come through untouched even past MAX_RESULT_LENGTH.
-        big = "x" * (env_tools.MAX_RESULT_LENGTH + 50)
+        # output must come through untouched however many rows it lists.
+        big = "\n".join(f" t{i} " for i in range(50)) + "\n(50 rows)\n"
         with patch.object(
             env_tools.subprocess, "run",
             return_value=SimpleNamespace(returncode=0, stdout=big, stderr=""),
         ):
             out = psql_console_impl("\\dt", db_dsn="dsn")
         assert out == big
-        assert env_tools.TRUNCATION_NOTICE not in out
+        assert "showing first" not in out
 
 
 def test_psql_console_select_real_db():
@@ -816,7 +863,7 @@ class TestApplyColumnCommentsImpl:
 
     def test_issues_comment_on_column_for_each_valid_key(self):
         """One COMMENT ON COLUMN execute call per valid db|table|column key,
-        then a single commit."""
+        wrapped in a savepoint pair, then a single commit."""
         from conversation2sql.eval_framework.state import ColumnMeaningEntry
         from unittest.mock import MagicMock, patch
 
@@ -833,11 +880,14 @@ class TestApplyColumnCommentsImpl:
         with patch.object(env_tools.psycopg2, "connect", return_value=mock_conn):
             apply_column_comments_impl("dsn://x", column_meanings)
 
-        assert mock_cur.execute.call_count == 2
-        # Each call must carry the column meaning as the SQL parameter.
-        params = [c[0][1] for c in mock_cur.execute.call_args_list]
-        assert ("primary key",) in params
-        assert ("order total",) in params
+        # Each column: SAVEPOINT sp + COMMENT ON COLUMN + RELEASE SAVEPOINT = 3 calls.
+        assert mock_cur.execute.call_count == 6
+        # Extract only the parameterised COMMENT calls (those with a tuple second arg).
+        comment_params = [
+            c[0][1] for c in mock_cur.execute.call_args_list if len(c[0]) == 2
+        ]
+        assert ("primary key",) in comment_params
+        assert ("order total",) in comment_params
         mock_conn.commit.assert_called_once()
         mock_conn.close.assert_called_once()
 
@@ -892,4 +942,32 @@ def test_apply_column_comments_visible_in_psql_describe_real_db():
     apply_column_comments_impl(db_dsn, test_meanings)
     out = psql_console_impl("\\d+ plants", db_dsn)
     assert "unique site identifier" in out
+
+
+# ---------------------------------------------------------------------------
+# _safe_instance_prefix
+# ---------------------------------------------------------------------------
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
+    _safe_instance_prefix,
+)
+
+def test_safe_instance_prefix_simple():
+    assert _safe_instance_prefix("solar_panel_m_5") == "solar_panel_m_5"
+
+def test_safe_instance_prefix_hyphens_and_dots():
+    assert _safe_instance_prefix("alien-db.task.1") == "alien_db_task_1"
+
+def test_safe_instance_prefix_uppercase():
+    assert _safe_instance_prefix("SolarPanel_M_5") == "solarpanel_m_5"
+
+def test_safe_instance_prefix_truncation():
+    long_id = "a" * 50
+    result = _safe_instance_prefix(long_id)
+    assert len(result) == 30
+    assert result == "a" * 30
+
+def test_safe_instance_prefix_default_max_len():
+    # default max_len is 30
+    result = _safe_instance_prefix("x" * 31)
+    assert len(result) == 30
 

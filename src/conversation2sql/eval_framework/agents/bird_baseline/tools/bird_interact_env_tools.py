@@ -28,6 +28,7 @@ Cost summary (mirrors the original prompt):
     get_all_knowledge_definitions    → 1 patience
 """
 
+from conversation2sql.logger import get_logger
 import json
 import os
 import re
@@ -40,10 +41,13 @@ from langgraph.prebuilt import ToolRuntime
 from pydantic import BaseModel
 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
+from conversation2sql.eval_framework.agents.bird_baseline.tools.tool_specs import ToolSpec
 from conversation2sql.eval_framework.agents.bird_baseline.tools.utils import remove_comments
 from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute import (
+    MAX_RESULT_ROWS,
     _execute_query,
     _format_result,
+    _more_rows_note,
 )
 from conversation2sql.eval_framework.agents.utils_kb_linearize import (
     linearize_kb,
@@ -55,37 +59,68 @@ from conversation2sql.eval_framework.state import (
     TaskData,
 )
 
-MAX_RESULT_LENGTH = 500
-
-# Appended only when the formatted result actually exceeds MAX_RESULT_LENGTH.
-# Without this, the cut is silent and the agent mistakes a successful query for
-# a broken one (it sees a row sliced mid-value and re-runs / second-guesses,
-# wasting bird-coins). The note states the query succeeded and how to see more.
-TRUNCATION_NOTICE = (
-    f"\n... [output truncated to {MAX_RESULT_LENGTH} characters; "
-    "the query ran successfully — add a LIMIT or select fewer columns to see more]"
-)
-
-DB_TOOL_COSTS: dict[str, float] = {
-    # Cost 1 to match the value advertised in the system prompt and the tool's
-    # own docstring ("Cost: 1 bird-coin"); the agent budgets against that figure,
-    # so charging 2 here desynced its budget planning and forced premature submits.
-    "execute_sql": 1.0,
-    "get_schema": 1.0,
-    "get_table_names": 0.5,
-    "get_table_schema": 0.5,
-    "get_all_column_meanings": 1.0,
-    "get_column_meaning": 0.5,
-    "get_all_external_knowledge_names": 0.5,
-    "get_knowledge_definition": 0.5,
-    "get_all_knowledge_definitions": 1.0,
+# Single source of truth for each DB tool's cost + prompt summary. The cost is
+# stamped onto the tool's schema description (via stamp_cost_in_descriptions) and
+# the summary is rendered in the agent prompt's tool list, so neither can drift.
+# DB_TOOL_COSTS is derived below for the legacy callers (middleware, metrics).
+DB_TOOL_SPECS: dict[str, ToolSpec] = {
+    # Cost 1 to match the value the agent budgets against; charging 2 here
+    # desynced its budget planning and forced premature submits.
+    "execute_sql": ToolSpec("execute_sql", 1.0, "execute a PostgreSQL query"),
+    "get_schema": ToolSpec("get_schema", 1.0, "get the full database schema"),
+    "get_table_names": ToolSpec(
+        "get_table_names", 0.5, "list all table names in the database"
+    ),
+    "get_table_schema": ToolSpec(
+        "get_table_schema",
+        0.5,
+        "get one table's schema (CREATE TABLE, sample rows, and foreign keys to joinable tables)",
+    ),
+    "get_all_column_meanings": ToolSpec(
+        "get_all_column_meanings", 1.0, "get all column meanings"
+    ),
+    "get_column_meaning": ToolSpec(
+        "get_column_meaning", 0.5, "get the meaning of one column"
+    ),
+    "get_all_external_knowledge_names": ToolSpec(
+        "get_all_external_knowledge_names", 0.5, "get all external knowledge names"
+    ),
+    "get_knowledge_definition": ToolSpec(
+        "get_knowledge_definition",
+        0.5,
+        "get one external knowledge definition along with the knowledge it depends on (its prerequisites)",
+    ),
+    "get_all_knowledge_definitions": ToolSpec(
+        "get_all_knowledge_definitions", 1.0, "get all external knowledge definitions"
+    ),
     # Single read-only psql terminal tool (ablation). Replaces the four DB
     # tools above when enable_psql_console is set; flat cost like execute_sql.
-    "psql_console": 0.5,
+    "psql_console": ToolSpec(
+        "psql_console",
+        1.0,
+        "run ONE PostgreSQL statement or one read-only psql meta-command. Read-only session",
+    ),
+}
+
+DB_TOOL_COSTS: dict[str, float] = {
+    name: spec.cost for name, spec in DB_TOOL_SPECS.items()
 }
 
 KNOWLEDGE_VISIBLE_FIELDS = ["id", "knowledge", "description", "definition"]
 
+
+def _safe_instance_prefix(instance_id: str, max_len: int = 30) -> str:
+    """Return a SQL-safe prefix derived from instance_id for UDF namespacing.
+
+    Lowercases and replaces any character outside [a-z0-9] with '_', then
+    truncates to max_len. max_len=30 leaves ≥32 chars for '_<function_name>'
+    within PostgreSQL's 63-char identifier limit.
+    """
+    safe = re.sub(r"[^a-z0-9]", "_", instance_id.lower())
+    return safe[:max_len]
+
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -144,14 +179,39 @@ def _is_psql_meta_command(command: str) -> bool:
     """True if ``command`` is a psql backslash meta-command (``\\dt``, ``\\d``,
     ``\\l``, ``\\df`` …) rather than a SQL query.
 
-    Schema-inspection meta-commands list table/column/function *names*, so a
-    500-char cut would silently drop names off the end of the listing (the agent
+    Schema-inspection meta-commands list table/column/function *names*, so row
+    truncation would silently drop names off the end of the listing (the agent
     then can't see tables it needs). Only SQL queries — which can return
     arbitrarily many data rows — are truncated. Detection mirrors how psql
     dispatches: the first non-blank character being a backslash makes it a
     meta-command (a ``SELECT … \\g`` still starts with SQL and stays truncatable).
     """
     return command.lstrip().startswith("\\")
+
+
+# psql's aligned output ends with a "(N rows)" footer; we read N for the note.
+_PSQL_ROWCOUNT_RE = re.compile(r"^\((\d+) rows?\)", re.MULTILINE)
+
+
+def _truncate_psql_output(output: str, max_rows: int = MAX_RESULT_ROWS) -> str:
+    """Row-truncate psql's aligned SQL output, mirroring ``_format_result``.
+
+    Keeps the 2 header lines (column header + ``---+---`` separator) plus the
+    first ``max_rows`` data rows, then appends the shared "more rows" note with
+    the true total parsed from psql's ``(N rows)`` footer. Width is left
+    unbounded so this stays comparable with ``execute_sql``. If the footer is
+    absent (an error, EXPLAIN-less output, …) or the result already fits, the
+    output is returned unchanged.
+    """
+    match = _PSQL_ROWCOUNT_RE.search(output)
+    if match is None:
+        return output
+    total = int(match.group(1))
+    if total <= max_rows:
+        return output
+    lines = output.split("\n")
+    kept = lines[: 2 + max_rows]
+    return "\n".join(kept) + _more_rows_note(str(total))
 
 
 def psql_console_impl(command: str, db_dsn: str) -> str:
@@ -174,8 +234,8 @@ def psql_console_impl(command: str, db_dsn: str) -> str:
         return f"Error: psql timed out after {PSQL_TIMEOUT_S}s."
 
     output = proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)
-    if not _is_psql_meta_command(command) and len(output) > MAX_RESULT_LENGTH:
-        output = output[:MAX_RESULT_LENGTH] + TRUNCATION_NOTICE
+    if not _is_psql_meta_command(command):
+        output = _truncate_psql_output(output)
     return output
 
 
@@ -201,13 +261,22 @@ def apply_column_comments_impl(
                 if len(parts) != 3:
                     continue
                 _, table, column = parts
-                cur.execute(
-                    pgsql.SQL("COMMENT ON COLUMN {}.{} IS %s").format(
-                        pgsql.Identifier(table),
-                        pgsql.Identifier(column),
-                    ),
-                    (entry.column_meaning,),
-                )
+                try:
+                    cur.execute("SAVEPOINT sp")
+                    cur.execute(
+                        pgsql.SQL("COMMENT ON COLUMN {}.{} IS %s").format(
+                            pgsql.Identifier(table),
+                            pgsql.Identifier(column),
+                        ),
+                        (entry.column_meaning,),
+                    )
+                    cur.execute("RELEASE SAVEPOINT sp")
+                except psycopg2.Error as exc:
+                    cur.execute("ROLLBACK TO SAVEPOINT sp")
+                    cur.execute("RELEASE SAVEPOINT sp")
+                    logger.warning(
+                        f"Failed to apply comment for {table}.{column}: {exc}"
+                    )
         conn.commit()
     finally:
         conn.close()
@@ -227,9 +296,8 @@ def execute_sql_impl(sql: str, db_dsn: str) -> ExecuteSQLResponse:
 
     try:
         result, desc = _execute_query(query=sql, db_dsn=db_dsn)
+        # _format_result handles row-based truncation + the "more rows" note.
         format_result = _format_result(result, desc)
-        if len(format_result) > MAX_RESULT_LENGTH:
-            format_result = format_result[:MAX_RESULT_LENGTH] + TRUNCATION_NOTICE
         return ExecuteSQLResponse(
             result=format_result,
             success=True,
@@ -382,7 +450,6 @@ def get_all_knowledge_definitions_impl(
 def execute_sql(sql: str, runtime: ToolRuntime[TaskData, CustomAgentState]) -> str:
     """Execute a SQL query against the PostgreSQL database and return the results.
     Use this to explore the database, test queries, or verify your SQL before submitting.
-    Cost: 1 bird-coin.
 
     Args:
         sql: The PostgreSQL SQL query to execute.
@@ -402,8 +469,6 @@ def execute_sql(sql: str, runtime: ToolRuntime[TaskData, CustomAgentState]) -> s
 @tool
 def get_schema(runtime: ToolRuntime[TaskData, CustomAgentState]) -> str:
     """Get the full database schema (CREATE TABLE statements) for the current task's database.
-    Cost: 1 bird-coin.
-
     Returns:
         The database schema as text.
     """
@@ -417,8 +482,7 @@ def get_schema(runtime: ToolRuntime[TaskData, CustomAgentState]) -> str:
 def get_table_names(runtime: ToolRuntime[TaskData, CustomAgentState]) -> str:
     """List the names of all tables in the current task's database.
     Use this to discover which tables exist before fetching a specific one's
-    schema with get_table_schema. Cost: 0.5 bird-coins.
-
+    schema with get_table_schema.
     Returns:
         JSON list of table names.
     """
@@ -435,7 +499,7 @@ def get_table_schema(
     """Get the schema of a single table: its CREATE TABLE statement, a few
     sample rows, and the foreign-key constraints linking it to other tables
     (both the ones it references and the ones referencing it, so you can see
-    which tables are joinable). Cost: 0.5 bird-coins.
+    which tables are joinable).
 
     Args:
         table_name: Name of the table to fetch.
@@ -462,24 +526,26 @@ def psql_console(command: str, runtime: ToolRuntime[TaskData, CustomAgentState])
     1. A SQL query — SELECT / WITH / EXPLAIN. The session is READ-ONLY, so
        INSERT / UPDATE / DELETE / CREATE / DROP and other writes are rejected by
        the server. Use this to test and verify a query before submit_sql.
-    2. A single psql backslash meta-command for schema exploration:
-         \\dt           list all tables
-         \\d <table>    describe one table: columns, types, indexes, foreign keys
-         \\l            list databases
-         \\df           list functions
-         \\dn           list schemas
-       (broader \\d+ / \\d <pattern> forms also work).
-
-    Typical flow: \\dt to see tables → \\d <table> to learn a table's columns and
-    keys → a SELECT to inspect real values → submit_sql. Host shell / filesystem
-    meta-commands (\\!, \\copy, \\o, \\i, \\e, \\w, \\s) are blocked. Cost: 1 bird-coin.
-
+    2. You can inspect the schema with psql's backslash meta-commands. 
+    You can also run \\d+ <table> to get the description of the columns with their comments (meanings).
     Args:
         command: One SQL statement OR one psql backslash meta-command.
 
     Returns:
         The psql output on success, or the error message on failure.
     """
+    #     2. A single psql backslash meta-command for schema exploration:
+    #      \\dt           list all tables
+    #      \\d <table>    describe one table: columns, types, indexes, foreign keys
+    #      \\l            list databases
+    #      \\df           list functions
+    #      \\dn           list schemas
+    #    (broader \\d+ / \\d <pattern> forms also work).
+
+    # Typical flow: \\dt to see tables → \\d <table> to learn a table's columns and
+    # keys → a SELECT to inspect real values → submit_sql. Host shell / filesystem
+    # meta-commands (\\!, \\copy, \\o, \\i, \\e, \\w, \\s) are blocked.
+
     return psql_console_impl(command=command, db_dsn=runtime.context.db_dsn)
 
 
@@ -489,8 +555,6 @@ def psql_console(command: str, runtime: ToolRuntime[TaskData, CustomAgentState])
 @tool
 def get_all_column_meanings(runtime: ToolRuntime[TaskData, CustomAgentState]) -> str:
     """Get the meanings/descriptions of all columns in the database.
-    Cost: 1 bird-coin.
-
     Returns:
         JSON string with column meanings for all tables.
     """
@@ -505,8 +569,6 @@ def get_column_meaning(
         table_name: str, column_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
 ) -> str:
     """Get the meaning/description of a specific column in a table.
-    Cost: 0.5 bird-coins.
-
     Args:
         table_name: Name of the table.
         column_name: Name of the column.
@@ -536,8 +598,6 @@ def get_all_external_knowledge_names(
 ) -> str:
     """Get the names of all available external knowledge entries for this database.
     Use this to discover what domain knowledge is available.
-    Cost: 0.5 bird-coins.
-
     Returns:
         JSON list of knowledge entry names.
     """
@@ -555,7 +615,6 @@ def get_knowledge_definition(
     """Get the definition/details of a specific external knowledge entry.
     When the KB is linearized, this also returns the entry's transitive
     prerequisites (the knowledge it depends on) and their dependency edges.
-    Cost: 0.5 bird-coins.
 
     Args:
         knowledge_name: The name of the knowledge entry to look up.
@@ -581,7 +640,10 @@ def get_knowledge_definition(
 def get_all_knowledge_definitions(
         runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
-    """Return all external knowledge with definitions (cost: 1 patience)."""
+    """Return all external knowledge with definitions.
+    Returns:
+        JSON string with all knowledge entries and their definitions.
+    """
     if runtime.context.is_kb_linearized:
         flat = linearize_kb(runtime.context.masked_agent_kb)
         return json.dumps({"knowledge": flat}, indent=2)
