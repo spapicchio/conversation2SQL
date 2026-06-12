@@ -103,6 +103,11 @@ DB_TOOL_SPECS: dict[str, ToolSpec] = {
         1.0,
         "run ONE PostgreSQL statement or one read-only psql meta-command. Read-only session",
     ),
+    "create_python_udf": ToolSpec(
+        "create_python_udf",
+        1.0,
+        "create a PostgreSQL Python UDF (plpython3u) for complex formulas; returns the callable function name",
+    ),
 }
 
 DB_TOOL_COSTS: dict[str, float] = {
@@ -627,6 +632,59 @@ def psql_console(command: str, runtime: ToolRuntime[TaskData, CustomAgentState])
     # meta-commands (\\!, \\copy, \\o, \\i, \\e, \\w, \\s) are blocked.
 
     return psql_console_impl(command=command, db_dsn=runtime.context.db_dsn)
+
+
+@tool
+def create_python_udf(
+    function_name: str,
+    parameters: list[UDFParameter],
+    return_type: str,
+    python_body: str,
+    runtime: ToolRuntime[TaskData, CustomAgentState],
+) -> str:
+    """Create a PostgreSQL Python (plpython3u) user-defined function and return
+    its callable name. Use it to implement formulas that are hard to express in
+    pure SQL, then call the returned name inside execute_sql or psql_console.
+
+    Args:
+        function_name: Desired function name (auto-prefixed for isolation).
+        parameters: List of {name, pg_type} parameter definitions.
+        return_type: PostgreSQL return type of the function.
+        python_body: Python code body ending with `return <value>`.
+            The body runs inside PostgreSQL via plpython3u.
+            Import standard library modules with normal `import` statements.
+
+    PostgreSQL type → Python type mapping for parameters and return type:
+
+        PostgreSQL type              Python type inside body
+        ----------------------------------------------------
+        INTEGER / SMALLINT           int
+        BIGINT                       int
+        REAL / FLOAT4                float
+        DOUBLE PRECISION / FLOAT8    float
+        NUMERIC / DECIMAL            decimal.Decimal  (import decimal)
+        TEXT / VARCHAR / CHAR        str
+        BOOLEAN                      bool
+        DATE                         datetime.date    (import datetime)
+        TIMESTAMP                    datetime.datetime
+        TIMESTAMPTZ                  datetime.datetime (timezone-aware)
+        BYTEA                        bytes
+        any[] (array type)           list
+        composite type               dict  (keys = column names)
+        NULL (any nullable type)     None
+
+    Returns:
+        The qualified function name to use in SELECT queries, e.g.
+        ``instance_42_my_formula``. On error returns the error message.
+    """
+    return create_python_udf_impl(
+        function_name=function_name,
+        parameters=parameters,
+        return_type=return_type,
+        python_body=python_body,
+        db_dsn=runtime.context.db_dsn,
+        instance_id=runtime.context.instance_id,
+    )
 
 
 # ---------------------------------------------------------------------------
