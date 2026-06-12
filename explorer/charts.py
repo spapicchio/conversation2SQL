@@ -160,7 +160,7 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
                 showarrow=False,
                 xanchor="left",
                 xshift=22,
-                font=dict(size=11, color="white"),
+                font=dict(size=11, color=color),
             )
 
     fig.update_layout(
