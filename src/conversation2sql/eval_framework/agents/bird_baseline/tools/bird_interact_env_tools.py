@@ -131,6 +131,12 @@ class ExecuteSQLResponse(BaseModel):
     error: str | None = None
 
 
+class UDFParameter(BaseModel):
+    """One parameter for a Python UDF: a name and its PostgreSQL type."""
+    name: str
+    pg_type: str
+
+
 # ---------------------------------------------------------------------------
 # psql_console (single read-only terminal tool — ablation)
 # ---------------------------------------------------------------------------
@@ -237,6 +243,69 @@ def psql_console_impl(command: str, db_dsn: str) -> str:
     if not _is_psql_meta_command(command):
         output = _truncate_psql_output(output)
     return output
+
+
+def create_python_udf_impl(
+    function_name: str,
+    parameters: list[UDFParameter],
+    return_type: str,
+    python_body: str,
+    db_dsn: str,
+    instance_id: str,
+) -> str:
+    """Create a plpython3u UDF in PostgreSQL and return its qualified name.
+
+    The function is registered under ``<safe_prefix>_<sanitised_name>`` where
+    ``safe_prefix`` is derived from ``instance_id`` via ``_safe_instance_prefix``,
+    ensuring parallel conversations on the same database do not collide.
+
+    Returns the qualified name on success, or the error message on failure.
+    """
+    safe_name = re.sub(r"[^a-z0-9]", "_", function_name.lower())
+    prefix = _safe_instance_prefix(instance_id)
+    qualified = f"{prefix}_{safe_name}"[:63]
+
+    param_str = ", ".join(f"{p.name} {p.pg_type}" for p in parameters)
+    ddl = (
+        f"CREATE OR REPLACE FUNCTION {qualified}({param_str}) "
+        f"RETURNS {return_type} AS $$ {python_body} $$ LANGUAGE plpython3u"
+    )
+
+    conn = psycopg2.connect(db_dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute("CREATE EXTENSION IF NOT EXISTS plpython3u")
+            cur.execute(ddl)
+        conn.commit()
+        return qualified
+    except psycopg2.DatabaseError as exc:
+        conn.rollback()
+        return f"Error: {exc}"
+    finally:
+        conn.close()
+
+
+def cleanup_python_udfs_impl(db_dsn: str, prefix: str) -> None:
+    """Drop all plpython3u UDFs whose name starts with ``prefix_``.
+
+    Called unconditionally after each agent run when enable_python_udf=True.
+    Uses ``pg_get_function_identity_arguments`` to build the exact DROP
+    signature so overloaded functions are handled correctly.
+    No-op when no matching functions exist.
+    """
+    conn = psycopg2.connect(db_dsn)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT proname, pg_get_function_identity_arguments(oid) "
+                "FROM pg_proc WHERE proname LIKE %s",
+                (f"{prefix}_%",),
+            )
+            for proname, args in cur.fetchall():
+                cur.execute(f"DROP FUNCTION IF EXISTS {proname}({args})")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def apply_column_comments_impl(
