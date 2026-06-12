@@ -10,9 +10,12 @@ import pandas as pd
 import streamlit as st
 
 from charts import aptitude_unreliability_box
+from charts import conversation_length_box
 from charts import disambiguate_run_labels
 from charts import reliability_explainer
+from loader import LENGTH_METRICS
 from loader import RunData
+from loader import conversation_length_split
 from loader import join_runs
 from loader import list_runs
 from loader import load_run
@@ -179,6 +182,26 @@ if rels:
     st.subheader("Reliability metrics")
     reliability_explainer()
     st.plotly_chart(aptitude_unreliability_box(rels), use_container_width=True)
+
+# Conversation-length distribution: one box per run split by pass/fail outcome.
+# The radio switches which length metric the boxes summarise.
+st.subheader(“Conversation length”)
+length_metric = st.radio(
+    “Metric”, LENGTH_METRICS, horizontal=True, key=”length_metric_compare”
+)
+length_series: dict[str, list[float]] = {}
+for label, run in runs.items():
+    split = conversation_length_split(
+        run.records, length_metric, label=_display_label[label]
+    )
+    length_series.update(split)
+if any(length_series.values()):
+    st.plotly_chart(
+        conversation_length_box(length_series, length_metric, marker_kind=”outcome”),
+        use_container_width=True,
+    )
+else:
+    st.caption(f”No “{length_metric}” data in the selected runs.”)
 
 st.divider()
 
