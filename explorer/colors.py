@@ -110,15 +110,23 @@ def stable_color(value: object, kind: str = "") -> str:
     """Return the fixed hex color for a category value.
 
     ``kind`` selects a pinned lookup (``"tool"``/``"pattern"``); ``"iteration"``
-    maps by the iteration's integer index; anything unknown (e.g. ``"run"``)
-    hashes the string. Unpinned values within a pinned kind also hash, so the
-    color is always defined.
+    maps by the iteration's integer index; ``"outcome"`` returns green for
+    passed/✓ labels and red for failed/✗ labels; anything unknown (e.g.
+    ``"run"``) hashes the string. Unpinned values within a pinned kind also
+    hash, so the color is always defined.
     """
     if kind == "iteration":
         idx = _iteration_index(value)
         if idx is not None:
             return _PALETTE[idx % len(_PALETTE)]
         return _hashed_color(str(value))
+    if kind == "outcome":
+        s = str(value)
+        if "✓" in s or "passed" in s.lower():
+            return "#2ca02c"  # green
+        if "✗" in s or "failed" in s.lower():
+            return "#d62728"  # red
+        return _hashed_color(s)
     pinned = _PINNED.get(kind)
     if pinned and str(value) in pinned:
         return pinned[str(value)]
