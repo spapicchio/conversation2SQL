@@ -34,6 +34,9 @@ import os
 import re
 import subprocess
 
+_pg_type_re = re.compile(r'^[A-Za-z0-9_ ()\[\],]+$')
+_pg_name_re = re.compile(r'^[a-z_][a-z0-9_]*$')
+
 import psycopg2
 import psycopg2.sql as pgsql
 from langchain_core.tools import tool
@@ -265,10 +268,18 @@ def create_python_udf_impl(
     prefix = _safe_instance_prefix(instance_id)
     qualified = f"{prefix}_{safe_name}"[:63]
 
+    if not _pg_type_re.match(return_type):
+        return f"Error: invalid return_type {return_type!r}"
+    for p in parameters:
+        if not _pg_name_re.match(p.name):
+            return f"Error: invalid parameter name {p.name!r}"
+        if not _pg_type_re.match(p.pg_type):
+            return f"Error: invalid parameter type {p.pg_type!r}"
+
     param_str = ", ".join(f"{p.name} {p.pg_type}" for p in parameters)
     ddl = (
         f"CREATE OR REPLACE FUNCTION {qualified}({param_str}) "
-        f"RETURNS {return_type} AS $$ {python_body} $$ LANGUAGE plpython3u"
+        f"RETURNS {return_type} AS $plpy$ {python_body} $plpy$ LANGUAGE plpython3u"
     )
 
     conn = psycopg2.connect(db_dsn)
