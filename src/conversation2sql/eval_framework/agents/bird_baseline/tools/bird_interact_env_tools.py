@@ -26,6 +26,8 @@ Cost summary (mirrors the original prompt):
     get_all_external_knowledge_names → 0.5 patience
     get_knowledge_definition         → 0.5 patience
     get_all_knowledge_definitions    → 1 patience
+    psql_console                     → 1 patience
+    create_python_udf                → 1 patience
 """
 
 from conversation2sql.logger import get_logger

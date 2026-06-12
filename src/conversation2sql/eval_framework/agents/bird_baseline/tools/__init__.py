@@ -25,6 +25,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_en
     ExecuteSQLResponse,
     UDFParameter,
     apply_column_comments_impl,
+    cleanup_python_udfs_impl,
     create_python_udf_impl,
     execute_sql_impl,
     psql_console_impl,
@@ -36,6 +37,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_en
     get_schema_impl,
     get_table_names_impl,
     get_table_schema_impl,
+    _safe_instance_prefix,
 )
 
 from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_user_tools import (
@@ -104,6 +106,7 @@ __all__ = [
     "get_all_knowledge_definitions",
     # env tools (pure *_impl functions)
     "apply_column_comments_impl",
+    "cleanup_python_udfs_impl",
     "create_python_udf_impl",
     "execute_sql_impl",
     "psql_console_impl",
@@ -115,6 +118,7 @@ __all__ = [
     "get_all_external_knowledge_names_impl",
     "get_knowledge_definition_impl",
     "get_all_knowledge_definitions_impl",
+    "_safe_instance_prefix",
     # env tools (types / constants)
     "ExecuteSQLResponse",
     "UDFParameter",
