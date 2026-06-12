@@ -73,3 +73,15 @@ def test_outcome_color_unknown_falls_back_to_hash():
     # Any label that isn't pass/fail should still return *something* (not raise).
     color = stable_color("some other label", kind="outcome")
     assert color.startswith("#") and len(color) == 7
+
+
+def test_conversation_length_box_outcome_kind_uses_green_for_passed():
+    fig = conversation_length_box(
+        {"Passed": [3.0, 5.0], "Failed": [1.0, 2.0]},
+        "Model calls",
+        marker_kind="outcome",
+    )
+    assert len(fig.data) == 2
+    colors = {t.name: t.marker.color for t in fig.data}
+    assert colors["Passed"] == "#2ca02c"
+    assert colors["Failed"] == "#d62728"

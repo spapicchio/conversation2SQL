@@ -85,6 +85,39 @@ def reliability_explainer() -> None:
         st.markdown(RELIABILITY_EXPLANATION)
 
 
+def conversation_length_box(
+    series: dict[str, list[float]], metric_label: str, marker_kind: str = "run"
+) -> go.Figure:
+    """Box plot of conversation lengths, one box per run.
+
+    Unlike :func:`aptitude_unreliability_box` (which is fed precomputed
+    percentiles because its scores are binary), this is handed the *raw*
+    per-conversation values so Plotly computes standard Tukey quartiles and
+    whiskers — the right summary for continuous counts. Empty series (e.g.
+    budget-spent on a no-tool baseline) are skipped so no run draws a bare axis.
+
+    ``marker_kind`` is forwarded to :func:`~colors.stable_color`; pass
+    ``"outcome"`` when the series keys are "Passed"/"Failed" (or "{label} ✓"/
+    "✗") so the boxes get semantic green/red colours.
+    """
+    fig = go.Figure()
+    for label, values in series.items():
+        if not values:
+            continue
+        fig.add_trace(
+            go.Box(
+                name=label,
+                y=list(values),
+                marker_color=stable_color(label, kind=marker_kind),
+                boxmean=True,
+                width=0.5,
+            )
+        )
+    fig.update_layout(height=360, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
+    fig.update_yaxes(title_text=metric_label, rangemode="tozero")
+    return fig
+
+
 def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
     """Box plot of the averaged per-task percentiles, one box per run.
 
@@ -127,7 +160,7 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
                 showarrow=False,
                 xanchor="left",
                 xshift=22,
-                font=dict(size=11, color=color),
+                font=dict(size=11, color="white"),
             )
 
     fig.update_layout(
