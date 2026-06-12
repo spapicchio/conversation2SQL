@@ -185,9 +185,9 @@ if rels:
 
 # Conversation-length distribution: one box per run split by pass/fail outcome.
 # The radio switches which length metric the boxes summarise.
-st.subheader(“Conversation length”)
+st.subheader("Conversation length")
 length_metric = st.radio(
-    “Metric”, LENGTH_METRICS, horizontal=True, key=”length_metric_compare”
+    "Metric", LENGTH_METRICS, horizontal=True, key="length_metric_compare"
 )
 length_series: dict[str, list[float]] = {}
 for label, run in runs.items():
@@ -197,11 +197,11 @@ for label, run in runs.items():
     length_series.update(split)
 if any(length_series.values()):
     st.plotly_chart(
-        conversation_length_box(length_series, length_metric, marker_kind=”outcome”),
+        conversation_length_box(length_series, length_metric, marker_kind="outcome"),
         use_container_width=True,
     )
 else:
-    st.caption(f”No “{length_metric}” data in the selected runs.”)
+    st.caption(f"No \"{length_metric}\" data in the selected runs.")
 
 st.divider()
 

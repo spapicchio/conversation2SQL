@@ -238,11 +238,11 @@ with tab_results:
     length_series = conversation_length_split(run.records, length_metric)
     if any(length_series.values()):
         st.plotly_chart(
-            conversation_length_box(length_series, length_metric, marker_kind=”outcome”),
+            conversation_length_box(length_series, length_metric, marker_kind="outcome"),
             use_container_width=True,
         )
     else:
-        st.caption(f”No “{length_metric}” data for this run.”)
+        st.caption(f"No \"{length_metric}\" data for this run.")
 
     st.divider()
 
