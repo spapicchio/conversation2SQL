@@ -130,6 +130,55 @@ def _remaining_budget(record: dict) -> float | None:
     return None
 
 
+# Conversation-length metrics surfaced in the length boxplot (app.py / compare.py).
+LENGTH_METRICS = ("Model calls", "Tool calls", "Budget spent")
+
+
+def conversation_length(record: dict, metric: str) -> float | None:
+    """Return one length metric for a single conversation record.
+
+    - ``"Model calls"`` — ``num_model_calls`` (the agent's LLM turns), 0 if absent.
+    - ``"Tool calls"``  — number of entries in ``tool_calls_in_order``.
+    - ``"Budget spent"`` — ``initial_user_patience - remaining`` coins, where
+      ``remaining`` comes from :func:`_remaining_budget`. Returns ``None`` when no
+      budget information exists (e.g. a no-tool baseline) so callers can drop it;
+      the other two metrics are always defined.
+    """
+    if metric == "Model calls":
+        return float(record.get("num_model_calls") or 0)
+    if metric == "Tool calls":
+        return float(len(record.get("tool_calls_in_order") or []))
+    if metric == "Budget spent":
+        remaining = _remaining_budget(record)
+        initial = record.get("initial_user_patience")
+        if remaining is None or not isinstance(initial, (int, float)):
+            return None
+        return float(initial) - remaining
+    raise ValueError(f"unknown length metric: {metric!r}")
+
+
+def conversation_length_split(
+    records: list[dict], metric: str, label: str = ""
+) -> dict[str, list[float]]:
+    """Partition conversation-length values by execution accuracy.
+
+    Returns a dict with two keys. Without a label: ``"Passed"`` and
+    ``"Failed"``. With a label: ``"{label} ✓"`` and ``"{label} ✗"``.
+    Records where :func:`conversation_length` returns ``None`` (e.g.
+    no-tool baselines for "Budget spent") are dropped from both lists.
+    """
+    pass_key = f"{label} ✓" if label else "Passed"
+    fail_key = f"{label} ✗" if label else "Failed"
+    passed: list[float] = []
+    failed: list[float] = []
+    for r in records:
+        v = conversation_length(r, metric)
+        if v is None:
+            continue
+        (passed if r.get("execution_accuracy") else failed).append(v)
+    return {pass_key: passed, fail_key: failed}
+
+
 def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = None) -> RunStats:
     n_total = len(records)
     n_passed = sum(1 for r in records if r.get("execution_accuracy", False))

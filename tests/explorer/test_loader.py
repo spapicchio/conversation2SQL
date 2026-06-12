@@ -6,10 +6,13 @@ import pandas as pd
 import pytest
 
 from explorer.loader import (
+    LENGTH_METRICS,
     RunData,
     RunStats,
     _compute_stats,
     classify_submit_error,
+    conversation_length,
+    conversation_length_split,
     list_runs,
     load_run,
     join_runs,
@@ -43,6 +46,97 @@ def make_record(
         "messages": [],
         **extra,
     }
+
+
+# ── conversation_length ──────────────────────────────────────────────────────────
+
+class TestConversationLength:
+    def test_metric_registry(self):
+        assert LENGTH_METRICS == ("Model calls", "Tool calls", "Budget spent")
+
+    def test_model_calls(self):
+        rec = make_record(num_model_calls=7)
+        assert conversation_length(rec, "Model calls") == 7
+
+    def test_model_calls_missing_is_zero(self):
+        rec = make_record()
+        assert conversation_length(rec, "Model calls") == 0
+
+    def test_tool_calls_counts_entries(self):
+        rec = make_record(
+            tool_calls_in_order=[
+                {"tool_name": "execute_sql"},
+                {"tool_name": "ask_user"},
+                {"tool_name": "submit_sql"},
+            ]
+        )
+        assert conversation_length(rec, "Tool calls") == 3
+
+    def test_tool_calls_empty(self):
+        rec = make_record()
+        assert conversation_length(rec, "Tool calls") == 0
+
+    def test_budget_spent_is_initial_minus_remaining(self):
+        # Remaining budget is read from the [SYSTEM NOTE] tool-message annotation.
+        rec = make_record(
+            initial_user_patience=10,
+            messages=[{"role": "tool", "remaining_budget": 4}],
+        )
+        assert conversation_length(rec, "Budget spent") == 6
+
+    def test_budget_spent_none_without_budget_info(self):
+        # No remaining-budget note, terminal sentinel state, and no initial budget
+        # (a no-tool baseline) -> undefined, so the caller can drop it.
+        rec = make_record(updated_user_patience=-2)
+        rec.pop("initial_user_patience", None)
+        assert conversation_length(rec, "Budget spent") is None
+
+
+# ── conversation_length_split ─────────────────────────────────────────────────────
+
+class TestConversationLengthSplit:
+    def test_splits_by_execution_accuracy(self):
+        records = [
+            make_record(execution_accuracy=True,  num_model_calls=5),
+            make_record(execution_accuracy=False, num_model_calls=2),
+            make_record(execution_accuracy=True,  num_model_calls=8),
+        ]
+        result = conversation_length_split(records, "Model calls")
+        assert result["Passed"] == [5.0, 8.0]
+        assert result["Failed"] == [2.0]
+
+    def test_custom_label_uses_checkmark_suffix(self):
+        records = [
+            make_record(execution_accuracy=True,  num_model_calls=3),
+            make_record(execution_accuracy=False, num_model_calls=1),
+        ]
+        result = conversation_length_split(records, "Model calls", label="runA")
+        assert "runA ✓" in result
+        assert "runA ✗" in result
+        assert result["runA ✓"] == [3.0]
+        assert result["runA ✗"] == [1.0]
+
+    def test_drops_none_values(self):
+        # Budget spent returns None when no budget info exists.
+        records = [
+            make_record(execution_accuracy=True),   # no initial_user_patience → None
+            make_record(execution_accuracy=False),
+        ]
+        result = conversation_length_split(records, "Budget spent")
+        assert result["Passed"] == []
+        assert result["Failed"] == []
+
+    def test_all_passed(self):
+        records = [make_record(execution_accuracy=True, num_model_calls=4)]
+        result = conversation_length_split(records, "Model calls")
+        assert result["Passed"] == [4.0]
+        assert result["Failed"] == []
+
+    def test_all_failed(self):
+        records = [make_record(execution_accuracy=False, num_model_calls=1)]
+        result = conversation_length_split(records, "Model calls")
+        assert result["Passed"] == []
+        assert result["Failed"] == [1.0]
 
 
 # ── _compute_stats ─────────────────────────────────────────────────────────────
