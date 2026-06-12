@@ -16,6 +16,7 @@ def _make_task():
     # MagicMock attrs are truthy by default, so set them explicitly.
     task.enable_table_schema_tools = False
     task.enable_psql_console = False
+    task.enable_python_udf = False
     return task
 
 

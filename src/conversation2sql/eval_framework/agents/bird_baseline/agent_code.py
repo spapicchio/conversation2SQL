@@ -33,6 +33,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.prompts import (
 from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     execute_sql,
     psql_console,
+    create_python_udf,
     get_all_column_meanings,
     get_schema,
     get_table_names,
@@ -43,6 +44,8 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     get_all_knowledge_definitions,
     return_tool_ask_user,
     submit_sql,
+    cleanup_python_udfs_impl,
+    _safe_instance_prefix,
 )
 from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COSTS
 
@@ -95,6 +98,7 @@ def run_agent_bird_baseline(
             "enable_ask_user": enable_ask_user,
             "enable_table_schema_tools": single_task.enable_table_schema_tools,
             "enable_psql_console": single_task.enable_psql_console,
+            "enable_python_udf": single_task.enable_python_udf,
         }
     )
 
@@ -109,6 +113,8 @@ def run_agent_bird_baseline(
     ]
     if enable_ask_user:
         tools.append(return_tool_ask_user(model_user_parsing, model_user_generator))
+    if single_task.enable_python_udf:
+        tools.append(create_python_udf)
 
     agent = create_agent(
         model_agent,
@@ -155,6 +161,11 @@ def run_agent_bird_baseline(
     }
 
     response: CustomAgentState = agent.invoke(agent_state, context=single_task)  # pyrefly: ignore
+    if single_task.enable_python_udf:
+        cleanup_python_udfs_impl(
+            db_dsn=single_task.db_dsn,
+            prefix=_safe_instance_prefix(single_task.instance_id),
+        )
     # Recover the predicted SQL from the raw messages *before* utils_process_agent_response
     # pops "messages" off the state.
     predicted_sql = _extract_predicted_sql(response["messages"])  # pyrefly: ignore
