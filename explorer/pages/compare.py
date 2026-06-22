@@ -21,6 +21,8 @@ from loader import list_runs
 from loader import load_run
 from render import render_conversation
 from patterns import PATTERN_CATALOG
+from patterns import PATTERN_DESCRIPTIONS
+from patterns import aggregate_patterns
 
 
 RESULTS_ROOT = Path("results")
@@ -294,10 +296,40 @@ if tool_runs:
     if no_tool_labels:
         st.caption("No-tools baseline (excluded): " + ", ".join(no_tool_labels))
 
+    with st.expander("What do these anti-patterns mean?"):
+        st.caption(
+            "Each is a deterministic, per-conversation flag computed from the tool-call "
+            "trace (no LLM). The rate is the sample-average among each pattern's "
+            "**applicable** samples, so patterns with different denominators "
+            "(e.g. KB-blind only applies to KB-needing tasks) compare honestly."
+        )
+        for name, label in PATTERN_CATALOG:
+            st.markdown(f"**{label}** — {PATTERN_DESCRIPTIONS[name]}")
+
+    pat_acc_filter = st.radio(
+        "Execution accuracy",
+        ["All", "Passed (1)", "Failed (0)"],
+        horizontal=True,
+        key="patterns_acc_filter",
+        help="Restrict the anti-pattern rates to samples with this execution accuracy.",
+    )
+
+    def _filter_groups(groups: dict, acc: str) -> dict:
+        if acc == "All":
+            return groups
+        want_pass = acc == "Passed (1)"
+        return {
+            iid: [r for r in samples if bool(r.get("execution_accuracy")) == want_pass]
+            for iid, samples in groups.items()
+        }
+
     _pat_labels = dict(PATTERN_CATALOG)
 
     def _pat_stat(run, name):
-        return run.stats.pattern_stats.get(name)
+        if pat_acc_filter == "All":
+            return run.stats.pattern_stats.get(name)
+        filtered = _filter_groups(run.groups, pat_acc_filter)
+        return aggregate_patterns(filtered).get(name)
 
     pat_raw = pd.DataFrame(
         {label: {_pat_labels[name]: (s.rate if (s := _pat_stat(run, name)) else 0.0)

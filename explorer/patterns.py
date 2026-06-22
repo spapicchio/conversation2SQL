@@ -165,14 +165,16 @@ def _detect_repeated_identical_call(events: list[ToolEvent], record: dict) -> Pa
 def _detect_submit_after_error(events: list[ToolEvent], record: dict) -> PatternHit | None:
     errored: dict[str, int] = {}
     for e in events:
-        if e.tool_name == "execute_sql" and e.is_error:
-            errored[_norm_sql(e.arguments.get("sql"))] = e.message_index
+        if _validates_query(e) and e.is_error:
+            # Covers both execute_sql (arg: "sql") and psql_console (arg: "command").
+            sql = e.arguments.get("sql") or e.arguments.get("command")
+            errored[_norm_sql(sql)] = e.message_index
         elif e.tool_name == "submit_sql":
             key = _norm_sql(e.arguments.get("sql"))
             if key and key in errored:
                 return PatternHit(
                     "submit_after_error", "Submit after error",
-                    "submitted SQL is identical to an execute_sql that errored",
+                    "submitted SQL is identical to a DB query that errored",
                     [errored[key], e.message_index],
                 )
     return None
@@ -181,15 +183,18 @@ def _detect_submit_after_error(events: list[ToolEvent], record: dict) -> Pattern
 def _detect_unrecovered_error_loop(events: list[ToolEvent], record: dict) -> PatternHit | None:
     streak: list[int] = []
     for e in events:
-        # A budget-blocked pseudo-event neither extends nor resets the streak.
-        if e.tool_name != "execute_sql" or e.blocked:
+        # Only real DB query executions count: execute_sql always qualifies;
+        # psql_console qualifies only for non-meta-command SQL (not \dt etc.).
+        # Blocked pseudo-events and meta-commands are skipped — neither extending
+        # nor resetting the streak — matching the original execute_sql-only semantics.
+        if not _validates_query(e):
             continue
         if e.is_error:
             streak.append(e.message_index)
             if len(streak) >= ERROR_LOOP_MIN:
                 return PatternHit(
                     "unrecovered_error_loop", "Unrecovered error loop",
-                    f"{len(streak)} consecutive execute_sql errors", list(streak),
+                    f"{len(streak)} consecutive DB query errors", list(streak),
                 )
         else:
             streak = []
@@ -317,6 +322,30 @@ def _detect_context_editing(events: list[ToolEvent], record: dict) -> PatternHit
     return None
 
 
+def _detect_resubmit_unchanged(events: list[ToolEvent], record: dict) -> PatternHit | None:
+    """Same SQL submitted more than once — the agent retried without any change.
+
+    Tracks every ``submit_sql`` by its whitespace-normalised SQL; the second
+    occurrence of the same SQL (regardless of what happened between the two
+    calls) is evidence the agent looped back to a rejected answer unchanged.
+    """
+    seen: dict[str, int] = {}  # normalised SQL → message_index of first submit
+    for e in events:
+        if e.tool_name != "submit_sql":
+            continue
+        sql = _norm_sql(e.arguments.get("sql"))
+        if not sql:
+            continue
+        if sql in seen:
+            return PatternHit(
+                "resubmit_unchanged", "Resubmit unchanged",
+                "same SQL submitted again after a prior submission",
+                [seen[sql], e.message_index],
+            )
+        seen[sql] = e.message_index
+    return None
+
+
 def _detect_truncated_generation(events: list[ToolEvent], record: dict) -> PatternHit | None:
     # An AIMessage with finish_reason == "length" was cut off by the max-model-len
     # cap. No error is raised (we no longer send max_tokens on the local vLLM path),
@@ -351,6 +380,7 @@ ANTI_PATTERNS: list[Detector] = [
     _detect_model_call_limit,
     _detect_context_editing,
     _detect_truncated_generation,
+    _detect_resubmit_unchanged,
 ]
 
 # (name, label) for display + enumeration independent of whether a detector fires.
@@ -366,8 +396,27 @@ PATTERN_CATALOG: list[tuple[str, str]] = [
     ("model_call_limit", "Model-call limit"),
     ("context_editing", "Context editing"),
     ("truncated_generation", "Truncated generation"),
+    ("resubmit_unchanged", "Resubmit unchanged"),
 ]
 PATTERN_NAMES: list[str] = [name for name, _ in PATTERN_CATALOG]
+
+# Per-pattern human explanation: what it flags and how it is detected from the
+# tool-call trace. Shared by every page that surfaces the patterns (the patterns
+# page and the run-comparison page) so the wording stays in one place.
+PATTERN_DESCRIPTIONS: dict[str, str] = {
+    "blind_submit": "Agent calls `submit_sql` without ever running the query against the DB first — it never validated it. **Detected:** a `submit_sql` event appears with no preceding `execute_sql` (or, in the `psql_console` ablation, no preceding `psql_console` SQL query — backslash meta-commands like `\\dt` don't count).",
+    "repeated_identical_call": "Agent issues the exact same call twice — a sign it isn't tracking what it already did. **Detected:** the same tool name + identical arguments occurs ≥2 times (SQL compared with whitespace collapsed).",
+    "submit_after_error": "Agent submits a query that already failed when run. **Detected:** the submitted SQL is identical (whitespace-collapsed) to an `execute_sql` or `psql_console` SQL command whose result had an error status.",
+    "unrecovered_error_loop": "Agent keeps re-running broken SQL without recovering. **Detected:** ≥3 consecutive DB query errors (from `execute_sql` or `psql_console` SQL commands, not backslash meta-commands) with no successful run in between (the streak resets on any success).",
+    "kb_blind": "The task's answer needs external knowledge but the agent ignored it. **Detected:** the gold solution depends on ≥1 KB entry (`gt_knowledge_base` non-empty) yet `get_knowledge_definition` is never called. *Only applicable to KB-needing tasks* — its rate is measured over that subset, not all samples.",
+    "budget_death": "Agent runs out of patience budget before landing a *passing* answer (a forced out-of-budget submit that fails still counts as a death). **Detected:** `execution_accuracy` is false, and either a tool call was budget-blocked or the final budget state is ≤ 0.",
+    "no_submission": "Conversation ends without the agent ever answering. **Detected:** no `submit_sql` call appears anywhere in the trace.",
+    "tool_call_limit": "Agent burned past the safety-net tool-call cap (set well above the patience budget), so LangChain's `ToolCallLimitMiddleware` blocked a tool. **Detected:** a `tool_call_limit` entry in the run's `middleware_events`.",
+    "model_call_limit": "Agent hit the safety-net model-call cap before finishing on its own, so LangChain's `ModelCallLimitMiddleware` ended the run. **Detected:** a `model_call_limit` entry in the run's `middleware_events`.",
+    "context_editing": "The conversation grew large enough that `ContextEditingMiddleware` cleared old tool outputs to stay under the context limit — a sign of a very long, context-heavy run. **Detected:** a `context_editing` entry in the run's `middleware_events`.",
+    "truncated_generation": "A model call was cut off by the server's max-model-len cap rather than finishing on its own — its output (possibly a tool call) is incomplete. No error is raised on truncation, so this is the only signal it happened. **Detected:** an AIMessage with `finish_reason` == `length` in the trace.",
+    "resubmit_unchanged": "Agent submits the exact same SQL a second time after a prior submission — it looped back to a rejected answer without any fix. Since the benchmark evaluation is deterministic, resubmitting the same SQL will always produce the same verdict. **Detected:** the same whitespace-normalised SQL appears in two distinct `submit_sql` calls.",
+}
 
 # Per-pattern "applicable" predicate: the samples on which a pattern *could* fire,
 # i.e. its denominator. Patterns absent here are applicable to every sample. Only
@@ -392,6 +441,26 @@ def _record_hits(record: dict) -> list[PatternHit]:
     """Use cached hits from loader if present, else compute."""
     cached = record.get("_pattern_hits")
     return cached if cached is not None else detect_patterns(record)
+
+
+# Execution-accuracy scope labels for the patterns page's global Pass/Fail/All
+# toggle. Kept here (not in the Streamlit page) so the filter stays unit-testable
+# and the drill-down and the charts share one definition.
+ACCURACY_SCOPES: tuple[str, ...] = ("All", "Passed (1)", "Failed (0)")
+
+
+def scope_by_accuracy(records: list[dict], scope: str) -> list[dict]:
+    """Filter ``records`` to one execution-accuracy scope.
+
+    ``"Passed (1)"`` keeps records whose ``execution_accuracy`` is truthy,
+    ``"Failed (0)"`` keeps the rest, and ``"All"`` (or any unrecognised scope)
+    returns them unchanged.
+    """
+    if scope == "Passed (1)":
+        return [r for r in records if r.get("execution_accuracy")]
+    if scope == "Failed (0)":
+        return [r for r in records if not r.get("execution_accuracy")]
+    return records
 
 
 @dataclass(frozen=True)

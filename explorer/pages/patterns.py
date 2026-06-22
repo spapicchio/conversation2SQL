@@ -12,12 +12,17 @@ import streamlit as st
 from colors import color_scale
 from loader import RunData, list_runs, load_run
 from patterns import (
+    ACCURACY_SCOPES,
     PATTERN_CATALOG,
+    PATTERN_DESCRIPTIONS,
+    aggregate_patterns,
+    clean_fraction,
     first_submit_accuracy_by_quintile,
     pattern_cooccurrence,
     per_iteration_pattern_rates,
     positional_tool_distribution,
     repeated_identical_tool_counts,
+    scope_by_accuracy,
     tool_position_accuracy,
 )
 from render import render_conversation
@@ -28,20 +33,8 @@ RESULTS_ROOT = Path(os.environ.get("RESULTS_ROOT", str(Path(__file__).parent.par
 
 _LABELS = dict(PATTERN_CATALOG)  # name -> human label
 
-# Per-pattern explanation: what it flags and how it is detected from the tool-call trace.
-_DESCRIPTIONS: dict[str, str] = {
-    "blind_submit": "Agent calls `submit_sql` without ever running the query against the DB first — it never validated it. **Detected:** a `submit_sql` event appears with no preceding `execute_sql` (or, in the `psql_console` ablation, no preceding `psql_console` SQL query — backslash meta-commands like `\\dt` don't count).",
-    "repeated_identical_call": "Agent issues the exact same call twice — a sign it isn't tracking what it already did. **Detected:** the same tool name + identical arguments occurs ≥2 times (SQL compared with whitespace collapsed).",
-    "submit_after_error": "Agent submits a query that already failed when run. **Detected:** the submitted SQL is identical (whitespace-collapsed) to an `execute_sql` whose result had an error status.",
-    "unrecovered_error_loop": "Agent keeps re-running broken SQL without recovering. **Detected:** ≥3 consecutive `execute_sql` errors with no successful run in between (the streak resets on any success).",
-    "kb_blind": "The task's answer needs external knowledge but the agent ignored it. **Detected:** the gold solution depends on ≥1 KB entry (`gt_knowledge_base` non-empty) yet `get_knowledge_definition` is never called. *Only applicable to KB-needing tasks* — its rate is measured over that subset, not all samples.",
-    "budget_death": "Agent runs out of patience budget before landing a *passing* answer (a forced out-of-budget submit that fails still counts as a death). **Detected:** `execution_accuracy` is false, and either a tool call was budget-blocked or the final budget state is ≤ 0.",
-    "no_submission": "Conversation ends without the agent ever answering. **Detected:** no `submit_sql` call appears anywhere in the trace.",
-    "tool_call_limit": "Agent burned past the safety-net tool-call cap (set well above the patience budget), so LangChain's `ToolCallLimitMiddleware` blocked a tool. **Detected:** a `tool_call_limit` entry in the run's `middleware_events`.",
-    "model_call_limit": "Agent hit the safety-net model-call cap before finishing on its own, so LangChain's `ModelCallLimitMiddleware` ended the run. **Detected:** a `model_call_limit` entry in the run's `middleware_events`.",
-    "context_editing": "The conversation grew large enough that `ContextEditingMiddleware` cleared old tool outputs to stay under the context limit — a sign of a very long, context-heavy run. **Detected:** a `context_editing` entry in the run's `middleware_events`.",
-    "truncated_generation": "A model call was cut off by the server's max-model-len cap rather than finishing on its own — its output (possibly a tool call) is incomplete. No error is raised on truncation, so this is the only signal it happened. **Detected:** an AIMessage with `finish_reason` == `length` in the trace.",
-}
+# Per-pattern explanation, shared with the comparison page (single source of truth).
+_DESCRIPTIONS = PATTERN_DESCRIPTIONS
 
 
 @st.cache_data
@@ -65,11 +58,40 @@ if not runs_tree:
 date, run_key = select_run_sidebar(runs_tree)
 
 run = _load_run_cached(str(RESULTS_ROOT / date / run_key))
-stats = run.stats
+
+# ── Global execution-accuracy scope ─────────────────────────────────────────────
+# One toggle scopes every chart *and* the drill-down to conversations whose final
+# SQL passed (accuracy=1) or failed (accuracy=0); "All" keeps every conversation.
+# Records/groups and the headline aggregates are recomputed from the scoped subset
+# so the rates, denominators and heatmaps all describe the same population.
+acc_scope = st.radio(
+    "Execution-accuracy scope",
+    ACCURACY_SCOPES,
+    horizontal=True,
+    help="Scope the whole page to conversations whose final SQL passed (accuracy=1) "
+    "or failed (accuracy=0). Rates, denominators (`N`) and heatmaps all recompute "
+    "over the chosen subset.",
+)
+records = scope_by_accuracy(run.records, acc_scope)
+if not records:
+    st.warning(f"No conversations in this run match scope **{acc_scope}**.")
+    st.stop()
+
+groups: dict[str, list[dict]] = {}
+for r in records:
+    groups.setdefault(r.get("instance_id", ""), []).append(r)
+
+# Headline aggregates over the scoped subset (replacing run.stats, which is over all
+# records). The chart helpers take records/groups directly, so they need no recompute.
+pattern_stats = aggregate_patterns(groups)
+clean_frac = clean_fraction(groups)
+n_instances = len(groups)
+if acc_scope != "All":
+    st.caption(f"Scoped to **{acc_scope}** · {len(records)} conversations · {n_instances} instances")
 
 # ── Headline: anti-pattern rate among applicable samples ────────────────────────
 st.subheader("Anti-pattern rate (sample-average, among applicable samples)")
-st.caption(f"Rate over the samples each pattern could fire on · clean: {stats.clean_fraction * 100:.1f}%")
+st.caption(f"Rate over the samples each pattern could fire on · clean: {clean_frac * 100:.1f}%")
 with st.expander("What do these anti-patterns mean?"):
     st.caption(
         "Each is a deterministic, per-conversation flag computed from the tool-call trace "
@@ -92,7 +114,7 @@ def _count(x: float) -> str:
 # numerator `flagged/n` is rate × instances — fractional under multiple iterations.
 _freq_rows = []
 for name, _ in PATTERN_CATALOG:
-    s = stats.pattern_stats.get(name)
+    s = pattern_stats.get(name)
     rate, inst = (s.rate, s.applicable_instances) if s else (0.0, 0)
     _freq_rows.append({
         "Pattern": _LABELS[name],
@@ -104,13 +126,13 @@ freq_df = pd.DataFrame(_freq_rows).sort_values("Rate", ascending=False)
 pattern_order = freq_df["Pattern"].tolist()  # real patterns only; shared sort for both views
 
 # Display-only "No anti-pattern" bar for the Aggregate view: the sample-average
-# fraction of conversations that hit zero anti-patterns (stats.clean_fraction), in
-# the same rate (flagged/N) style as the real patterns. Its N is *all* instances —
+# fraction of conversations that hit zero anti-patterns (clean_frac), in the same
+# rate (flagged/N) style as the real patterns. Its N is *all* in-scope instances —
 # every conversation is eligible to be clean — so the denominator is n_instances.
 # Appended after pattern_order so it stays out of the per-iteration / co-occurrence
 # views, which enumerate real detectors only.
 _CLEAN_LABEL = "No anti-pattern"
-_clean_rate, _clean_n = stats.clean_fraction, stats.n_instances
+_clean_rate, _clean_n = clean_frac, n_instances
 freq_df = pd.concat(
     [
         freq_df,
@@ -137,7 +159,7 @@ if len(view_options) > 1:
     view = st.radio("View", view_options, horizontal=True, label_visibility="collapsed")
 
 if view == "Per iteration":
-    iter_df = per_iteration_pattern_rates(run.records)
+    iter_df = per_iteration_pattern_rates(records)
     iter_df["Iteration"] = iter_df["iteration"].map(lambda i: f"iter {i}")
     iter_order = [f"iter {i}" for i in sorted(iter_df["iteration"].unique())]
     iter_base = alt.Chart(iter_df).encode(
@@ -163,7 +185,7 @@ if view == "Per iteration":
         "Their mean matches the Aggregate view for a complete run; gaps reveal run-to-run variance."
     )
 elif view == "Co-occurrence":
-    co_df = pattern_cooccurrence(run.records)
+    co_df = pattern_cooccurrence(records)
     if co_df.empty:
         st.info("No anti-patterns fired in this run, so there is nothing to co-occur.")
     else:
@@ -243,7 +265,7 @@ _QUINTILE_HELP = (
 
 # ── Positional tool distribution (100%-stacked) ─────────────────────────────────
 st.subheader("Tool by call position", help=_QUINTILE_HELP)
-pos_df = positional_tool_distribution(run.groups)
+pos_df = positional_tool_distribution(groups)
 if not pos_df.empty:
     pos_base = alt.Chart(pos_df).encode(
         x=alt.X("quintile:N", sort=_QUINTILE_ORDER,
@@ -294,7 +316,7 @@ def _acc_label(row: pd.Series) -> str:
 
 # ── Accuracy by first-answer timing ("patience pays off") ───────────────────────
 st.subheader("Accuracy by first-answer timing")
-fs_df = first_submit_accuracy_by_quintile(run.records)
+fs_df = first_submit_accuracy_by_quintile(records)
 if fs_df["n"].sum() == 0:
     st.info("No conversation in this run ever submitted an answer.")
 else:
@@ -330,7 +352,7 @@ else:
 
 # ── Tool importance by call position (accuracy cross-tab) ───────────────────────
 st.subheader("Tool importance by call position")
-tp_df = tool_position_accuracy(run.records)
+tp_df = tool_position_accuracy(records)
 if tp_df.empty:
     st.info("No tool calls to position.")
 else:
@@ -375,12 +397,14 @@ st.subheader("Drill-down")
 pattern_label = st.selectbox("Pattern", [lbl for _, lbl in PATTERN_CATALOG])
 pattern_name = next(name for name, lbl in PATTERN_CATALOG if lbl == pattern_label)
 
+# Drill-down respects the global accuracy scope (the per-pattern radio that used to
+# live here is now subsumed by the page-wide toggle above).
 flagged = [
-    r for r in run.records
+    r for r in records
     if any(h.name == pattern_name for h in r.get("_pattern_hits", []))
 ]
 if not flagged:
-    st.info("No records hit this pattern.")
+    st.info(f"No records hit this pattern within scope **{acc_scope}**.")
     st.stop()
 
 # For repeated identical calls, summarize which tool gets re-issued most across

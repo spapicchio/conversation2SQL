@@ -153,6 +153,13 @@ def render_conversation(
     # turn (reasoning + text + tool-call chips), and each tool result render as
     # their own distinctly-styled turn.
     highlight = (highlight_indices or set()) | set(idx_labels)
+    # Budget the agent saw when it acted. The `[SYSTEM NOTE: Remaining budget: x/y]`
+    # note is attached to a *tool* message but reflects the budget shown to the
+    # model on its *next* call — so the budget an assistant turn had available is
+    # the `remaining_budget` of the preceding tool message, or the full
+    # `task_budget` for the very first turn (nothing deducted yet).
+    total_budget = record.get("task_budget")
+    current_budget = total_budget
     for i, msg in enumerate(record.get("messages", [])):
         role = msg.get("role")
         if i in highlight:
@@ -197,11 +204,17 @@ def render_conversation(
                     )
                     with st.expander(label):
                         st.json(args)
+                budget_note = (
+                    f" | 🪙 budget: {current_budget:g}/{total_budget:g}"
+                    if tool_calls and current_budget is not None and total_budget is not None
+                    else ""
+                )
                 st.caption(
                     f"tokens: {msg.get('prompt_tokens', 0)}↑ {msg.get('completion_tokens', 0)}↓"
                     f" | cost: ${msg.get('cost_usd', 0):.5f}"
                     f" | finish: {msg.get('finish_reason', 'unknown')}"
                     + (f" | {len(tool_calls)} tool call(s)" if tool_calls else "")
+                    + budget_note
                 )
 
         elif role == "tool":
@@ -210,6 +223,11 @@ def render_conversation(
             status_badge = "✓ success" if status == "success" else f"✗ {status or 'error'}"
             remaining = msg.get("remaining_budget")
             total = msg.get("total_budget")
+            # This tool message's note is the budget the *next* assistant turn sees.
+            if remaining is not None:
+                current_budget = remaining
+            if total is not None:
+                total_budget = total
             budget_badge = (
                 f" · 🪙 budget: **{remaining:g}/{total:g}**"
                 if remaining is not None and total is not None
