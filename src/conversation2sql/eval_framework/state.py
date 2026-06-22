@@ -66,6 +66,10 @@ class TaskData(BaseModel):
     # execute_sql/get_schema/get_table_* (ablation). Mutually exclusive with
     # enable_table_schema_tools (enforced in ConfigReader + run_agent_bird_baseline).
     enable_psql_console: bool = False
+    # When True (and enable_psql_console), psql_console runs in strict inspection
+    # mode: only SQL + \h + the informational \d-family are allowed and \? lists
+    # only those (ablation, default off = legacy denylist behavior).
+    enable_psql_strict_inspection: bool = False
     # When True the agent gets the create_python_udf tool (plpython3u ablation).
     # Additive — compatible with enable_psql_console and enable_table_schema_tools.
     enable_python_udf: bool = False

@@ -710,7 +710,8 @@ def psql_console(command: str, runtime: ToolRuntime[TaskData, CustomAgentState])
     1. A SQL query — SELECT / WITH / EXPLAIN. The session is READ-ONLY, so
        INSERT / UPDATE / DELETE / CREATE / DROP and other writes are rejected by
        the server. Use this to test and verify a query before submit_sql.
-    2. You can inspect the schema with psql's backslash meta-commands. 
+    2. You can inspect the schema with psql's backslash meta-commands. Run \\? to
+       list the available inspection commands, then use them.
     You can also run \\d+ <table> to get the description of the columns with their comments (meanings).
     Args:
         command: One SQL statement OR one psql backslash meta-command.

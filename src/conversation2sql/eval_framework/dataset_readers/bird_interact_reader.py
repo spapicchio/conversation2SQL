@@ -253,6 +253,7 @@ def load_bird_interact_as_tasks(
     is_kb_linearized: bool = False,
     enable_table_schema_tools: bool = False,
     enable_psql_console: bool = False,
+    enable_psql_strict_inspection: bool = False,
     *args,
     **kwargs,
 ) -> list[TaskData]:
@@ -268,6 +269,17 @@ def load_bird_interact_as_tasks(
             "PSQL-CONSOLE ABLATION ENABLED: replacing execute_sql/get_schema/"
             "get_table_* with the single read-only psql_console tool."
         )
+    if enable_psql_strict_inspection:
+        if not enable_psql_console:
+            logger.warning(
+                "enable_psql_strict_inspection is set but enable_psql_console is "
+                "off; it has no effect (psql_console is not in the tool list)."
+            )
+        else:
+            logger.warning(
+                "PSQL STRICT-INSPECTION ABLATION ENABLED: psql_console restricts "
+                "meta-commands to SQL + \\h + the informational \\d-family."
+            )
     samples = []
     skipped_instance_id = {
         # DB FULL
@@ -414,6 +426,7 @@ def load_bird_interact_as_tasks(
                 is_kb_linearized=is_kb_linearized,
                 enable_table_schema_tools=enable_table_schema_tools,
                 enable_psql_console=enable_psql_console,
+                enable_psql_strict_inspection=enable_psql_strict_inspection,
                 **line,
             )
             samples.append(sample)

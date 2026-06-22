@@ -39,7 +39,7 @@ MODEL_PROFILES: dict[str, dict] = {
         # https://huggingface.co/Qwen/Qwen3.5-9B
         "predictor_model_name": "Qwen/Qwen3.5-9B",
         "default_thinking": True,
-        "max_model_len": 32_000,  # Total context, PROMPT + comp;
+        "max_model_len": 64_000,  # Total context, PROMPT + comp;
         "server": {
             "reasoning_parser": "qwen3",
             "language_model_only": True,
