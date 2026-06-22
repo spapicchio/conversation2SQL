@@ -9,6 +9,30 @@ import psycopg2.extras
 from psycopg2.extensions import Column
 from psycopg2.extras import RealDictRow
 
+# Result truncation is row-based, not character-based: the agent issues many SQL
+# calls per task, so we show only the first few *whole* rows and tell it how many
+# more existed. Width is intentionally left unbounded so execute_sql and
+# psql_console output stay comparable (neither caps cell/row width).
+MAX_RESULT_ROWS = 3
+
+# _execute_query fetches at most this many rows; when a result hits the cap the
+# true total is unknown, so the "more rows" note reports it as "<limit>+".
+RESULT_FETCH_LIMIT = 10_000
+
+
+def _more_rows_note(total_str: str) -> str:
+    """One-line note appended when a result is truncated to ``MAX_RESULT_ROWS``.
+
+    States that the query *succeeded* (so the agent does not mistake the cut for
+    a failure and waste bird-coins re-running it) and how to see more.
+    ``total_str`` is the caller-formatted total (an exact count, or
+    ``"<limit>+"`` when the fetch cap was hit).
+    """
+    return (
+        f"\n... [showing first {MAX_RESULT_ROWS} of {total_str} rows; "
+        "the query ran successfully — add a LIMIT or select fewer columns to see more]"
+    )
+
 
 def _connect(db_dsn: str) -> psycopg2.extensions.connection:
     conn = psycopg2.connect(db_dsn, cursor_factory=psycopg2.extras.RealDictCursor)
@@ -27,8 +51,8 @@ def _execute_query(query: str, db_dsn: str) -> tuple[list[RealDictRow], tuple[Co
         conn.commit()
         lower_q = query.strip().lower()
         if lower_q.startswith("select") or lower_q.startswith("with"):
-            rows = cursor.fetchmany(10_000 + 1)
-            result = rows[:10_000]
+            rows = cursor.fetchmany(RESULT_FETCH_LIMIT + 1)
+            result = rows[:RESULT_FETCH_LIMIT]
         else:
             try:
                 result = cursor.fetchall()
@@ -106,7 +130,7 @@ def preprocess_results(
     return processed
 
 
-def _format_cell(value: Any, max_characters: int) -> str:
+def _format_cell(value: Any) -> str:
     """Render one cell for the text table.
 
     Container values (JSON/array/composite columns come back as ``list``/``dict``)
@@ -115,16 +139,15 @@ def _format_cell(value: Any, max_characters: int) -> str:
     single-quoted ``repr`` padding — shorter and parseable. Full numeric precision
     is preserved on purpose: ``execute_sql`` is an inspection tool, so rounding
     (which lives in ``preprocess_results`` for the submit-time comparison) would
-    hide values the agent needs to verify its query.
+    hide values the agent needs to verify its query. The cell is **not** width-capped
+    (see ``MAX_RESULT_ROWS``): truncation is by whole rows, not characters.
     """
     if isinstance(value, (dict, list)):
-        s = json.dumps(value, default=str, separators=(",", ":"), sort_keys=True)
-    else:
-        s = str(value)
-    return s[:max_characters]
+        return json.dumps(value, default=str, separators=(",", ":"), sort_keys=True)
+    return str(value)
 
 
-def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters=100) -> str:
+def _format_result(result: list, cursor_desc: tuple[Column, ...], max_rows: int = MAX_RESULT_ROWS) -> str:
     """Render the result set as a GitHub-flavored markdown table.
 
     Output:
@@ -157,10 +180,16 @@ def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters
     header = "| " + " | ".join(cols) + " |"
     separator = "| " + " | ".join("---" for _ in cols) + " |"
 
-    # take the first 100 rows to avoid overwhelming the output, and truncate each cell to max_characters chars
+    # Keep only the first max_rows whole rows so repeated calls don't flood the
+    # agent's context; a note below states how many rows really matched.
     rows = [
-        "| " + " | ".join(_format_cell(row[col], max_characters) for col in cols) + " |"
-        for row in result[:100]
+        "| " + " | ".join(_format_cell(row[col]) for col in cols) + " |"
+        for row in result[:max_rows]
     ]
+    table = "\n".join([header, separator, *rows])
 
-    return "\n".join([header, separator, *rows])
+    if len(result) > max_rows:
+        total = len(result)
+        total_str = f"{RESULT_FETCH_LIMIT}+" if total >= RESULT_FETCH_LIMIT else str(total)
+        table += _more_rows_note(total_str)
+    return table
