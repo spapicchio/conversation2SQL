@@ -18,6 +18,15 @@ from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state impor
 from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COSTS
 from conversation2sql.eval_framework.state import TaskData
 
+# Sentinel values written to ``updated_user_patience`` to encode a terminal episode.
+# Live budget is always > -1. The state reducer keeps the *smallest* write (see
+# ``CustomAgentState``), so the sentinels are ordered by priority: if the agent
+# emits several submit_sql calls in one super-step, the success sentinel (the
+# smallest) wins over a forced/exhausted one.
+PATIENCE_BLOCKED = -1.0           # budget too low for the requested tool; agent must still submit (not terminal)
+PATIENCE_SUBMIT_EXHAUSTED = -2.0  # submit_sql reached only because the budget ran out (SQL may be wrong)
+PATIENCE_SUBMIT_PASSED = -3.0     # submit_sql returned passed=True -> clean success
+
 
 def _strip_thinking_from_history(messages: list) -> None:
     """Flatten reasoning out of *historical* assistant turns, in place.
@@ -89,12 +98,25 @@ def sanitize_thinking_history(
 
 @before_model(can_jump_to=["end"])
 def check_budget_limit(state: CustomAgentState, runtime: Runtime) -> dict[str, Any] | None:
-    if state["updated_user_patience"] < -1:
-        return {
-            "messages": [AIMessage("Conversation limit reached. User patience exhausted")],
-            "jump_to": "end"
-        }
-    return None
+    patience = state["updated_user_patience"]
+    # Only a terminal submit_sql drives patience below the blocked floor (-1).
+    # Anything at PATIENCE_BLOCKED or above means the episode is still live (the
+    # agent is being pushed to submit, not stopped).
+    if patience is None or patience > PATIENCE_SUBMIT_EXHAUSTED:
+        return None
+
+    # A passing submit is a clean finish: the submit_sql ToolMessage already records
+    # the outcome, so end the run silently rather than tacking on a misleading
+    # "patience exhausted" note.
+    if patience <= PATIENCE_SUBMIT_PASSED:
+        return {"jump_to": "end"}
+
+    # PATIENCE_SUBMIT_EXHAUSTED: the agent submitted only because it ran out of
+    # budget, so the patience-exhaustion note is the accurate explanation.
+    return {
+        "messages": [AIMessage("Conversation limit reached. User patience exhausted.")],
+        "jump_to": "end",
+    }
 
 
 @wrap_model_call(state_schema=CustomAgentState)
@@ -112,28 +134,42 @@ def wrap_model_append_tool_message(
     initial_user_patience = request.state["initial_user_patience"]  # pyrefly: ignore
     updated_user_patience = request.state["updated_user_patience"]  # pyrefly: ignore
     updated_user_patience = max(
-        updated_user_patience - sum(tool_called_patience), -1
+        updated_user_patience - sum(tool_called_patience), PATIENCE_BLOCKED
     )
-    # update user_patience and tool called patience
-    command = Command(
-        update={
-            "updated_user_patience": updated_user_patience,
-            "tool_called_patience": Overwrite([]),
-        }
-    )
+    update: dict[str, Any] = {
+        "updated_user_patience": updated_user_patience,
+        "tool_called_patience": Overwrite([]),
+    }
     message = request.messages[-1]
     # this must be a tool call
     if isinstance(message, ToolMessage):
-        modified_content = (
+        # Persist the budget as structured metadata on the *same* tool message
+        # (matched by id, so the add_messages reducer replaces it in place) with
+        # the original, note-free content. This is what reaches the serialized
+        # record; mutating ``request.messages`` below only affects the transient
+        # copy the model sees this turn, so it never survives into state on its
+        # own. Built from the original content *before* the in-place mutation.
+        update["messages"] = [
+            message.model_copy(
+                update={
+                    "additional_kwargs": {
+                        **message.additional_kwargs,
+                        "remaining_budget": updated_user_patience,
+                        "total_budget": initial_user_patience,
+                    }
+                }
+            )
+        ]
+        # Show the model its remaining budget on this turn (transient request copy).
+        request.messages[-1].content = (
             f"{message.content}"
             f"\n\n[SYSTEM NOTE: Remaining budget: {updated_user_patience:.1f}/{initial_user_patience:.1f}]"
         )
-        request.messages[-1].content = modified_content
 
     response = handler(request)
     return ExtendedModelResponse(
         model_response=response,
-        command=command,
+        command=Command(update=update),
     )
 
 
@@ -162,7 +198,7 @@ def tool_wrapper_patience_and_submit(
                         name=tool_name,
                     )
                 ],
-                'updated_user_patience': -1
+                'updated_user_patience': PATIENCE_BLOCKED
             },
         )
 
@@ -171,17 +207,27 @@ def tool_wrapper_patience_and_submit(
     if tool_name == "submit_sql":
         tool_output = json.loads(response.content)
 
-        # Either out of budget or the SQL passed → the episode is terminal.
-        # Preserve the FULL tool response (with the `passed` field and the
-        # submit_sql tool name) so downstream metric extraction in
-        # `utils_process_agent_response` can read `execution_accuracy` and the
-        # explorer renders the turn with its tool name. Rewriting the content
-        # to just the message string would drop `passed` and break scoring.
-        if user_patience < 0 or tool_output["passed"]:
+        # Decide whether this submit ends the episode, and *why*. A passing submit
+        # is a clean success; a non-passing submit reached only because the budget
+        # ran out is a forced finalize. The two map to distinct terminal sentinels
+        # so `check_budget_limit` can word the closing message correctly.
+        if tool_output["passed"]:
+            terminal_patience = PATIENCE_SUBMIT_PASSED
+        elif user_patience < 0:
+            terminal_patience = PATIENCE_SUBMIT_EXHAUSTED
+        else:
+            terminal_patience = None  # wrong SQL but budget remains → let the agent retry
+
+        if terminal_patience is not None:
+            # Preserve the FULL tool response (with the `passed` field and the
+            # submit_sql tool name) so downstream metric extraction in
+            # `utils_process_agent_response` can read `execution_accuracy` and the
+            # explorer renders the turn with its tool name. Rewriting the content
+            # to just the message string would drop `passed` and break scoring.
             return Command(
                 update={
                     "messages": [response.model_copy(deep=True)],
-                    "updated_user_patience": -2,
+                    "updated_user_patience": terminal_patience,
                 },
             )
 

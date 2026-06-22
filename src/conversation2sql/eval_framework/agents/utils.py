@@ -94,11 +94,12 @@ def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:
         # ToolMessage.content may be a list of content blocks (LangChain spec),
         # not just a str — normalise to text before the regex / JSON decode.
         content = utils_single_msg_to_str(message)
-        # The budget middleware appends "[SYSTEM NOTE: Remaining budget: x/y]" to
-        # the tool message before the next model call. Capture the numbers so the
-        # explorer can show how the budget diminishes, then strip the note from
-        # the content the same way it was stripped before.
-        budget = _parse_remaining_budget(content)
+        # The budget middleware persists the remaining/total budget as structured
+        # metadata on the tool message (and appends a "[SYSTEM NOTE: Remaining
+        # budget: x/y]" note to the transient copy the model sees). Prefer the
+        # metadata; fall back to parsing a note from the content for robustness.
+        # Either way, strip any note from the rendered content.
+        budget = _budget_from_metadata(message) or _parse_remaining_budget(content)
         clean = re.sub(r"\s*\[SYSTEM NOTE:.*?\]\s*$", "", content, flags=re.DOTALL)
         try:
             clean = json.loads(clean)
@@ -121,6 +122,23 @@ def utils_process_single_msg(message: BaseMessage, tool_costs: dict) -> dict:
 _REMAINING_BUDGET_RE = re.compile(
     r"\[SYSTEM NOTE: Remaining budget:\s*(-?\d+(?:\.\d+)?)\s*/\s*(-?\d+(?:\.\d+)?)\]"
 )
+
+
+def _budget_from_metadata(message: ToolMessage) -> dict:
+    """Read the budget the middleware persisted into ``additional_kwargs``.
+
+    ``wrap_model_append_tool_message`` stores ``remaining_budget`` / ``total_budget``
+    as structured metadata on the tool message (rather than only in the note text
+    the model sees), so the numbers survive into the serialized record. Returns an
+    empty dict when no budget metadata is present.
+    """
+    kwargs = message.additional_kwargs or {}
+    if "remaining_budget" not in kwargs:
+        return {}
+    return {
+        "remaining_budget": float(kwargs["remaining_budget"]),
+        "total_budget": float(kwargs["total_budget"]),
+    }
 
 
 def _parse_remaining_budget(content: str) -> dict:
