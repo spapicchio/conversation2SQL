@@ -3,7 +3,7 @@ version: "3.8"
 services:
   devcontainer:
     # image: verlai/verl:vllm017.latest
-    image: vllm/vllm-openai:latest
+    image: vllm/vllm-openai:v0.23.0
     network_mode: host
     shm_size: '128g'
     cap_add:

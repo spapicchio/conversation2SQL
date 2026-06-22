@@ -47,7 +47,7 @@
     // Cubin provides pre-compiled CUDA binaries (cubins) 
     // and (Just-In-Time Cache) jit-cache is used to cache the optimized kernels on disk.
     // run `flashinfer show-config` to match the same 0.6.4 version for both.
-    "flashinfer": "uv pip install --system flashinfer-cubin==0.6.11.post2 flashinfer-jit-cache==0.6.11.post2 --extra-index-url https://flashinfer.ai/whl/cu130",
+    "flashinfer": "uv pip install --system flashinfer-cubin==0.6.12 flashinfer-jit-cache==0.6.12 --extra-index-url https://flashinfer.ai/whl/cu130",
     // Update transformers to the latest version, which is required for gemma4 and the latest flashinfer.
     "transformers": "uv pip install --system --upgrade transformers",
     // Installs the PostgreSQL client tools (psql, pg_isready) so they are available
