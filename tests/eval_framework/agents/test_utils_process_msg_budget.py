@@ -37,6 +37,23 @@ def test_tool_message_handles_negative_remaining_budget():
     assert out["total_budget"] == 12.0
 
 
+def test_tool_message_exposes_budget_from_metadata():
+    # The middleware persists the budget as structured metadata (not note text)
+    # so the model-facing content is unchanged; the serializer must read it.
+    msg = ToolMessage(
+        content=json.dumps({"passed": True}),
+        tool_call_id="1",
+        name="execute_sql",
+        additional_kwargs={"remaining_budget": 5.0, "total_budget": 12.0},
+    )
+
+    out = utils_process_single_msg(msg, tool_costs={})
+
+    assert out["remaining_budget"] == 5.0
+    assert out["total_budget"] == 12.0
+    assert out["content"] == {"passed": True}
+
+
 def test_tool_message_without_note_has_no_budget_fields():
     msg = ToolMessage(
         content=json.dumps({"passed": False}), tool_call_id="1", name="submit_sql"

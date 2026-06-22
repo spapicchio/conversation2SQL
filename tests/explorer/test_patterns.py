@@ -141,6 +141,28 @@ def test_submit_after_error_fires_on_identical_failed_sql():
     assert "submit_after_error" in _hits(rec)
 
 
+def test_submit_after_error_fires_on_psql_console_error():
+    # psql_console is used instead of execute_sql in the psql ablation; the
+    # detector must recognise the same SQL erroring there before submission.
+    rec = _record(
+        _ai(("psql_console", {"command": "SELECT x FROM t"})),
+        _tool("psql_console", status="error", content="column x does not exist"),
+        _ai(("submit_sql", {"sql": "SELECT x FROM t"})), _tool("submit_sql"),
+    )
+    assert "submit_after_error" in _hits(rec)
+
+
+def test_submit_after_error_quiet_for_psql_meta_command_error():
+    # A backslash meta-command does not run the query, so an error on \d t
+    # should not be linked to a later submission of any SQL.
+    rec = _record(
+        _ai(("psql_console", {"command": "\\d t"})),
+        _tool("psql_console", status="error", content="table t does not exist"),
+        _ai(("submit_sql", {"sql": "SELECT * FROM t"})), _tool("submit_sql"),
+    )
+    assert "submit_after_error" not in _hits(rec)
+
+
 def test_unrecovered_error_loop_needs_three_consecutive():
     two = _record(
         _ai(("execute_sql", {"sql": "a"})), _tool("execute_sql", status="error"),
@@ -161,6 +183,48 @@ def test_unrecovered_error_loop_resets_on_success():
         _ai(("execute_sql", {"sql": "b"})), _tool("execute_sql", status="success"),
         _ai(("execute_sql", {"sql": "c"})), _tool("execute_sql", status="error"),
         _ai(("execute_sql", {"sql": "d"})), _tool("execute_sql", status="error"),
+    )
+    assert "unrecovered_error_loop" not in _hits(rec)
+
+
+def test_unrecovered_error_loop_fires_on_psql_console_errors():
+    # Three consecutive psql_console SQL errors (no execute_sql) must fire.
+    rec = _record(
+        _ai(("psql_console", {"command": "SELECT a"})), _tool("psql_console", status="error"),
+        _ai(("psql_console", {"command": "SELECT b"})), _tool("psql_console", status="error"),
+        _ai(("psql_console", {"command": "SELECT c"})), _tool("psql_console", status="error"),
+    )
+    assert "unrecovered_error_loop" in _hits(rec)
+
+
+def test_unrecovered_error_loop_fires_on_mixed_execute_and_psql_errors():
+    rec = _record(
+        _ai(("execute_sql", {"sql": "a"})), _tool("execute_sql", status="error"),
+        _ai(("psql_console", {"command": "SELECT b"})), _tool("psql_console", status="error"),
+        _ai(("execute_sql", {"sql": "c"})), _tool("execute_sql", status="error"),
+    )
+    assert "unrecovered_error_loop" in _hits(rec)
+
+
+def test_unrecovered_error_loop_psql_meta_command_does_not_extend_or_reset_streak():
+    # A \dt meta-command in between two real SQL errors must be ignored —
+    # it neither increments the streak nor resets it.
+    rec = _record(
+        _ai(("psql_console", {"command": "SELECT a"})), _tool("psql_console", status="error"),
+        _ai(("psql_console", {"command": "\\dt"})), _tool("psql_console"),
+        _ai(("psql_console", {"command": "SELECT b"})), _tool("psql_console", status="error"),
+        _ai(("psql_console", {"command": "SELECT c"})), _tool("psql_console", status="error"),
+    )
+    assert "unrecovered_error_loop" in _hits(rec)
+
+
+def test_unrecovered_error_loop_resets_on_psql_console_success():
+    rec = _record(
+        _ai(("psql_console", {"command": "SELECT a"})), _tool("psql_console", status="error"),
+        _ai(("psql_console", {"command": "SELECT b"})), _tool("psql_console", status="error"),
+        _ai(("psql_console", {"command": "SELECT ok"})), _tool("psql_console", status="success"),
+        _ai(("psql_console", {"command": "SELECT c"})), _tool("psql_console", status="error"),
+        _ai(("psql_console", {"command": "SELECT d"})), _tool("psql_console", status="error"),
     )
     assert "unrecovered_error_loop" not in _hits(rec)
 
@@ -734,3 +798,76 @@ def test_cooccurrence_empty_frame_has_columns():
     df = pattern_cooccurrence([clean])
     assert df.empty
     assert list(df.columns) == ["given", "pattern", "count", "n_given", "conditional"]
+
+
+# ── resubmit_unchanged ──────────────────────────────────────────────────────────
+
+
+def test_resubmit_unchanged_in_catalog():
+    assert "resubmit_unchanged" in PATTERN_NAMES
+
+
+def test_resubmit_unchanged_fires_when_same_sql_submitted_twice():
+    rec = _record(
+        _ai(("execute_sql", {"sql": "SELECT x"})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": "SELECT x"})),
+        _tool("submit_sql", content="Your SQL is not correct."),
+        _ai(("submit_sql", {"sql": "SELECT x"})), _tool("submit_sql"),
+    )
+    assert "resubmit_unchanged" in _hits(rec)
+
+
+def test_resubmit_unchanged_quiet_when_sql_differs_between_submits():
+    rec = _record(
+        _ai(("execute_sql", {"sql": "SELECT x"})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": "SELECT x"})),
+        _tool("submit_sql", content="Your SQL is not correct."),
+        _ai(("execute_sql", {"sql": "SELECT y"})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": "SELECT y"})), _tool("submit_sql"),
+    )
+    assert "resubmit_unchanged" not in _hits(rec)
+
+
+def test_resubmit_unchanged_ignores_whitespace_differences():
+    rec = _record(
+        _ai(("submit_sql", {"sql": "SELECT  x"})),
+        _tool("submit_sql", content="Your SQL is not correct."),
+        _ai(("submit_sql", {"sql": "SELECT x"})), _tool("submit_sql"),
+    )
+    assert "resubmit_unchanged" in _hits(rec)
+
+
+def test_resubmit_unchanged_fires_even_with_other_calls_between_submits():
+    # Intervening tool calls (schema exploration, etc.) between two identical
+    # submits do not break the pattern — the SQL is still unchanged.
+    rec = _record(
+        _ai(("submit_sql", {"sql": "SELECT x"})),
+        _tool("submit_sql", content="Your SQL is not correct."),
+        _ai(("get_schema", {})), _tool("get_schema"),
+        _ai(("psql_console", {"command": "\\dt"})), _tool("psql_console"),
+        _ai(("submit_sql", {"sql": "SELECT x"})), _tool("submit_sql"),
+    )
+    assert "resubmit_unchanged" in _hits(rec)
+
+
+def test_resubmit_unchanged_quiet_on_single_submission():
+    rec = _record(
+        _ai(("execute_sql", {"sql": "SELECT x"})), _tool("execute_sql"),
+        _ai(("submit_sql", {"sql": "SELECT x"})), _tool("submit_sql"),
+    )
+    assert "resubmit_unchanged" not in _hits(rec)
+
+
+def test_scope_by_accuracy_filters_pass_fail_and_passes_all_through():
+    from explorer.patterns import scope_by_accuracy
+
+    recs = [
+        {"instance_id": "a", "execution_accuracy": True},
+        {"instance_id": "b", "execution_accuracy": False},
+        {"instance_id": "c"},  # missing key → treated as failed
+    ]
+    assert scope_by_accuracy(recs, "All") == recs
+    assert scope_by_accuracy(recs, "Passed (1)") == [recs[0]]
+    assert scope_by_accuracy(recs, "Failed (0)") == [recs[1], recs[2]]
+    # Unknown scope is a no-op (defensive default).
+    assert scope_by_accuracy(recs, "???") == recs

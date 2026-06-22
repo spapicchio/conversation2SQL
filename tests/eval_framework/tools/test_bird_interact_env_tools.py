@@ -835,6 +835,135 @@ class TestPsqlConsoleImpl:
         assert "showing first" not in out
 
 
+# ---------------------------------------------------------------------------
+# strict inspection mode (enable_psql_strict_inspection ablation)
+# ---------------------------------------------------------------------------
+_CANNED_PSQL_HELP = (
+    "General\n"
+    "  \\q                     quit psql\n"
+    "  \\watch [SEC]           execute query every SEC seconds\n"
+    "\n"
+    "Informational\n"
+    "  (options: S = show system objects, + = additional detail)\n"
+    "  \\d[S+]                 list tables, views, and sequences\n"
+    "  \\dt[S+] [PATTERN]      list tables\n"
+    "  \\l[+]   [PATTERN]      list databases\n"
+    "  \\sf[+]  FUNCNAME       show a function's definition\n"
+    "\n"
+    "Formatting\n"
+    "  \\x [on|off|auto]       toggle expanded output (currently off)\n"
+    "\n"
+    "Connection\n"
+    "  \\c[onnect] ...         connect to new database\n"
+)
+
+
+class TestExtractInformationalHelp:
+    """_extract_informational_help slices only the 'Informational' section out
+    of psql's full \\? output, so the agent isn't shown commands that are
+    blocked under strict mode."""
+
+    def test_keeps_only_informational_block(self):
+        out = env_tools._extract_informational_help(_CANNED_PSQL_HELP)
+        assert out.startswith("Informational")
+        assert "\\dt[S+] [PATTERN]      list tables" in out
+        assert "\\l[+]   [PATTERN]      list databases" in out
+
+    def test_drops_other_sections(self):
+        out = env_tools._extract_informational_help(_CANNED_PSQL_HELP)
+        assert "Formatting" not in out
+        assert "Connection" not in out
+        assert "quit psql" not in out
+        assert "\\x" not in out
+
+
+class TestPsqlStrictInspection:
+    """Under strict mode psql_console only allows SQL queries, help (\\?, \\h)
+    and the informational \\d-family; everything else is refused."""
+
+    def _run_mock(self, stdout):
+        return patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr=""),
+        )
+
+    def test_informational_dt_is_allowed(self):
+        with self._run_mock("list") as run_mock:
+            out = psql_console_impl("\\dt", db_dsn="dsn", strict=True)
+        assert out == "list"
+        run_mock.assert_called_once()
+
+    def test_informational_d_plus_table_is_allowed(self):
+        with self._run_mock("desc") as run_mock:
+            out = psql_console_impl("\\d+ plants", db_dsn="dsn", strict=True)
+        assert out == "desc"
+        run_mock.assert_called_once()
+
+    def test_list_databases_and_functions_allowed(self):
+        for cmd in ("\\l", "\\df", "\\sf myfunc", "\\dn", "\\z"):
+            with self._run_mock("ok") as run_mock:
+                out = psql_console_impl(cmd, db_dsn="dsn", strict=True)
+            assert out == "ok", cmd
+            run_mock.assert_called_once()
+
+    def test_sql_help_is_allowed(self):
+        with self._run_mock("SELECT syntax") as run_mock:
+            out = psql_console_impl("\\h SELECT", db_dsn="dsn", strict=True)
+        assert out == "SELECT syntax"
+        run_mock.assert_called_once()
+
+    def test_select_query_is_allowed(self):
+        with self._run_mock("rows") as run_mock:
+            out = psql_console_impl("SELECT 1;", db_dsn="dsn", strict=True)
+        assert out == "rows"
+        run_mock.assert_called_once()
+
+    def test_formatting_command_is_refused_without_spawning(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("\\x", db_dsn="dsn", strict=True)
+        assert out == env_tools.PSQL_STRICT_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_connection_and_timing_and_pset_refused(self):
+        for cmd in ("\\c otherdb", "\\timing", "\\pset border 2"):
+            with patch.object(env_tools.subprocess, "run") as run_mock:
+                out = psql_console_impl(cmd, db_dsn="dsn", strict=True)
+            assert out == env_tools.PSQL_STRICT_REFUSAL, cmd
+            run_mock.assert_not_called()
+
+    def test_bare_meta_g_with_pipe_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("\\g | sh", db_dsn="dsn", strict=True)
+        assert out == env_tools.PSQL_STRICT_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_sql_with_trailing_host_reaching_still_blocked(self):
+        # A SELECT (SQL path) with a trailing host-reaching \g | sh must still
+        # be caught by the host-reaching guardrail, not slip through strict mode.
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("SELECT 1 \\g | sh", db_dsn="dsn", strict=True)
+        assert out == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_help_question_mark_returns_filtered_informational_only(self):
+        with self._run_mock(_CANNED_PSQL_HELP):
+            out = psql_console_impl("\\?", db_dsn="dsn", strict=True)
+        assert "Informational" in out
+        assert "\\dt" in out
+        assert "Formatting" not in out
+        assert "Connection" not in out
+        # A short banner reminds the agent SQL queries are the other option.
+        assert "SELECT" in out
+
+    def test_non_strict_mode_leaves_formatting_command_allowed(self):
+        # Rollback safety: with strict off (default), behaviour is unchanged —
+        # \x reaches psql just as before.
+        with self._run_mock("toggled") as run_mock:
+            out = psql_console_impl("\\x", db_dsn="dsn")
+        assert out == "toggled"
+        run_mock.assert_called_once()
+
+
 def test_psql_console_select_real_db():
     db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
     out = psql_console_impl("SELECT sitekey FROM plants LIMIT 1;", db_dsn)
@@ -927,6 +1056,38 @@ class TestApplyColumnCommentsImpl:
 
         mock_cur.execute.assert_not_called()
         mock_conn.commit.assert_called_once()
+
+
+class TestExtractEnumTypes:
+    """extract_enum_types pulls the CREATE TYPE ... AS ENUM (...) statements out
+    of a DDL dump so the psql prompt can list the allowed enum values (psql mode
+    drops get_schema, and \\d shows only the enum type name, not its values)."""
+
+    def test_returns_enum_statements_in_order(self):
+        ddl = (
+            "-- PostgreSQL schema dump for schema: public\n\n"
+            'CREATE TYPE "impairment_enum" AS ENUM (\'Severe\', \'Moderate\', \'Mild\');\n'
+            'CREATE TYPE "improvement_enum" AS ENUM (\'Moderate\', \'Minimal\', \'Significant\');\n'
+            'CREATE TABLE "patients" ("id" int);\n'
+        )
+        out = env_tools.extract_enum_types(ddl)
+        assert out == (
+            'CREATE TYPE "impairment_enum" AS ENUM (\'Severe\', \'Moderate\', \'Mild\');\n'
+            'CREATE TYPE "improvement_enum" AS ENUM (\'Moderate\', \'Minimal\', \'Significant\');'
+        )
+
+    def test_returns_empty_string_when_no_enum_types(self):
+        ddl = 'CREATE TABLE "patients" ("id" int, "name" text);'
+        assert env_tools.extract_enum_types(ddl) == ""
+
+    def test_ignores_non_enum_create_type(self):
+        ddl = (
+            'CREATE TYPE "addr" AS (street text, city text);\n'
+            'CREATE TYPE "status_enum" AS ENUM (\'on\', \'off\');\n'
+        )
+        assert env_tools.extract_enum_types(ddl) == (
+            'CREATE TYPE "status_enum" AS ENUM (\'on\', \'off\');'
+        )
 
 
 def test_apply_column_comments_visible_in_psql_describe_real_db():

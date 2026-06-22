@@ -146,3 +146,62 @@ def test_render_pattern_hits_tag_the_flagged_turn(monkeypatch):
     # The label badge appears as an in-trace turn tag (not only in the banner).
     tag_calls = [c for c in cap.markdown_calls if "\U0001f6a9" in c and "Blind submit" in c]
     assert tag_calls
+
+
+class _CapturingCaptionSt(_StubSt):
+    """_StubSt that records caption() text so budget-badge assertions can inspect it."""
+
+    def __init__(self):
+        self.caption_calls: list[str] = []
+
+    def caption(self, body="", *_args, **_kwargs):
+        self.caption_calls.append(str(body))
+        return _StubCtx()
+
+
+def test_render_shows_budget_on_assistant_tool_calls(monkeypatch):
+    """Each assistant turn that makes a tool call shows the budget it had available.
+
+    The first turn sees the full ``task_budget``; subsequent turns see the
+    ``remaining_budget`` annotated on the preceding tool message.
+    """
+    import explorer.render as render
+
+    cap = _CapturingCaptionSt()
+    monkeypatch.setattr(render, "st", cap)
+    record = {
+        "instance_id": "i1",
+        "task_budget": 12,
+        "messages": [
+            {"role": "ai", "content": "a", "tool_calls": [{"tool_name": "get_schema"}]},
+            {
+                "role": "tool",
+                "tool_name": "get_schema",
+                "status": "success",
+                "content": {},
+                "remaining_budget": 11,
+                "total_budget": 12,
+            },
+            {"role": "ai", "content": "b", "tool_calls": [{"tool_name": "execute_sql"}]},
+        ],
+    }
+    render.render_conversation(record)
+    budget_caps = [c for c in cap.caption_calls if "🪙 budget" in c]
+    assert "🪙 budget: 12/12" in budget_caps[0]  # first turn: full budget
+    assert "🪙 budget: 11/12" in budget_caps[1]  # second turn: after the tool's note
+
+
+def test_render_omits_budget_when_task_budget_missing(monkeypatch):
+    """Records without budget info (e.g. no_tool baseline) render no budget badge."""
+    import explorer.render as render
+
+    cap = _CapturingCaptionSt()
+    monkeypatch.setattr(render, "st", cap)
+    record = {
+        "instance_id": "i1",
+        "messages": [
+            {"role": "ai", "content": "a", "tool_calls": [{"tool_name": "get_schema"}]},
+        ],
+    }
+    render.render_conversation(record)
+    assert not any("🪙 budget" in c for c in cap.caption_calls)
