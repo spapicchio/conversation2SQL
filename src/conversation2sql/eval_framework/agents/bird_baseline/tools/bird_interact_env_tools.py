@@ -230,10 +230,89 @@ def _truncate_psql_output(output: str, max_rows: int = MAX_RESULT_ROWS) -> str:
     return "\n".join(kept) + _more_rows_note(str(total))
 
 
-def psql_console_impl(command: str, db_dsn: str) -> str:
-    if _violates_psql_guardrail(command):
-        return PSQL_GUARDRAIL_REFUSAL
+# ---------------------------------------------------------------------------
+# Strict inspection mode (enable_psql_strict_inspection ablation)
+# ---------------------------------------------------------------------------
+# In strict mode psql_console is an allowlist, not a denylist: only SQL queries,
+# SQL-syntax help (\h), the help index (\?), and the read-only Informational
+# meta-commands (the \d-family plus \l, \sf, \sv, \z) are allowed. Every other
+# meta-command is refused. The rationale: each call is a fresh `psql -X -c <one
+# command>` with no session persistence, so formatting/buffer/variable/
+# conditional commands are inert and connection/OS commands are out of scope —
+# none of them help write SQL.
+#
+# The non-\d informational/help commands. \s (history) is host-reaching and
+# deliberately excluded, so only the two-letter \sf/\sv pass; the whole \d-family
+# is matched by prefix below.
+_PSQL_INFO_EXTRA = frozenset({"l", "sf", "sv", "z", "h"})
 
+PSQL_STRICT_REFUSAL = (
+    "Refused: this console is restricted to read-only inspection. Allowed: a "
+    "SELECT/WITH/EXPLAIN query, \\h for SQL syntax, or an informational "
+    "meta-command (the \\d-family, \\l, \\sf, \\sv, \\z). Run \\? to list them."
+)
+
+PSQL_STRICT_HELP_BANNER = (
+    "This is a READ-ONLY inspection console. You may run:\n"
+    "  - a SQL query: SELECT / WITH / EXPLAIN\n"
+    "  - \\h [NAME] for SQL syntax help\n"
+    "  - one of the informational meta-commands listed below.\n"
+    "All other psql meta-commands are disabled.\n\n"
+)
+
+
+def _is_informational_meta(name: str) -> bool:
+    """True if ``name`` (the letters right after the leading backslash) is a
+    read-only Informational meta-command. The entire ``\\d`` family qualifies;
+    plus ``\\l``, ``\\sf``, ``\\sv``, ``\\z``, and the ``\\h`` SQL-syntax help."""
+    return name.startswith("d") or name in _PSQL_INFO_EXTRA
+
+
+def _strict_psql_refusal(command: str) -> str | None:
+    """Return a refusal message if ``command`` is not allowed under strict
+    inspection mode, else ``None`` (allowed — caller runs it).
+
+    A command that does not start with a backslash is a SQL query: it keeps the
+    host-reaching guardrail so a trailing ``\\!``/``\\g | sh`` injection is still
+    caught. A backslash command is allowed only when it is ``\\?`` (handled as
+    filtered help by the caller) or an informational meta-command.
+    """
+    stripped = command.lstrip()
+    if not stripped.startswith("\\"):
+        return PSQL_GUARDRAIL_REFUSAL if _violates_psql_guardrail(command) else None
+    if stripped.startswith("\\?"):
+        return None
+    match = re.match(r"\\([A-Za-z]+)", stripped)
+    if match and _is_informational_meta(match.group(1)):
+        return None
+    return PSQL_STRICT_REFUSAL
+
+
+def _extract_informational_help(full_help: str) -> str:
+    """Slice the ``Informational`` section out of psql's ``\\?`` output.
+
+    psql's help is a sequence of column-0 section headers (``General``,
+    ``Informational``, ``Formatting`` …) each followed by indented command
+    lines. We keep the ``Informational`` header and its body, dropping every
+    other section so strict mode doesn't advertise blocked commands.
+    """
+    out: list[str] = []
+    capturing = False
+    for line in full_help.split("\n"):
+        is_header = bool(line) and not line[0].isspace() and not line.startswith("\\")
+        if is_header:
+            capturing = line.strip() == "Informational"
+            if capturing:
+                out.append(line)
+            continue
+        if capturing:
+            out.append(line)
+    return "\n".join(out).rstrip()
+
+
+def _run_psql(command: str, db_dsn: str) -> str:
+    """Run one ``psql -X -c <command>`` under a read-only, timeout-bounded env
+    and return its text output (stdout on success, else stderr/stdout)."""
     env = {
         **os.environ,
         "PGOPTIONS": "-c default_transaction_read_only=on -c statement_timeout=60s",
@@ -248,8 +327,26 @@ def psql_console_impl(command: str, db_dsn: str) -> str:
         )
     except subprocess.TimeoutExpired:
         return f"Error: psql timed out after {PSQL_TIMEOUT_S}s."
+    return proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)
 
-    output = proc.stdout if proc.returncode == 0 else (proc.stderr or proc.stdout)
+
+def _filtered_psql_help(db_dsn: str) -> str:
+    """Run ``\\?`` and return only its Informational section, prefixed with a
+    banner reminding the agent that SQL queries and ``\\h`` are also available."""
+    return PSQL_STRICT_HELP_BANNER + _extract_informational_help(_run_psql("\\?", db_dsn))
+
+
+def psql_console_impl(command: str, db_dsn: str, strict: bool = False) -> str:
+    if strict:
+        refusal = _strict_psql_refusal(command)
+        if refusal is not None:
+            return refusal
+        if command.lstrip().startswith("\\?"):
+            return _filtered_psql_help(db_dsn)
+    elif _violates_psql_guardrail(command):
+        return PSQL_GUARDRAIL_REFUSAL
+
+    output = _run_psql(command, db_dsn)
     if not _is_psql_meta_command(command):
         output = _truncate_psql_output(output)
     return output
@@ -631,9 +728,15 @@ def psql_console(command: str, runtime: ToolRuntime[TaskData, CustomAgentState])
 
     # Typical flow: \\dt to see tables → \\d <table> to learn a table's columns and
     # keys → a SELECT to inspect real values → submit_sql. Host shell / filesystem
-    # meta-commands (\\!, \\copy, \\o, \\i, \\e, \\w, \\s) are blocked.
+    # meta-commands (\\!, \\copy, \\o, \\i, \\e, \\w, \\s) are blocked. Under the
+    # enable_psql_strict_inspection ablation only SQL + \\h + the informational
+    # \\d-family are allowed and \\? lists just those.
 
-    return psql_console_impl(command=command, db_dsn=runtime.context.db_dsn)
+    return psql_console_impl(
+        command=command,
+        db_dsn=runtime.context.db_dsn,
+        strict=runtime.context.enable_psql_strict_inspection,
+    )
 
 
 @tool

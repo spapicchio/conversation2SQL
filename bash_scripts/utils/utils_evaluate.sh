@@ -92,6 +92,7 @@ build_run_slug() {
   # Ablation: the single read-only psql_console tool is passed via --extra
   # (not a VARIANT), so detect it directly from EXTRA and tag the slug.
   [[ "${EXTRA:-}" =~ --enable_psql_console[[:space:]]+true ]] && slug="${slug}__psql"
+  [[ "${EXTRA:-}" =~ --enable_psql_strict_inspection[[:space:]]+true ]] && slug="${slug}__strictpsql"
   [[ "${EXTRA:-}" =~ --enable_python_udf[[:space:]]+true ]] && slug="${slug}__pyudf"
   # IF DEBUG IS SET and it is TRUE, add a suffix to distinguish these runs without needing a separate VARIANT for debug configs.
   [[ -n "${DEBUG:-}" && "${DEBUG:-}" == "true" ]] && slug="${slug}__debug"

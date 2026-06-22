@@ -98,6 +98,7 @@ def run_agent_bird_baseline(
             "enable_ask_user": enable_ask_user,
             "enable_table_schema_tools": single_task.enable_table_schema_tools,
             "enable_psql_console": single_task.enable_psql_console,
+            "enable_psql_strict_inspection": single_task.enable_psql_strict_inspection,
             "enable_python_udf": single_task.enable_python_udf,
         }
     )

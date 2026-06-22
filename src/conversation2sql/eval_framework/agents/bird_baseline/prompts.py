@@ -48,11 +48,15 @@ Available tools and costs:
 {% endif %}- submit_sql: {{ tool_specs['submit_sql'].summary }}. Cost: {{ tool_specs['submit_sql'].cost }}
 
 Important strategy tips:
-{% if enable_psql_console %}- First explore the database with psql_console: use \\dt to list tables and \\d+ <table> to inspect a table's columns, foreign keys with descriptions, then check column meanings and relevant external knowledge to understand the task.
-{% else %}- First explore the database schema, column meanings, and relevant external knowledge to understand the task.
-{% endif %}{% if enable_ask_user %}- If the user's intent is ambiguous, ask clarifying questions to figure out the real intent before committing to SQL.
+{% if enable_psql_console %}
+- First explore the database with psql_console:{% if enable_psql_strict_inspection %} psql_console is read-only inspection: run \\? to see the available commands (SQL queries plus the informational \\d-family); other meta-commands are disabled.{% else %} use \\dt to list tables and \\d+ <table> to inspect a table's columns, foreign keys with descriptions, and \\dT <table> to get possible enum values, then check column meanings and relevant external knowledge to understand the task.{% endif %}
+{% else %}
+- First explore the database schema, column meanings, and relevant external knowledge to understand the task.
+{% endif %}
+{% if enable_ask_user %}- If the user's intent is ambiguous, ask clarifying questions to figure out the real intent before committing to SQL.
 - Ask one clarification question at a time.
-{% endif %}- Be efficient with your actions to conserve budget.
+{% endif %}
+- Be efficient with your actions to conserve budget.
 - Make sure the submitted SQL is valid and addresses all aspects of the question.
 - Keep track of the remaining budget and prioritize actions accordingly.
 - Be careful with broad retrieval tools such as get_all_column_meanings and get_all_knowledge_definitions because they may return a long context.
@@ -71,7 +75,7 @@ User's Question:
 
 
 def build_bird_interact_agent_messages(
-        params: dict,
+    params: dict,
 ) -> list[dict]:
     # Render the tool list straight from TOOL_SPECS (the single source of truth
     # for each tool's cost + summary) instead of hardcoding the wording or the
