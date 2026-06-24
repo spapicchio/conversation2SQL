@@ -81,6 +81,46 @@ def test_load_column_meanings_missing_file_returns_empty(tmp_path):
 from extract_ddl import ForeignKey, Table  # noqa: E402
 from generate_catalog import render_table_markdown  # noqa: E402
 
+import psycopg2  # noqa: E402
+import pytest  # noqa: E402
+
+from generate_catalog import fetch_referenced_by  # noqa: E402
+
+_PROBE_DSN = "postgresql://root:123123@localhost:5432/postgres"
+
+
+def _db_available() -> bool:
+    try:
+        conn = psycopg2.connect(_PROBE_DSN, connect_timeout=2)
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _db_available(), reason="postgres :5432 not reachable")
+def test_fetch_referenced_by_against_live_db():
+    conn = psycopg2.connect(_PROBE_DSN)
+    conn.autocommit = True
+    schema = "catalog_gen_test"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            cur.execute(f"CREATE SCHEMA {schema}")
+            cur.execute(f"CREATE TABLE {schema}.parent (id integer PRIMARY KEY)")
+            cur.execute(
+                f"CREATE TABLE {schema}.child ("
+                f"  id integer PRIMARY KEY,"
+                f"  parent_id integer REFERENCES {schema}.parent(id))"
+            )
+        refs = fetch_referenced_by(conn, schema, "parent")
+        assert refs == ["child(parent_id)"]
+        assert fetch_referenced_by(conn, schema, "child") == []
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()
+
 
 def _make_table() -> Table:
     return Table(

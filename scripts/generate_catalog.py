@@ -5,13 +5,19 @@ Run with `uv run python scripts/generate_catalog.py --help` for CLI options.
 
 from __future__ import annotations
 
+import argparse
 import logging
+import sys
 from pathlib import Path
+from urllib.parse import urlparse
+
+import psycopg2
+from psycopg2.extensions import connection as PgConnection
 
 from conversation2sql.eval_framework.dataset_readers.bird_interact_reader import (
     _get_column_meanings,
 )
-from extract_ddl import Column, Table, _render_table_ddl
+from extract_ddl import Column, Table, _render_table_ddl, fetch_enums, fetch_tables, load_table, open_readonly
 
 logger = logging.getLogger("generate_catalog")
 
@@ -109,3 +115,118 @@ def render_table_markdown(
 
     lines.append("")
     return "\n".join(lines)
+
+
+def fetch_referenced_by(conn: PgConnection, schema: str, table: str) -> list[str]:
+    """Tables/columns that hold a foreign key pointing AT ``table``."""
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT c2.relname AS referencing_table,
+                   a.attname  AS referencing_column
+            FROM pg_constraint con
+            JOIN pg_class c1     ON c1.oid = con.confrelid
+            JOIN pg_class c2     ON c2.oid = con.conrelid
+            JOIN pg_namespace n  ON n.oid = c1.relnamespace
+            JOIN pg_attribute a  ON a.attrelid = con.conrelid
+                                AND a.attnum = ANY(con.conkey)
+            WHERE con.contype = 'f'
+              AND c1.relname = %s
+              AND n.nspname = %s
+            ORDER BY referencing_table, referencing_column
+            """,
+            (table, schema),
+        )
+        return [f"{row[0]}({row[1]})" for row in cur.fetchall()]
+
+
+def generate_catalog_for_db(
+    database: str,
+    output_dir: Path,
+    db_dsn_template: str,
+    dataset_path: Path,
+    schema: str = "public",
+    only_table: str | None = None,
+) -> int:
+    dsn = db_dsn_template.format(database=database)
+    parsed = urlparse(dsn)
+    conn = open_readonly(
+        host=parsed.hostname or "localhost",
+        port=parsed.port or 5432,
+        user=parsed.username or "root",
+        password=parsed.password or "",
+        dbname=database,
+    )
+    try:
+        meanings = load_column_meanings(dataset_path, database)
+        all_enums = fetch_enums(conn, schema)
+        table_names = [only_table] if only_table else fetch_tables(conn, schema)
+
+        db_out = output_dir / database
+        db_out.mkdir(parents=True, exist_ok=True)
+
+        written = 0
+        for name in table_names:
+            try:
+                table = load_table(conn, schema, name, dsn)
+                enums = _enums_used_by_table(table.columns, all_enums)
+                referenced_by = fetch_referenced_by(conn, schema, name)
+                per_table = meanings.get(name.lower(), {})
+                md = render_table_markdown(table, enums, per_table, referenced_by)
+            except psycopg2.Error as exc:
+                logger.warning("skipping table %s: %s", name, exc)
+                continue
+            (db_out / f"{name}.md").write_text(md, encoding="utf-8")
+            written += 1
+        logger.info("wrote %d table file(s) under %s", written, db_out)
+        return written
+    finally:
+        conn.close()
+
+
+def parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Generate a per-table Markdown schema catalog for one database."
+    )
+    p.add_argument("--database", required=True, help="Postgres database name")
+    p.add_argument("--output-dir", required=True, type=Path)
+    p.add_argument("--table", default=None, help="single table (default: all tables)")
+    p.add_argument(
+        "--db-dsn-template",
+        default="postgresql://root:123123@localhost:5432/{database}",
+        help="DSN with a {database} placeholder; use :5433 for the full dataset",
+    )
+    p.add_argument(
+        "--dataset-path",
+        type=Path,
+        default=Path("data/bird_interact/bird-interact-lite"),
+        help="locates <db>_column_meaning_base.json for column descriptions",
+    )
+    p.add_argument("--schema", default="public")
+    p.add_argument("--verbose", "-v", action="store_true")
+    return p.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(levelname)s %(name)s: %(message)s",
+    )
+    try:
+        generate_catalog_for_db(
+            database=args.database,
+            output_dir=args.output_dir,
+            db_dsn_template=args.db_dsn_template,
+            dataset_path=args.dataset_path,
+            schema=args.schema,
+            only_table=args.table,
+        )
+    except psycopg2.Error as exc:
+        logger.error("connection/extraction failed for %s: %s", args.database, exc)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
