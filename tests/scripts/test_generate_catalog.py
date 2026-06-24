@@ -98,7 +98,10 @@ def _db_available() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _db_available(), reason="postgres :5432 not reachable")
+_DB_AVAILABLE = _db_available()
+
+
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="postgres :5432 not reachable")
 def test_fetch_referenced_by_against_live_db():
     conn = psycopg2.connect(_PROBE_DSN)
     conn.autocommit = True
@@ -175,7 +178,7 @@ def test_render_table_markdown_omits_empty_fk_section():
 from generate_catalog import generate_catalog_for_db  # noqa: E402
 
 
-@pytest.mark.skipif(not _db_available(), reason="postgres :5432 not reachable")
+@pytest.mark.skipif(not _DB_AVAILABLE, reason="postgres :5432 not reachable")
 def test_generate_catalog_for_db_end_to_end(tmp_path):
     """Exercise the full load_table -> render -> write path against a live DB.
 

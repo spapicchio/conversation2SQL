@@ -17,7 +17,15 @@ from psycopg2.extensions import connection as PgConnection
 from conversation2sql.eval_framework.dataset_readers.bird_interact_reader import (
     _get_column_meanings,
 )
-from extract_ddl import Column, Table, _render_table_ddl, fetch_enums, fetch_tables, load_table, open_readonly
+from extract_ddl import (
+    Column,
+    Table,
+    _render_table_ddl,
+    fetch_enums,
+    fetch_tables,
+    load_table,
+    open_readonly,
+)
 
 logger = logging.getLogger("generate_catalog")
 
@@ -176,8 +184,11 @@ def generate_catalog_for_db(
                 referenced_by = fetch_referenced_by(conn, schema, name)
                 per_table = meanings.get(name.lower(), {})
                 md = render_table_markdown(table, enums, per_table, referenced_by)
-            except psycopg2.Error as exc:
-                logger.warning("skipping table %s: %s", name, exc)
+            except Exception:
+                # Any per-table failure (DB error, introspection quirk, render
+                # bug) skips that table and continues, so one bad table cannot
+                # abort an unattended full-database run.
+                logger.warning("skipping table %s", name, exc_info=True)
                 continue
             (db_out / f"{name}.md").write_text(md, encoding="utf-8")
             written += 1
