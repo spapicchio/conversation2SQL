@@ -14,7 +14,7 @@ reader:
   filter_query_category: true
   db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}' # Lite DB
   # db_dsn_template: 'postgresql://root:123123@localhost:5433/{database}' # Full DB
-  user_patience_budget: 1
+  user_patience_budget: 12
 
 # predictor.max_new_tokens is derived from the model profile's max_model_len
 # (src/conversation2sql/presets.py, via _COMPLETION_RATIO) and arrives as a CLI
