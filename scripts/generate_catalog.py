@@ -91,8 +91,10 @@ def render_table_markdown(
     lines.append("| column | type | description |")
     lines.append("| --- | --- | --- |")
     for col in table.columns:
+        name = _md_cell(col.name)
+        data_type = _md_cell(col.data_type)
         desc = _md_cell(column_meanings.get(col.name.lower(), ""))
-        lines.append(f"| {col.name} | {col.data_type} | {desc} |")
+        lines.append(f"| {name} | {data_type} | {desc} |")
 
     fk_lines = [
         f"- {fk.column} -> {fk.ref_table}({fk.ref_column})"
