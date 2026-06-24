@@ -189,7 +189,11 @@ elif view == "Co-occurrence":
     if co_df.empty:
         st.info("No anti-patterns fired in this run, so there is nothing to co-occur.")
     else:
-        co_df["Label"] = co_df["count"].map(lambda c: str(int(c)))
+        # Cell text: the conditional probability P(col | row) as a percentage,
+        # with the raw both-fired count on a second line for context.
+        co_df["Label"] = co_df.apply(
+            lambda r: f"{r['conditional'] * 100:.0f}% ({int(r['count'])})", axis=1
+        )
         co_base = alt.Chart(co_df).encode(
             x=alt.X("pattern:N", sort=pattern_order, title="…also hit this pattern"),
             y=alt.Y("given:N", sort=pattern_order, title="Conversations hitting…"),
@@ -207,7 +211,7 @@ elif view == "Co-occurrence":
                 alt.Tooltip("conditional:Q", title="P(col | row)", format=".0%"),
             ],
         )
-        co_text = co_base.mark_text(baseline="middle", fontSize=11).encode(
+        co_text = co_base.mark_text(baseline="middle", fontSize=11, lineBreak="\n").encode(
             text="Label:N",
             color=alt.condition("datum.conditional > 0.5", alt.value("white"), alt.value("black")),
         )
@@ -219,8 +223,9 @@ elif view == "Co-occurrence":
         st.caption(
             "Anti-patterns are **not mutually exclusive** — one conversation can hit "
             "several. Each cell is **P(column | row)**: of the records that hit the row "
-            "pattern, the fraction that *also* hit the column pattern (cell text = the raw "
-            "count of records hitting both). The diagonal is each pattern's own total. A "
+            "pattern, the fraction that *also* hit the column pattern (cell text = that "
+            "probability as a percentage, with the raw count of records hitting both in "
+            "parentheses below). The diagonal is each pattern's own total. A "
             "bright off-diagonal cell means those two failure modes tend to strike the same "
             "conversation. The matrix is asymmetric (the denominator is the row's total), "
             "and only patterns that fired at least once appear. "
