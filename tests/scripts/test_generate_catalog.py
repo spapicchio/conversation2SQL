@@ -43,3 +43,36 @@ def test_enums_used_by_table_empty_when_none_used():
     columns = [_col("id", "integer")]
     all_enums = [("account_status", ["active", "closed"])]
     assert _enums_used_by_table(columns, all_enums) == []
+
+
+import json  # noqa: E402
+
+from generate_catalog import load_column_meanings  # noqa: E402
+
+
+def _write_meaning_file(tmp_path: Path, db_name: str, payload: dict) -> Path:
+    db_dir = tmp_path / db_name
+    db_dir.mkdir(parents=True)
+    (db_dir / f"{db_name}_column_meaning_base.json").write_text(json.dumps(payload))
+    return tmp_path
+
+
+def test_load_column_meanings_groups_by_table(tmp_path):
+    dataset_path = _write_meaning_file(
+        tmp_path,
+        "mydb",
+        {
+            "mydb|customers|email": "Login email, unique",
+            "mydb|customers|id": "Surrogate PK",
+            "mydb|orders|customer_id": "FK to customers",
+        },
+    )
+    result = load_column_meanings(dataset_path, "mydb")
+    assert result == {
+        "customers": {"email": "Login email, unique", "id": "Surrogate PK"},
+        "orders": {"customer_id": "FK to customers"},
+    }
+
+
+def test_load_column_meanings_missing_file_returns_empty(tmp_path):
+    assert load_column_meanings(tmp_path, "absent_db") == {}
