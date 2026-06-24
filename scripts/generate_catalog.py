@@ -5,24 +5,9 @@ Run with `uv run python scripts/generate_catalog.py --help` for CLI options.
 
 from __future__ import annotations
 
-import argparse
 import logging
-import sys
-from pathlib import Path
-from urllib.parse import urlparse
 
-import psycopg2
-from psycopg2.extensions import connection as PgConnection
-
-from extract_ddl import (
-    Table,
-    Column,
-    _render_table_ddl,
-    fetch_enums,
-    fetch_tables,
-    load_table,
-    open_readonly,
-)
+from extract_ddl import Column
 
 logger = logging.getLogger("generate_catalog")
 
@@ -34,7 +19,7 @@ def _enums_used_by_table(
     enum_names = {name for name, _ in all_enums}
     used: set[str] = set()
     for col in columns:
-        base = col.data_type.replace("[]", "").strip().strip('"')
+        base = col.data_type.strip().removesuffix("[]").strip().strip('"')
         if base in enum_names:
             used.add(base)
     return [(name, labels) for name, labels in all_enums if name in used]
