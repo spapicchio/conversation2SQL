@@ -46,6 +46,8 @@ class RunStats:
     reliability: ReliabilityStats | None = None
     n_truncated: int = 0  # records with >=1 model call cut off by max-model-len
     truncated_fraction: float = 0.0  # n_truncated / n_total
+    n_errors: int = 0  # crashed samples from results_error.jsonl (not in records)
+    run_error_distribution: Counter[str] = field(default_factory=Counter)  # error_class -> count
 
 
 @dataclass
@@ -58,6 +60,7 @@ class RunData:
     groups: dict[str, list[dict]] = field(default_factory=dict)
     n_iterations: int = 0
     duplicate_count: int = 0  # dropped repeats of an (instance_id, iteration) pair
+    errors: list[dict] = field(default_factory=list)  # results_error.jsonl, tagged with _error_class
 
 
 def classify_submit_error(record: dict) -> str:
@@ -87,6 +90,28 @@ def classify_submit_error(record: dict) -> str:
         return "Wrong SQL"
     if "databaseerror" in message_lower:
         return "DB Error"
+    return "Other"
+
+
+def classify_run_error(error: object) -> str:
+    """Return a human-readable class for a results_error.jsonl 'error' string.
+
+    These are mid-run crashes (the sample never produced a completed record),
+    not submit_sql outcomes — see classify_submit_error for the latter. Check
+    the more specific provider classes (context-window, bad-request) before the
+    generic ones so a context-window error isn't mislabeled as a bad request.
+    """
+    text = error if isinstance(error, str) else str(error)
+    if "ContextWindowExceededError" in text:
+        return "Context Window Exceeded"
+    if "BadRequestError" in text:
+        return "Bad Request"
+    if "InternalServerError" in text:
+        return "Internal Server Error"
+    if "Timeout" in text:
+        return "Timeout"
+    if "updated_user_patience" in text:
+        return "Patience State Error"
     return "Other"
 
 
@@ -179,7 +204,11 @@ def conversation_length_split(
     return {pass_key: passed, fail_key: failed}
 
 
-def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = None) -> RunStats:
+def _compute_stats(
+    records: list[dict],
+    groups: dict[str, list[dict]] | None = None,
+    errors: list[dict] = (),
+) -> RunStats:
     n_total = len(records)
     n_passed = sum(1 for r in records if r.get("execution_accuracy", False))
 
@@ -275,6 +304,11 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
     pattern_stats = aggregate_patterns(g)
     clean = clean_fraction(g)
 
+    n_errors = len(errors)
+    run_error_distribution: Counter[str] = Counter(
+        e.get("_error_class", "Other") for e in errors
+    )
+
     return RunStats(
         n_total=n_total,
         n_passed=n_passed,
@@ -295,6 +329,8 @@ def _compute_stats(records: list[dict], groups: dict[str, list[dict]] | None = N
         reliability=reliability_metrics(groups or {}),
         n_truncated=n_truncated,
         truncated_fraction=truncated_fraction,
+        n_errors=n_errors,
+        run_error_distribution=run_error_distribution,
     )
 
 
@@ -409,6 +445,20 @@ def load_run(path: Path) -> RunData:
         g.sort(key=lambda r: r.get("iteration", 0))
     n_iterations = len({r.get("iteration", 0) for r in records}) if records else 0
 
+    errors: list[dict] = []
+    error_file = path / "results_error.jsonl"
+    if error_file.exists():
+        raw_errors, _ = _read_jsonl(error_file)
+        seen_err: set[tuple[object, object]] = set()
+        for e in raw_errors:
+            key = (e.get("instance_id"), e.get("iteration", 0))
+            if e.get("instance_id") and key in seen_err:
+                continue
+            if e.get("instance_id"):
+                seen_err.add(key)
+            e["_error_class"] = classify_run_error(e.get("error", ""))
+            errors.append(e)
+
     config: dict = {}
     config_path = path / "config.yaml"
     if config_path.exists():
@@ -418,12 +468,13 @@ def load_run(path: Path) -> RunData:
     return RunData(
         records=records,
         config=config,
-        stats=_compute_stats(records, groups),
+        stats=_compute_stats(records, groups, errors),
         malformed_count=malformed,
         source_file=source_file,
         groups=groups,
         n_iterations=n_iterations,
         duplicate_count=duplicate_count,
+        errors=errors,
     )
 
 

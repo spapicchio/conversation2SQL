@@ -10,6 +10,7 @@ from explorer.loader import (
     RunData,
     RunStats,
     _compute_stats,
+    classify_run_error,
     classify_submit_error,
     conversation_length,
     conversation_length_split,
@@ -17,6 +18,30 @@ from explorer.loader import (
     load_run,
     join_runs,
 )
+
+
+class TestClassifyRunError:
+    def test_timeout(self):
+        assert classify_run_error("litellm.Timeout: APITimeoutError - timed out") == "Timeout"
+
+    def test_context_window(self):
+        msg = "litellm.ContextWindowExceededError: ContextWindowExceededError - maximum context length is 64000"
+        assert classify_run_error(msg) == "Context Window Exceeded"
+
+    def test_internal_server_error(self):
+        assert classify_run_error("litellm.InternalServerError: boom") == "Internal Server Error"
+
+    def test_bad_request(self):
+        assert classify_run_error("litellm.BadRequestError: bad params") == "Bad Request"
+
+    def test_patience_state_error(self):
+        assert classify_run_error("At key 'updated_user_patience': value is invalid") == "Patience State Error"
+
+    def test_other_fallback(self):
+        assert classify_run_error("some unrecognized failure") == "Other"
+
+    def test_non_string_input(self):
+        assert classify_run_error({"weird": 1}) == "Other"
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -495,6 +520,43 @@ class TestLoadRun:
         run = load_run(tmp_path)
         assert len(run.records) == 2
         assert run.duplicate_count == 0
+
+    def test_loads_errors(self, tmp_path):
+        self._write_jsonl(tmp_path / "results_iter0.jsonl", [make_record(instance_id="t1")])
+        self._write_jsonl(
+            tmp_path / "results_error.jsonl",
+            [
+                {"instance_id": "e1", "iteration": 0, "error": "litellm.Timeout: x"},
+                {"instance_id": "e2", "iteration": 0, "error": "litellm.BadRequestError: y"},
+            ],
+        )
+        run = load_run(tmp_path)
+        assert run.stats.n_errors == 2
+        assert run.stats.run_error_distribution == Counter({"Timeout": 1, "Bad Request": 1})
+        assert {e["instance_id"] for e in run.errors} == {"e1", "e2"}
+        assert all("_error_class" in e for e in run.errors)
+        # purely diagnostic: completed records / accuracy untouched
+        assert len(run.records) == 1
+        assert run.stats.n_instances == 1
+
+    def test_no_error_file(self, tmp_path):
+        self._write_jsonl(tmp_path / "results_iter0.jsonl", [make_record(instance_id="t1")])
+        run = load_run(tmp_path)
+        assert run.errors == []
+        assert run.stats.n_errors == 0
+        assert run.stats.run_error_distribution == Counter()
+
+    def test_errors_deduped(self, tmp_path):
+        self._write_jsonl(tmp_path / "results_iter0.jsonl", [make_record(instance_id="t1")])
+        self._write_jsonl(
+            tmp_path / "results_error.jsonl",
+            [
+                {"instance_id": "e1", "iteration": 0, "error": "litellm.Timeout: x"},
+                {"instance_id": "e1", "iteration": 0, "error": "litellm.Timeout: x"},
+            ],
+        )
+        run = load_run(tmp_path)
+        assert run.stats.n_errors == 1
 
 
 # ── join_runs ──────────────────────────────────────────────────────────────────
