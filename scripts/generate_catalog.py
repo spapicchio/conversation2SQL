@@ -11,7 +11,7 @@ from pathlib import Path
 from conversation2sql.eval_framework.dataset_readers.bird_interact_reader import (
     _get_column_meanings,
 )
-from extract_ddl import Column
+from extract_ddl import Column, Table, _render_table_ddl
 
 logger = logging.getLogger("generate_catalog")
 
@@ -57,3 +57,53 @@ def load_column_meanings(
         _, table, column = parts
         out.setdefault(table, {})[column] = entry.column_meaning
     return out
+
+
+def _md_cell(text: str) -> str:
+    """Sanitize a value for a Markdown table cell (escape pipes, flatten newlines)."""
+    return text.replace("|", "\\|").replace("\r", " ").replace("\n", " ").strip()
+
+
+def render_table_markdown(
+    table: Table,
+    enums: list[tuple[str, list[str]]],
+    column_meanings: dict[str, str],
+    referenced_by: list[str],
+) -> str:
+    lines: list[str] = []
+    lines.append(f"# table: {table.name}")
+    lines.append("")
+    lines.append("## Description")
+    lines.append("")  # intentional empty placeholder
+
+    lines.append("## DDL")
+    lines.append("```sql")
+    for ename, labels in enums:
+        quoted = ", ".join(f"'{lbl}'" for lbl in labels)
+        lines.append(f'CREATE TYPE "{ename}" AS ENUM ({quoted});')
+    if enums:
+        lines.append("")
+    lines.append(_render_table_ddl(table, None))
+    lines.append("```")
+    lines.append("")
+
+    lines.append("## Columns")
+    lines.append("| column | type | description |")
+    lines.append("| --- | --- | --- |")
+    for col in table.columns:
+        desc = _md_cell(column_meanings.get(col.name.lower(), ""))
+        lines.append(f"| {col.name} | {col.data_type} | {desc} |")
+
+    fk_lines = [
+        f"- {fk.column} -> {fk.ref_table}({fk.ref_column})"
+        for fk in table.foreign_keys
+    ]
+    ref_lines = [f"- referenced by: {ref}" for ref in referenced_by]
+    if fk_lines or ref_lines:
+        lines.append("")
+        lines.append("## Foreign keys")
+        lines.extend(fk_lines)
+        lines.extend(ref_lines)
+
+    lines.append("")
+    return "\n".join(lines)

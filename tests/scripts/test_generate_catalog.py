@@ -76,3 +76,57 @@ def test_load_column_meanings_groups_by_table(tmp_path):
 
 def test_load_column_meanings_missing_file_returns_empty(tmp_path):
     assert load_column_meanings(tmp_path, "absent_db") == {}
+
+
+from extract_ddl import ForeignKey, Table  # noqa: E402
+from generate_catalog import render_table_markdown  # noqa: E402
+
+
+def _make_table() -> Table:
+    return Table(
+        schema="public",
+        examples_str="",
+        name="customers",
+        columns=[
+            _col("id", "integer"),
+            _col("email", "text"),
+            _col("status", "account_status"),
+            _col("region_id", "integer"),
+        ],
+        foreign_keys=[ForeignKey("region_id", "regions", "id", "NO ACTION")],
+        indexes=[],
+        checks=[],
+        composite_pk=[],
+    )
+
+
+def test_render_table_markdown_full():
+    md = render_table_markdown(
+        table=_make_table(),
+        enums=[("account_status", ["active", "closed"])],
+        column_meanings={"email": "Login email, unique", "status": "active or closed"},
+        referenced_by=["orders(customer_id)"],
+    )
+    assert "# table: customers" in md
+    assert "## Description" in md
+    assert "## DDL" in md
+    assert "```sql" in md
+    assert "CREATE TYPE \"account_status\" AS ENUM ('active', 'closed');" in md
+    assert 'CREATE TABLE "customers" (' in md
+    assert "## Columns" in md
+    assert "| column | type | description |" in md
+    assert "| email | text | Login email, unique |" in md
+    assert "| id | integer |  |" in md
+    assert "## Foreign keys" in md
+    assert "- region_id -> regions(id)" in md
+    assert "- referenced by: orders(customer_id)" in md
+
+
+def test_render_table_markdown_omits_empty_fk_section():
+    table = _make_table()
+    table.foreign_keys = []
+    md = render_table_markdown(table, enums=[], column_meanings={}, referenced_by=[])
+    assert "## Foreign keys" not in md
+    # Enums absent -> no CREATE TYPE, but CREATE TABLE still present.
+    assert "CREATE TYPE" not in md
+    assert 'CREATE TABLE "customers" (' in md
