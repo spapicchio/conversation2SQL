@@ -170,3 +170,49 @@ def test_render_table_markdown_omits_empty_fk_section():
     # Enums absent -> no CREATE TYPE, but CREATE TABLE still present.
     assert "CREATE TYPE" not in md
     assert 'CREATE TABLE "customers" (' in md
+
+
+from generate_catalog import generate_catalog_for_db  # noqa: E402
+
+
+@pytest.mark.skipif(not _db_available(), reason="postgres :5432 not reachable")
+def test_generate_catalog_for_db_end_to_end(tmp_path):
+    """Exercise the full load_table -> render -> write path against a live DB.
+
+    Regression guard: load_table must not invoke the broken fetch_examples
+    path (it would raise TypeError, not psycopg2.Error, and crash the run).
+    """
+    conn = psycopg2.connect(_PROBE_DSN)
+    conn.autocommit = True
+    schema = "catalog_gen_e2e"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            cur.execute(f"CREATE SCHEMA {schema}")
+            cur.execute(f"CREATE TABLE {schema}.customer (id integer PRIMARY KEY)")
+            cur.execute(
+                f"CREATE TABLE {schema}.orders ("
+                f"  id integer PRIMARY KEY,"
+                f"  customer_id integer REFERENCES {schema}.customer(id))"
+            )
+        written = generate_catalog_for_db(
+            database="postgres",
+            output_dir=tmp_path,
+            db_dsn_template="postgresql://root:123123@localhost:5432/{database}",
+            dataset_path=tmp_path,  # no meaning file -> empty descriptions
+            schema=schema,
+            only_table="orders",
+        )
+        assert written == 1
+        out_file = tmp_path / "postgres" / "orders.md"
+        assert out_file.exists()
+        md = out_file.read_text()
+        assert "# table: orders" in md
+        assert 'CREATE TABLE "orders" (' in md
+        assert "## Foreign keys" in md
+        assert "- customer_id ->" in md
+        assert "customer(id)" in md
+    finally:
+        with conn.cursor() as cur:
+            cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+        conn.close()

@@ -168,7 +168,10 @@ def generate_catalog_for_db(
         written = 0
         for name in table_names:
             try:
-                table = load_table(conn, schema, name, dsn)
+                # Pass an empty DSN so load_table skips fetch_examples: the
+                # catalog has no example-rows section, and fetch_examples in
+                # extract_ddl currently mis-calls _format_result.
+                table = load_table(conn, schema, name, "")
                 enums = _enums_used_by_table(table.columns, all_enums)
                 referenced_by = fetch_referenced_by(conn, schema, name)
                 per_table = meanings.get(name.lower(), {})
