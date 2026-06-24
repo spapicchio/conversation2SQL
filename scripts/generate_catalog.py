@@ -1,6 +1,38 @@
 """Generate a per-table Markdown schema catalog for one Postgres database.
 
-Run with `uv run python scripts/generate_catalog.py --help` for CLI options.
+For a given database this writes one Markdown file per table under
+``<output-dir>/<database>/<table>.md``, each containing an (empty) description
+placeholder, the table DDL (``CREATE TYPE`` enums it uses + ``CREATE TABLE``),
+a Columns table joining live Postgres types with descriptions from the
+dataset's ``<db>_column_meaning_base.json``, and a Foreign keys section.
+
+For a whole-database run it also writes ``<output-dir>/<database>/_constraints.md``,
+a single file listing every primary-key and foreign-key constraint in the db.
+
+Examples
+--------
+All tables of a database on the lite container (:5432)::
+
+    uv run python scripts/generate_catalog.py --database alien --output-dir catalogs
+
+A single table, with verbose logging::
+
+    uv run python scripts/generate_catalog.py \
+        --database alien --table signals --output-dir catalogs -v
+
+A database on the full container (:5433) — swap the port in the DSN template::
+
+    uv run python scripts/generate_catalog.py \
+        --database crypto --output-dir catalogs \
+        --db-dsn-template "postgresql://root:123123@localhost:5433/{database}"
+
+Point at a different dataset location for column descriptions::
+
+    uv run python scripts/generate_catalog.py \
+        --database alien --output-dir catalogs \
+        --dataset-path data/bird_interact/bird-interact-full
+
+Run with ``--help`` for the full list of options.
 """
 
 from __future__ import annotations
@@ -43,9 +75,7 @@ def _enums_used_by_table(
     return [(name, labels) for name, labels in all_enums if name in used]
 
 
-def load_column_meanings(
-    dataset_path: Path, db_name: str
-) -> dict[str, dict[str, str]]:
+def load_column_meanings(dataset_path: Path, db_name: str) -> dict[str, dict[str, str]]:
     """Load `<db>_column_meaning_base.json` into {table: {column: meaning}}.
 
     Keys in the source file are lowercased `db|table|column`. Missing file
@@ -113,8 +143,7 @@ def render_table_markdown(
         lines.append(f"| {name} | {data_type} | {desc} |")
 
     fk_lines = [
-        f"- {fk.column} -> {fk.ref_table}({fk.ref_column})"
-        for fk in table.foreign_keys
+        f"- {fk.column} -> {fk.ref_table}({fk.ref_column})" for fk in table.foreign_keys
     ]
     ref_lines = [f"- referenced by: {ref}" for ref in referenced_by]
     if fk_lines or ref_lines:
@@ -123,6 +152,49 @@ def render_table_markdown(
         lines.extend(fk_lines)
         lines.extend(ref_lines)
 
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _primary_key_columns(table: Table) -> list[str]:
+    """Primary-key column names for a table (composite or single-column)."""
+    if table.composite_pk:
+        return list(table.composite_pk)
+    return [col.name for col in table.columns if col.is_pk]
+
+
+def render_constraints_markdown(database: str, tables: list[Table]) -> str:
+    """Render a single Markdown file listing every PK/FK constraint in the db.
+
+    One ``## Primary keys`` table (table -> key columns) followed by one
+    ``## Foreign keys`` table (table.column -> referenced table.column, plus the
+    ON DELETE action). Tables are listed in the order they were loaded.
+    """
+    lines: list[str] = []
+    lines.append(f"# constraints: {database}")
+    lines.append("")
+
+    lines.append("## Primary keys")
+    lines.append("| table | columns |")
+    lines.append("| --- | --- |")
+    for table in tables:
+        pk_cols = _primary_key_columns(table)
+        if not pk_cols:
+            continue
+        cols = _md_cell(", ".join(pk_cols))
+        lines.append(f"| {_md_cell(table.name)} | {cols} |")
+    lines.append("")
+
+    lines.append("## Foreign keys")
+    lines.append("| table | column | references |")
+    lines.append("| --- | --- | --- |")
+    for table in tables:
+        for fk in table.foreign_keys:
+            ref = _md_cell(f"{fk.ref_table}({fk.ref_column})")
+            lines.append(
+                f"| {_md_cell(table.name)} | {_md_cell(fk.column)} | "
+                f"{ref} |"
+            )
     lines.append("")
     return "\n".join(lines)
 
@@ -172,10 +244,11 @@ def generate_catalog_for_db(
         all_enums = fetch_enums(conn, schema)
         table_names = [only_table] if only_table else fetch_tables(conn, schema)
 
-        db_out = output_dir / database
+        db_out = output_dir / database / "tables"
         db_out.mkdir(parents=True, exist_ok=True)
 
         written = 0
+        loaded: list[Table] = []
         for name in table_names:
             try:
                 # Pass an empty DSN so load_table skips fetch_examples: the
@@ -195,8 +268,20 @@ def generate_catalog_for_db(
                 logger.warning("skipping table %s", name, exc_info=True)
                 continue
             (db_out / f"{name}.md").write_text(md, encoding="utf-8")
+            loaded.append(table)
             written += 1
         logger.info("wrote %d table file(s) under %s", written, db_out)
+
+        # Db-level constraints file: only meaningful for a whole-database run,
+        # since a single-table run cannot list cross-table PK/FK relationships.
+        if only_table is None and loaded:
+            constraints_md = render_constraints_markdown(database, loaded)
+            (db_out / "_foreign_key_constraints.md").write_text(
+                constraints_md, encoding="utf-8"
+            )
+            logger.info(
+                "wrote constraints file %s", db_out / "_foreign_key_constraints.md"
+            )
         return written
     finally:
         conn.close()
