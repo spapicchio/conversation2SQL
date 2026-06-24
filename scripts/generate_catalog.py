@@ -97,6 +97,8 @@ def render_table_markdown(
         lines.append(f'CREATE TYPE "{ename}" AS ENUM ({quoted});')
     if enums:
         lines.append("")
+    # descriptions=None: column descriptions live in the ## Columns table
+    # below, so the DDL block stays a clean CREATE TABLE.
     lines.append(_render_table_ddl(table, None))
     lines.append("```")
     lines.append("")
@@ -182,6 +184,8 @@ def generate_catalog_for_db(
                 table = load_table(conn, schema, name, "")
                 enums = _enums_used_by_table(table.columns, all_enums)
                 referenced_by = fetch_referenced_by(conn, schema, name)
+                # meanings are keyed by lowercased table name; Postgres reports
+                # unquoted identifiers lowercased, which is the BIRD-Interact norm.
                 per_table = meanings.get(name.lower(), {})
                 md = render_table_markdown(table, enums, per_table, referenced_by)
             except Exception:
@@ -236,8 +240,11 @@ def main() -> int:
             schema=args.schema,
             only_table=args.table,
         )
-    except psycopg2.Error as exc:
-        logger.error("connection/extraction failed for %s: %s", args.database, exc)
+    except (psycopg2.Error, OSError, ValueError) as exc:
+        # psycopg2.Error: connection/extraction; OSError: output write/path;
+        # ValueError: malformed meaning JSON (json.JSONDecodeError). Report
+        # cleanly with a non-zero exit instead of a raw traceback.
+        logger.error("catalog generation failed for %s: %s", args.database, exc)
         return 1
     return 0
 

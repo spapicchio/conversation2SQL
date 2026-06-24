@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import psycopg2
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from extract_ddl import Column  # noqa: E402
-from generate_catalog import _enums_used_by_table  # noqa: E402
+from extract_ddl import Column, ForeignKey, Table  # noqa: E402
+from generate_catalog import (  # noqa: E402
+    _enums_used_by_table,
+    fetch_referenced_by,
+    generate_catalog_for_db,
+    load_column_meanings,
+    render_table_markdown,
+)
 
 
 def _col(name: str, data_type: str) -> Column:
@@ -45,11 +55,6 @@ def test_enums_used_by_table_empty_when_none_used():
     assert _enums_used_by_table(columns, all_enums) == []
 
 
-import json  # noqa: E402
-
-from generate_catalog import load_column_meanings  # noqa: E402
-
-
 def _write_meaning_file(tmp_path: Path, db_name: str, payload: dict) -> Path:
     db_dir = tmp_path / db_name
     db_dir.mkdir(parents=True)
@@ -77,14 +82,6 @@ def test_load_column_meanings_groups_by_table(tmp_path):
 def test_load_column_meanings_missing_file_returns_empty(tmp_path):
     assert load_column_meanings(tmp_path, "absent_db") == {}
 
-
-from extract_ddl import ForeignKey, Table  # noqa: E402
-from generate_catalog import render_table_markdown  # noqa: E402
-
-import psycopg2  # noqa: E402
-import pytest  # noqa: E402
-
-from generate_catalog import fetch_referenced_by  # noqa: E402
 
 _PROBE_DSN = "postgresql://root:123123@localhost:5432/postgres"
 
@@ -173,9 +170,6 @@ def test_render_table_markdown_omits_empty_fk_section():
     # Enums absent -> no CREATE TYPE, but CREATE TABLE still present.
     assert "CREATE TYPE" not in md
     assert 'CREATE TABLE "customers" (' in md
-
-
-from generate_catalog import generate_catalog_for_db  # noqa: E402
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="postgres :5432 not reachable")
