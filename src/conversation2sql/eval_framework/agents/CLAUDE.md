@@ -1,10 +1,10 @@
 # agents
 
-Two agent implementations for the BIRD-Interact benchmark.
+Three agent implementations for the BIRD-Interact benchmark.
 
 ## Variants
 
-`ConfigPipeline.baseline` selects one of four ablation cells. Two runner functions cover them:
+`ConfigPipeline.baseline` selects one of five ablation cells. Three runner functions cover them:
 
 | `baseline` enum | Runner | DB tools | `ask_user` | Query |
 |-----------------|--------|----------|-----------|-------|
@@ -12,8 +12,11 @@ Two agent implementations for the BIRD-Interact benchmark.
 | `tools_only`    | `run_agent_bird_baseline(enable_ask_user=False)` | ✅ | — | clean |
 | `tools_user`    | `run_agent_bird_baseline(enable_ask_user=True)`  | ✅ | ✅ | clean |
 | `bird_full`     | `run_agent_bird_baseline(enable_ask_user=True)`  | ✅ | ✅ | ambiguous |
+| `deep_agent`    | `run_agent_deep_agent`                            | FS (read) | ✅ ask_user | ambiguous |
 
-`bird_baseline/agent_code.py` is the parameterizable agent — `enable_ask_user` toggles the `ask_user` tool and the corresponding Jinja blocks in `prompts.py`. The middleware stack is identical across the three agentic variants.
+`bird_baseline/agent_code.py` is the parameterizable agent — `enable_ask_user` toggles the `ask_user` tool and the corresponding Jinja blocks in `prompts.py`. The middleware stack is identical across the three `bird_baseline` variants.
+
+`deep_agent/` parallels `bird_full` but swaps the schema tools for a deepagents virtual filesystem (`ls`/`read_file`/`grep`/`glob` over seeded `/db/*` files), reusing the patience budget and `execute_sql`/`ask_user`/`submit_sql` unchanged. See `deep_agent/CLAUDE.md`.
 
 ## utils.py
 
