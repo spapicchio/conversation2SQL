@@ -12,6 +12,8 @@ import re
 
 from conversation2sql.eval_framework.state import ExternalKnowledgeEntry
 
+MAX_DEPTH = 10
+
 # ---------------------------------------------------------------------------
 # LaTeX -> code-like notation
 # ---------------------------------------------------------------------------
@@ -230,9 +232,10 @@ def _format_line(entry: ExternalKnowledgeEntry, token: str) -> str:
     name = _strip_token(entry.knowledge)
     desc = (entry.description or "").strip().rstrip(".")
     formula = simplify_latex(entry.definition or "")
-    suffix = f" - formula: {formula}" if formula else ""
-    prefix = f"[{token}] {name}" if name else f"[{token}]"
-    return f"{prefix} - {desc}{suffix}" if desc else f"{prefix}{suffix}"
+    formula = f"- **definition**: {formula}" if formula else ""
+    # prefix = f"- [{token}] {name}" if name else f"## [{token}]"
+    # return f"{prefix}\n{desc}\n{suffix}" if desc else f"{prefix}\n{suffix}"
+    return f"- **description**: {desc}\n{formula}\n" if desc else f"{formula}\n"
 
 
 def _render_section(
@@ -247,6 +250,22 @@ def _render_section(
     Returns the lines without any '# Subgraph N' header so callers can prepend
     their own (or none).
     """
+    # edges = [
+    #     (token_of[child_id], token_of[n.id])
+    #     for n in ordered
+    #     for child_id in (n.children_knowledge or [])
+    #     if child_id in in_kb
+    # ]
+
+    # lines: list[str] = []
+    # if edges:
+    #     lines.append("# Dependency edges (prerequisite -> dependent)")
+    #     lines.extend(f"({a}, prerequisite_of, {b})" for a, b in edges)
+    #     lines.append("")
+    # lines.append("# Definitions (topological order: leaves first)")
+    # for n in ordered:
+    #     lines.append(_format_line(n, token_of[n.id]))
+
     edges = [
         (token_of[child_id], token_of[n.id])
         for n in ordered
@@ -255,15 +274,24 @@ def _render_section(
     ]
 
     lines: list[str] = []
+    # if edges:
+    #     lines.append(f"# Prerequisite edges up to {MAX_DEPTH} (topological order: leaves first)")
+    #     lines.extend(f"({a}, prerequisite_of, {b})\n" for a, b in edges[:MAX_DEPTH])
+    #     lines.append("")
+    lines.append(f"# {ordered[-1].knowledge}")
+    lines.append(_format_line(ordered[-1], token_of[ordered[-1].id]))
     if edges:
-        lines.append("# Dependency edges (prerequisite -> dependent)")
-        lines.extend(f"({a}, prerequisite_of, {b})" for a, b in edges)
+        edges = edges[::-1]  # reverse
+        lines.append("The following are the nodes in the knowledge base that represent the prerequisite edges you can refer to:")
+        if len(edges) > MAX_DEPTH:
+            lines.append(f"Showing only the first {MAX_DEPTH} prerequisite edges.")
+        
+        lines.extend(f'- "{b}" needs "{a}"\n' for a, b in edges[:MAX_DEPTH])
         lines.append("")
-    lines.append("# Definitions (topological order: leaves first)")
-    for n in ordered:
-        lines.append(_format_line(n, token_of[n.id]))
-    return lines
+    # for n in ordered:
+        # lines.append(_format_line(n, token_of[n.id]))
 
+    return lines
 
 # ---------------------------------------------------------------------------
 # Public API
