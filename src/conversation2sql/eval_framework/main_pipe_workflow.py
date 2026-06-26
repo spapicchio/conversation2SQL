@@ -18,6 +18,7 @@ from conversation2sql.config_input import (
 )
 from conversation2sql.eval_framework.agents import (
     run_agent_bird_baseline,
+    run_agent_deep_agent,
     run_baseline_no_tool,
 )
 from conversation2sql.eval_framework.agents.utils import utils_create_model
@@ -42,6 +43,9 @@ def _resolve_baseline_settings(baseline: str) -> tuple[bool, Callable, bool]:
         "tools_only": (False, run_agent_bird_baseline, False),
         "tools_user": (False, run_agent_bird_baseline, True),
         "bird_full": (True, run_agent_bird_baseline, True),
+        # deep_agent parallels bird_full (ambiguous query + ask_user) but swaps
+        # the schema tools for the deepagents virtual filesystem.
+        "deep_agent": (True, run_agent_deep_agent, True),
     }
     if baseline not in table:
         raise ValueError(
@@ -241,7 +245,7 @@ async def _run_tasks_concurrently(
                         model_agent,
                         model_user_parsing,
                         model_user_generator,
-                        enable_ask_user=(baseline in ("tools_user", "bird_full")),
+                        enable_ask_user=(baseline in ("tools_user", "bird_full", "deep_agent")),
                     )
         except Exception as e:
             # Isolate per-task failures: one wedged/erroring task is logged to

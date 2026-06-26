@@ -94,6 +94,11 @@ build_run_slug() {
   [[ "${EXTRA:-}" =~ --enable_psql_console[[:space:]]+true ]] && slug="${slug}__psql"
   [[ "${EXTRA:-}" =~ --enable_psql_strict_inspection[[:space:]]+true ]] && slug="${slug}__strictpsql"
   [[ "${EXTRA:-}" =~ --enable_python_udf[[:space:]]+true ]] && slug="${slug}__pyudf"
+  # deep_agent baseline ablations (passed via --extra, mirroring the psql tags).
+  [[ "${EXTRA:-}" =~ --deep_enable_todos[[:space:]]+true ]] && slug="${slug}__todos"
+  [[ "${EXTRA:-}" =~ --deep_enable_subagents[[:space:]]+true ]] && slug="${slug}__subagents"
+  [[ "${EXTRA:-}" =~ --deep_enable_summarization[[:space:]]+true ]] && slug="${slug}__summar"
+  [[ "${EXTRA:-}" =~ --deep_enable_fs_write[[:space:]]+true ]] && slug="${slug}__fswrite"
   # IF DEBUG IS SET and it is TRUE, add a suffix to distinguish these runs without needing a separate VARIANT for debug configs.
   [[ -n "${DEBUG:-}" && "${DEBUG:-}" == "true" ]] && slug="${slug}__debug"
 
