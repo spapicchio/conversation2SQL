@@ -36,6 +36,12 @@ Run with ``--help`` for the full list of options.
 """
 
 from __future__ import annotations
+from conversation2sql.eval_framework.agents.utils_kb_linearize import (
+    linearize_prerequisites,
+)
+from conversation2sql.eval_framework.dataset_readers.bird_interact_reader import (
+    _get_external_knowledge,
+)
 
 import argparse
 import logging
@@ -191,10 +197,7 @@ def render_constraints_markdown(database: str, tables: list[Table]) -> str:
     for table in tables:
         for fk in table.foreign_keys:
             ref = _md_cell(f"{fk.ref_table}({fk.ref_column})")
-            lines.append(
-                f"| {_md_cell(table.name)} | {_md_cell(fk.column)} | "
-                f"{ref} |"
-            )
+            lines.append(f"| {_md_cell(table.name)} | {_md_cell(fk.column)} | {ref} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -222,6 +225,63 @@ def fetch_referenced_by(conn: PgConnection, schema: str, table: str) -> list[str
         return [f"{row[0]}({row[1]})" for row in cur.fetchall()]
 
 
+def _generate_tables_for_db(dataset_path, database, db_out, conn, schema, only_table):
+    meanings = load_column_meanings(dataset_path, database)
+    all_enums = fetch_enums(conn, schema)
+    table_names = [only_table] if only_table else fetch_tables(conn, schema)
+    written = 0
+    loaded: list[Table] = []
+    for name in table_names:
+        try:
+            # Pass an empty DSN so load_table skips fetch_examples: the
+            # catalog has no example-rows section, and fetch_examples in
+            # extract_ddl currently mis-calls _format_result.
+            table = load_table(conn, schema, name, "")
+            enums = _enums_used_by_table(table.columns, all_enums)
+            referenced_by = fetch_referenced_by(conn, schema, name)
+            # meanings are keyed by lowercased table name; Postgres reports
+            # unquoted identifiers lowercased, which is the BIRD-Interact norm.
+            per_table = meanings.get(name.lower(), {})
+            md = render_table_markdown(table, enums, per_table, referenced_by)
+        except Exception:
+            # Any per-table failure (DB error, introspection quirk, render
+            # bug) skips that table and continues, so one bad table cannot
+            # abort an unattended full-database run.
+            logger.warning("skipping table %s", name, exc_info=True)
+            continue
+        (db_out / f"{name}.md").write_text(md, encoding="utf-8")
+        loaded.append(table)
+        written += 1
+    logger.info("wrote %d table file(s) under %s", written, db_out)
+
+    # Db-level constraints file: only meaningful for a whole-database run,
+    # since a single-table run cannot list cross-table PK/FK relationships.
+    if only_table is None and loaded:
+        constraints_md = render_constraints_markdown(database, loaded)
+        (db_out / "_foreign_key_constraints.md").write_text(
+            constraints_md, encoding="utf-8"
+        )
+        logger.info("wrote constraints file %s", db_out / "_foreign_key_constraints.md")
+    return written
+
+
+def _generate_kb_for_db(dataset_path, database, kb_out):
+    """
+    Generate a knowledge base for a database.
+    """
+
+    external_kb = _get_external_knowledge(dataset_path, database)
+    # print(external_kb)
+    written = 0
+    for kb_name in external_kb:
+        kb_file = kb_out / f"{kb_name}.md"
+        kb_linearize_content = linearize_prerequisites(kb_name, external_kb)
+        kb_file.write_text(kb_linearize_content, encoding="utf-8")
+        written += 1
+
+    return written
+
+
 def generate_catalog_for_db(
     database: str,
     output_dir: Path,
@@ -239,50 +299,20 @@ def generate_catalog_for_db(
         password=parsed.password or "",
         dbname=database,
     )
+    db_out = output_dir / database / "tables"
+    db_out.mkdir(parents=True, exist_ok=True)
+    kb_out = output_dir / database / "knowledge_base"
+    kb_out.mkdir(parents=True, exist_ok=True)
     try:
-        meanings = load_column_meanings(dataset_path, database)
-        all_enums = fetch_enums(conn, schema)
-        table_names = [only_table] if only_table else fetch_tables(conn, schema)
-
-        db_out = output_dir / database / "tables"
-        db_out.mkdir(parents=True, exist_ok=True)
-
-        written = 0
-        loaded: list[Table] = []
-        for name in table_names:
-            try:
-                # Pass an empty DSN so load_table skips fetch_examples: the
-                # catalog has no example-rows section, and fetch_examples in
-                # extract_ddl currently mis-calls _format_result.
-                table = load_table(conn, schema, name, "")
-                enums = _enums_used_by_table(table.columns, all_enums)
-                referenced_by = fetch_referenced_by(conn, schema, name)
-                # meanings are keyed by lowercased table name; Postgres reports
-                # unquoted identifiers lowercased, which is the BIRD-Interact norm.
-                per_table = meanings.get(name.lower(), {})
-                md = render_table_markdown(table, enums, per_table, referenced_by)
-            except Exception:
-                # Any per-table failure (DB error, introspection quirk, render
-                # bug) skips that table and continues, so one bad table cannot
-                # abort an unattended full-database run.
-                logger.warning("skipping table %s", name, exc_info=True)
-                continue
-            (db_out / f"{name}.md").write_text(md, encoding="utf-8")
-            loaded.append(table)
-            written += 1
-        logger.info("wrote %d table file(s) under %s", written, db_out)
-
-        # Db-level constraints file: only meaningful for a whole-database run,
-        # since a single-table run cannot list cross-table PK/FK relationships.
-        if only_table is None and loaded:
-            constraints_md = render_constraints_markdown(database, loaded)
-            (db_out / "_foreign_key_constraints.md").write_text(
-                constraints_md, encoding="utf-8"
-            )
-            logger.info(
-                "wrote constraints file %s", db_out / "_foreign_key_constraints.md"
-            )
-        return written
+        written_tbl = _generate_tables_for_db(
+            dataset_path, database, db_out, conn, schema, only_table
+        )
+        written_kb = _generate_kb_for_db(dataset_path, database, kb_out)
+        logger.info(
+            f"catalog generation for {database} complete: {written_tbl} table(s), {written_kb} knowledge base(s)",
+        )
+    except Exception:
+        logger.error(f"catalog generation failed for {database}", exc_info=True)
     finally:
         conn.close()
 
