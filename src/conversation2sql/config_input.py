@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 class ConfigPipeline(BaseModel):
     debug: bool = True
     output_folder: str = "results"
-    baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full'] = 'bird_full'
+    baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full', 'deep_agent'] = 'bird_full'
     concurrency: int = 1
     num_iterations: int = Field(default=3, ge=1)  # repeat the dataset N times for statistical relevance
     resume: bool = False  # skip (instance_id, iteration) pairs already in output_folder/results_iter*.jsonl and run only the missing ones
@@ -34,6 +34,12 @@ class ConfigReader(BaseModel):
     enable_psql_console: bool = False  # Ablation: replace the DB tools (execute_sql/get_schema/get_table_*) with a single read-only psql terminal tool (psql_console). Mutually exclusive with enable_table_schema_tools.
     enable_psql_strict_inspection: bool = False  # Ablation (only meaningful with enable_psql_console): restrict psql_console to SQL + \h + the informational \d-family; \? lists only those. Off = legacy denylist behavior (full rollback).
     enable_python_udf: bool = False  # Ablation: add create_python_udf tool (plpython3u). Additive — compatible with all other DB-tool variants.
+
+    # --- deep_agent baseline ablations (only meaningful when baseline='deep_agent') ---
+    deep_enable_todos: bool = False  # add deepagents planning/write_todos middleware
+    deep_enable_subagents: bool = False  # add deepagents subagents (task tool) middleware
+    deep_enable_summarization: bool = False  # add deepagents/langchain SummarizationMiddleware
+    deep_enable_fs_write: bool = False  # expose write_file/edit_file (default: read-only FS)
 
     @model_validator(mode="after")
     def _check_db_tool_ablation_exclusivity(self) -> "ConfigReader":

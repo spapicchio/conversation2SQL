@@ -254,6 +254,10 @@ def load_bird_interact_as_tasks(
     enable_table_schema_tools: bool = False,
     enable_psql_console: bool = False,
     enable_psql_strict_inspection: bool = False,
+    deep_enable_todos: bool = False,
+    deep_enable_subagents: bool = False,
+    deep_enable_summarization: bool = False,
+    deep_enable_fs_write: bool = False,
     *args,
     **kwargs,
 ) -> list[TaskData]:
@@ -427,6 +431,10 @@ def load_bird_interact_as_tasks(
                 enable_table_schema_tools=enable_table_schema_tools,
                 enable_psql_console=enable_psql_console,
                 enable_psql_strict_inspection=enable_psql_strict_inspection,
+                deep_enable_todos=deep_enable_todos,
+                deep_enable_subagents=deep_enable_subagents,
+                deep_enable_summarization=deep_enable_summarization,
+                deep_enable_fs_write=deep_enable_fs_write,
                 **line,
             )
             samples.append(sample)

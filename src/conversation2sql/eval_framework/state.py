@@ -73,6 +73,12 @@ class TaskData(BaseModel):
     # When True the agent gets the create_python_udf tool (plpython3u ablation).
     # Additive — compatible with enable_psql_console and enable_table_schema_tools.
     enable_python_udf: bool = False
+    # deep_agent baseline ablations (only meaningful when baseline='deep_agent'),
+    # threaded from ConfigReader exactly like the enable_* flags above.
+    deep_enable_todos: bool = False
+    deep_enable_subagents: bool = False
+    deep_enable_summarization: bool = False
+    deep_enable_fs_write: bool = False
     gt_knowledge_base: dict[str, ExternalKnowledgeEntry] = Field(default_factory=dict)
     #  key = f"{db_name}|{req.table_name.lower()}|{req.column_name.lower()}"
     column_meanings: dict[str, ColumnMeaningEntry] = Field(default_factory=dict)
