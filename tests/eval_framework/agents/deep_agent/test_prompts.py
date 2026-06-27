@@ -18,10 +18,12 @@ def _render(**overrides):
 def test_prompt_mentions_db_filesystem_paths():
     msgs = _render()
     system = msgs[0]["content"]
-    assert "/db/schema.sql" in system
+    assert "/db/tables/" in system
+    assert "/db/knowledge_base/" in system
     assert "read_file" in system
-    # No get_schema-style tools are advertised.
+    # No get_schema-style tools are advertised, and no legacy monolithic paths.
     assert "get_schema" not in system
+    assert "/db/schema.sql" not in system
 
 
 def test_prompt_includes_user_query_and_budget():

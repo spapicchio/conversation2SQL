@@ -1,6 +1,6 @@
 import pytest
 
-from conversation2sql.eval_framework.state import TaskData
+from conversation2sql.eval_framework.state import ExternalKnowledgeEntry, TaskData
 from conversation2sql.eval_framework.agents.deep_agent.filesystem_seed import (
     build_db_filesystem,
 )
@@ -42,9 +42,6 @@ def test_missing_catalog_dir_raises(tmp_path, make_minimal_task_kwargs):
     )
     with pytest.raises(FileNotFoundError, match="absent_db"):
         build_db_filesystem(task)
-
-
-from conversation2sql.eval_framework.state import ExternalKnowledgeEntry
 
 
 def _kb_pair():
