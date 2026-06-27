@@ -1,55 +1,49 @@
-"""Build the virtual-filesystem seed exposing the Postgres DB info to the deep agent.
+"""Seed the deep agent's /db virtual filesystem from the on-disk catalog.
 
-Instead of get_schema-style tools, the deep_agent reads these files via the
-deepagents FilesystemMiddleware (ls/read_file/grep/glob). One file per concern.
+The deep_agent reads a per-database Markdown catalog (produced by
+``scripts/generate_catalog.py``) through the deepagents FilesystemMiddleware.
+Only the catalog folder of the task's own database is mounted, under /db:
+
+  /db/tables/<table>.md                  (read from disk, as-is)
+  /db/tables/_foreign_key_constraints.md (read from disk, as-is)
+  /db/knowledge_base/<node>.md           (re-rendered per task, added in Task 3)
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from deepagents.middleware.filesystem import FileData
 
-from conversation2sql.eval_framework.agents.bird_baseline.tools import (
-    TOOL_COSTS,
-    get_all_column_meanings_impl,
-    get_all_knowledge_definitions_impl,
-)
-from conversation2sql.eval_framework.agents.utils_kb_linearize import linearize_kb
+from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COSTS
 from conversation2sql.eval_framework.state import TaskData
-
-DB_FS_PATHS: tuple[str, str, str] = (
-    "/db/schema.sql",
-    "/db/column_meanings.md",
-    "/db/knowledge_base.md",
-)
-
-_NONE_SENTINEL = "(none)"
 
 
 def _text_file(content: str) -> FileData:
-    body = content if content and content.strip() else _NONE_SENTINEL
-    return {"content": body, "encoding": "utf-8"}
+    return {"content": content, "encoding": "utf-8"}
 
 
-def _render_column_meanings(task: TaskData) -> str:
-    """One block per column: the `db|table|column` key followed by its JSON meaning."""
-    meanings = get_all_column_meanings_impl(task.column_meanings)["column_meanings"]
-    return "\n".join(f"{key}\n{value}" for key, value in meanings.items())
+def _catalog_db_dir(task: TaskData) -> Path:
+    return Path(task.deep_catalog_root) / task.selected_database
 
 
-def _render_knowledge_base(task: TaskData) -> str:
-    """Reuse the same KB rendering the bird tools use (linearized or JSON-dumped)."""
-    if task.is_kb_linearized:
-        return linearize_kb(task.masked_agent_kb)
-    entries = get_all_knowledge_definitions_impl(task.masked_agent_kb)["knowledge"]
-    return "\n\n".join(entries)
+def _seed_tables(db_dir: Path) -> dict[str, FileData]:
+    """Mirror every <db_dir>/tables/*.md file at /db/tables/<name>, verbatim."""
+    files: dict[str, FileData] = {}
+    for path in sorted((db_dir / "tables").glob("*.md")):
+        files[f"/db/tables/{path.name}"] = _text_file(path.read_text(encoding="utf-8"))
+    return files
 
 
 def build_db_filesystem(task: TaskData) -> dict[str, FileData]:
-    """Render the three DB-info files seeded into the deep agent's filesystem."""
-    return {
-        "/db/schema.sql": _text_file(task.ddl_database_schema or ""),
-        "/db/column_meanings.md": _text_file(_render_column_meanings(task)),
-        "/db/knowledge_base.md": _text_file(_render_knowledge_base(task)),
-    }
+    """Render the /db filesystem for one task from its database's catalog folder."""
+    db_dir = _catalog_db_dir(task)
+    if not db_dir.is_dir():
+        raise FileNotFoundError(
+            f"deep_agent catalog not found for database '{task.selected_database}' "
+            f"at {db_dir}. Generate it with scripts/generate_catalog.py "
+            f"(--database {task.selected_database} --output-dir {task.deep_catalog_root})."
+        )
+    return _seed_tables(db_dir)
 
 
 # Bird-coin costs for the deepagents filesystem read/write tools. Reads are cheap

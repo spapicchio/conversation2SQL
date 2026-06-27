@@ -1,33 +1,44 @@
+import pytest
+
+from conversation2sql.eval_framework.state import TaskData
 from conversation2sql.eval_framework.agents.deep_agent.filesystem_seed import (
     build_db_filesystem,
-    DB_FS_PATHS,
 )
 
 
-def test_builds_exactly_three_db_files(task_data):
-    files = build_db_filesystem(task_data)
-    assert set(files) == set(DB_FS_PATHS)
-    assert set(DB_FS_PATHS) == {
-        "/db/schema.sql",
-        "/db/column_meanings.md",
-        "/db/knowledge_base.md",
-    }
+def _write_catalog(root, db="mydb"):
+    """Create a minimal on-disk tables catalog under <root>/<db>/tables/."""
+    tables = root / db / "tables"
+    tables.mkdir(parents=True)
+    (tables / "users.md").write_text("# table: users\n", encoding="utf-8")
+    (tables / "_foreign_key_constraints.md").write_text(
+        "# constraints: mydb\n", encoding="utf-8"
+    )
+    return root
 
 
-def test_schema_file_contains_raw_ddl(task_data):
-    files = build_db_filesystem(task_data)
-    schema = files["/db/schema.sql"]
-    assert schema["encoding"] == "utf-8"
-    assert task_data.ddl_database_schema.strip()[:20] in schema["content"]
+def test_tables_are_loaded_verbatim_from_disk(tmp_path, make_minimal_task_kwargs):
+    _write_catalog(tmp_path)
+    task = TaskData(
+        **make_minimal_task_kwargs(
+            selected_database="mydb",
+            deep_catalog_root=str(tmp_path),
+            masked_agent_kb={},
+        )
+    )
+    files = build_db_filesystem(task)
+    assert files["/db/tables/users.md"]["content"] == "# table: users\n"
+    assert files["/db/tables/users.md"]["encoding"] == "utf-8"
+    assert "/db/tables/_foreign_key_constraints.md" in files
 
 
-def test_empty_kb_yields_none_sentinel(task_data):
-    task_data.masked_agent_kb = {}
-    files = build_db_filesystem(task_data)
-    assert files["/db/knowledge_base.md"]["content"].strip() == "(none)"
-
-
-def test_empty_column_meanings_yields_none_sentinel(task_data):
-    task_data.column_meanings = {}
-    files = build_db_filesystem(task_data)
-    assert files["/db/column_meanings.md"]["content"].strip() == "(none)"
+def test_missing_catalog_dir_raises(tmp_path, make_minimal_task_kwargs):
+    task = TaskData(
+        **make_minimal_task_kwargs(
+            selected_database="absent_db",
+            deep_catalog_root=str(tmp_path),
+            masked_agent_kb={},
+        )
+    )
+    with pytest.raises(FileNotFoundError, match="absent_db"):
+        build_db_filesystem(task)
