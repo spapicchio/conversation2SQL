@@ -42,3 +42,87 @@ def test_missing_catalog_dir_raises(tmp_path, make_minimal_task_kwargs):
     )
     with pytest.raises(FileNotFoundError, match="absent_db"):
         build_db_filesystem(task)
+
+
+from conversation2sql.eval_framework.state import ExternalKnowledgeEntry
+
+
+def _kb_pair():
+    """Two nodes: 'Score (SC)' depends on 'Base (BS)' (SC.children = [BS.id])."""
+    return {
+        "Score (SC)": ExternalKnowledgeEntry(
+            id=1,
+            knowledge="Score (SC)",
+            description="A score",
+            definition="SC = BS * 2",
+            type="calculation_knowledge",
+            children_knowledge=[2],
+        ),
+        "Base (BS)": ExternalKnowledgeEntry(
+            id=2,
+            knowledge="Base (BS)",
+            description="A base value",
+            definition="BS = 10",
+            type="domain_knowledge",
+            children_knowledge=[-1],
+        ),
+    }
+
+
+def test_kb_files_only_for_nodes_in_masked_kb(tmp_path, make_minimal_task_kwargs):
+    _write_catalog(tmp_path)
+    full = _kb_pair()
+    masked = {"Score (SC)": full["Score (SC)"]}  # 'Base (BS)' masked out
+    task = TaskData(
+        **make_minimal_task_kwargs(
+            selected_database="mydb",
+            deep_catalog_root=str(tmp_path),
+            masked_agent_kb=masked,
+        )
+    )
+    files = build_db_filesystem(task)
+    assert "/db/knowledge_base/Score (SC).md" in files
+    assert "/db/knowledge_base/Base (BS).md" not in files
+
+
+def test_dangling_edge_to_masked_node_is_stripped(tmp_path, make_minimal_task_kwargs):
+    _write_catalog(tmp_path)
+    full = _kb_pair()
+    masked = {"Score (SC)": full["Score (SC)"]}  # prerequisite 'Base (BS)' masked
+    task = TaskData(
+        **make_minimal_task_kwargs(
+            selected_database="mydb",
+            deep_catalog_root=str(tmp_path),
+            masked_agent_kb=masked,
+        )
+    )
+    files = build_db_filesystem(task)
+    content = files["/db/knowledge_base/Score (SC).md"]["content"]
+    assert "needs" not in content  # edge to the masked 'BS' node is gone
+
+
+def test_edge_present_when_prerequisite_not_masked(tmp_path, make_minimal_task_kwargs):
+    _write_catalog(tmp_path)
+    task = TaskData(
+        **make_minimal_task_kwargs(
+            selected_database="mydb",
+            deep_catalog_root=str(tmp_path),
+            masked_agent_kb=_kb_pair(),  # both nodes present
+        )
+    )
+    files = build_db_filesystem(task)
+    content = files["/db/knowledge_base/Score (SC).md"]["content"]
+    assert '"SC" needs "BS"' in content
+
+
+def test_empty_kb_seeds_no_knowledge_base_files(tmp_path, make_minimal_task_kwargs):
+    _write_catalog(tmp_path)
+    task = TaskData(
+        **make_minimal_task_kwargs(
+            selected_database="mydb",
+            deep_catalog_root=str(tmp_path),
+            masked_agent_kb={},
+        )
+    )
+    files = build_db_filesystem(task)
+    assert not any(p.startswith("/db/knowledge_base/") for p in files)

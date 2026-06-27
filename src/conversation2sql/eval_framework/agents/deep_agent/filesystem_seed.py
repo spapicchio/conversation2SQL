@@ -15,6 +15,9 @@ from pathlib import Path
 from deepagents.middleware.filesystem import FileData
 
 from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_COSTS
+from conversation2sql.eval_framework.agents.utils_kb_linearize import (
+    linearize_prerequisites,
+)
 from conversation2sql.eval_framework.state import TaskData
 
 
@@ -34,6 +37,19 @@ def _seed_tables(db_dir: Path) -> dict[str, FileData]:
     return files
 
 
+def _seed_knowledge_base(task: TaskData) -> dict[str, FileData]:
+    """One /db/knowledge_base/<node>.md per node, re-rendered from masked_agent_kb.
+
+    Using the (already masked) KB means masked prerequisites are never collected
+    and their edges never render — faithful per-sample masking, no leak.
+    """
+    files: dict[str, FileData] = {}
+    for name in task.masked_agent_kb:
+        content = linearize_prerequisites(name, task.masked_agent_kb)
+        files[f"/db/knowledge_base/{name}.md"] = _text_file(content)
+    return files
+
+
 def build_db_filesystem(task: TaskData) -> dict[str, FileData]:
     """Render the /db filesystem for one task from its database's catalog folder."""
     db_dir = _catalog_db_dir(task)
@@ -43,7 +59,9 @@ def build_db_filesystem(task: TaskData) -> dict[str, FileData]:
             f"at {db_dir}. Generate it with scripts/generate_catalog.py "
             f"(--database {task.selected_database} --output-dir {task.deep_catalog_root})."
         )
-    return _seed_tables(db_dir)
+    files = _seed_tables(db_dir)
+    files.update(_seed_knowledge_base(task))
+    return files
 
 
 # Bird-coin costs for the deepagents filesystem read/write tools. Reads are cheap
