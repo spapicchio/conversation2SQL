@@ -19,3 +19,13 @@ def test_taskdata_carries_deep_flags(make_minimal_task_kwargs):
     task = TaskData(**make_minimal_task_kwargs())
     assert task.deep_enable_todos is False
     assert task.deep_enable_fs_write is False
+
+
+def test_config_reader_has_deep_catalog_root_default_empty():
+    cfg = ConfigReader()
+    assert cfg.deep_catalog_root == ""
+
+
+def test_taskdata_carries_deep_catalog_root(make_minimal_task_kwargs):
+    task = TaskData(**make_minimal_task_kwargs(deep_catalog_root="/some/root"))
+    assert task.deep_catalog_root == "/some/root"

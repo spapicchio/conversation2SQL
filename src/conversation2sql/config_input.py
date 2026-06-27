@@ -40,6 +40,7 @@ class ConfigReader(BaseModel):
     deep_enable_subagents: bool = False  # add deepagents subagents (task tool) middleware
     deep_enable_summarization: bool = False  # add deepagents/langchain SummarizationMiddleware
     deep_enable_fs_write: bool = False  # expose write_file/edit_file (default: read-only FS)
+    deep_catalog_root: str = ''  # root holding <db>/tables/*.md catalogs for the deep_agent FS (e.g. data/bird_interact/catalog_bird_interact_lite); set per run
 
     @model_validator(mode="after")
     def _check_db_tool_ablation_exclusivity(self) -> "ConfigReader":

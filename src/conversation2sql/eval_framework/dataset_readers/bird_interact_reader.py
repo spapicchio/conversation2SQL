@@ -258,6 +258,7 @@ def load_bird_interact_as_tasks(
     deep_enable_subagents: bool = False,
     deep_enable_summarization: bool = False,
     deep_enable_fs_write: bool = False,
+    deep_catalog_root: str = "",
     *args,
     **kwargs,
 ) -> list[TaskData]:
@@ -435,6 +436,7 @@ def load_bird_interact_as_tasks(
                 deep_enable_subagents=deep_enable_subagents,
                 deep_enable_summarization=deep_enable_summarization,
                 deep_enable_fs_write=deep_enable_fs_write,
+                deep_catalog_root=deep_catalog_root,
                 **line,
             )
             samples.append(sample)
