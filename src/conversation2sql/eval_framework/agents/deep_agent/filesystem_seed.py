@@ -53,11 +53,15 @@ def _seed_knowledge_base(task: TaskData) -> dict[str, FileData]:
 def build_db_filesystem(task: TaskData) -> dict[str, FileData]:
     """Render the /db filesystem for one task from its database's catalog folder."""
     db_dir = _catalog_db_dir(task)
-    if not db_dir.is_dir():
+    # Guard the tables/ subdir, not just db_dir: a partial generate_catalog.py
+    # run can leave db_dir present but tables/ missing, which would otherwise
+    # boot the agent with a silently empty schema instead of a clear error.
+    if not (db_dir / "tables").is_dir():
         raise FileNotFoundError(
-            f"deep_agent catalog not found for database '{task.selected_database}' "
-            f"at {db_dir}. Generate it with scripts/generate_catalog.py "
-            f"(--database {task.selected_database} --output-dir {task.deep_catalog_root})."
+            f"deep_agent tables catalog not found for database "
+            f"'{task.selected_database}' at {db_dir / 'tables'}. Generate it with "
+            f"scripts/generate_catalog.py (--database {task.selected_database} "
+            f"--output-dir {task.deep_catalog_root})."
         )
     files = _seed_tables(db_dir)
     files.update(_seed_knowledge_base(task))

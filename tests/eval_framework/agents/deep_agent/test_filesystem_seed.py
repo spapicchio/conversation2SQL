@@ -44,6 +44,20 @@ def test_missing_catalog_dir_raises(tmp_path, make_minimal_task_kwargs):
         build_db_filesystem(task)
 
 
+def test_db_dir_without_tables_subdir_raises(tmp_path, make_minimal_task_kwargs):
+    # Catalog dir exists but the tables/ subdir was never generated (partial run).
+    (tmp_path / "mydb").mkdir(parents=True)
+    task = TaskData(
+        **make_minimal_task_kwargs(
+            selected_database="mydb",
+            deep_catalog_root=str(tmp_path),
+            masked_agent_kb={},
+        )
+    )
+    with pytest.raises(FileNotFoundError, match="tables"):
+        build_db_filesystem(task)
+
+
 def _kb_pair():
     """Two nodes: 'Score (SC)' depends on 'Base (BS)' (SC.children = [BS.id])."""
     return {
