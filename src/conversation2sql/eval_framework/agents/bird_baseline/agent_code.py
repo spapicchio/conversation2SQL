@@ -242,7 +242,10 @@ def utils_process_agent_response(
     tool_calls_in_order = []
     passed = False
     for msg in messages:
-        if msg["role"] == "tool":
+        if msg["role"] == "tool" and isinstance(msg["content"], dict):
+            # Only submit_sql carries a dict content with a `passed` field. Other
+            # tools — including deepagents' `task` subagent, whose result is a list
+            # of content blocks — must not reset/crash this lookup.
             passed = msg["content"].get("passed", False)
 
         total_cost += msg.get("cost_usd", 0)

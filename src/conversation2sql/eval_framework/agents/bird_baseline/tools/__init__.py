@@ -27,6 +27,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_en
     apply_column_comments_impl,
     cleanup_python_udfs_impl,
     create_python_udf_impl,
+    extract_enum_types,
     execute_sql_impl,
     psql_console_impl,
     get_all_column_meanings_impl,
@@ -106,6 +107,7 @@ __all__ = [
     "get_all_knowledge_definitions",
     # env tools (pure *_impl functions)
     "apply_column_comments_impl",
+    "extract_enum_types",
     "cleanup_python_udfs_impl",
     "create_python_udf_impl",
     "execute_sql_impl",

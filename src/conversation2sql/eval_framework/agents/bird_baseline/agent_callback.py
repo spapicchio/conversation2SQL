@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from typing import Callable, Any
 
 from langchain.agents.middleware import (
@@ -232,6 +233,17 @@ def tool_wrapper_patience_and_submit(
             )
 
         # SQL did not pass yet → fall through to record the cost and let the agent retry.
+
+    # deepagents' state-updating tools (write_todos / task / write_file / edit_file)
+    # return a langgraph `Command` rather than a `ToolMessage`. A Command has no
+    # `model_copy`; rewrapping it would also drop the tool's own state update (its
+    # messages plus e.g. `todos` / `files`). Thread the cost into the Command's
+    # existing update instead — `tool_called_patience` uses an additive reducer,
+    # so it accumulates alongside any cost already written this super-step.
+    if isinstance(response, Command) and isinstance(response.update, dict):
+        prior = response.update.get("tool_called_patience", [])
+        merged = {**response.update, "tool_called_patience": [*prior, cost]}
+        return replace(response, update=merged)
 
     # Default path: persist the tool message and record the cost so that
     # `wrap_model_append_tool_message` can deduct it from the patience budget.
