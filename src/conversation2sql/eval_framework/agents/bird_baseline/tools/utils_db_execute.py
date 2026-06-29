@@ -19,6 +19,16 @@ MAX_RESULT_ROWS = 3
 # true total is unknown, so the "more rows" note reports it as "<limit>+".
 RESULT_FETCH_LIMIT = 10_000
 
+# Per-cell character cap. Row-based truncation (MAX_RESULT_ROWS) handles "many
+# narrow rows", but a query can return *few* rows whose cells are enormous —
+# e.g. `to_jsonb(ARRAY_AGG(...))` folding a whole table into one JSON blob, so a
+# 2-row `GROUP BY <bool>` result is hundreds of KB. This caps each rendered cell
+# so no single value can flood the agent's context, while still showing the
+# first MAX_CELL_CHARS so the agent sees the cell's shape. 6000 is generous
+# enough that everyday cells are never touched (unlike the old 100-char cut that
+# hid values), so full-precision inspection is preserved for normal results.
+MAX_CELL_CHARS = 6000
+
 
 def _more_rows_note(total_str: str) -> str:
     """One-line note appended when a result is truncated to ``MAX_RESULT_ROWS``.
@@ -139,12 +149,28 @@ def _format_cell(value: Any) -> str:
     single-quoted ``repr`` padding — shorter and parseable. Full numeric precision
     is preserved on purpose: ``execute_sql`` is an inspection tool, so rounding
     (which lives in ``preprocess_results`` for the submit-time comparison) would
-    hide values the agent needs to verify its query. The cell is **not** width-capped
-    (see ``MAX_RESULT_ROWS``): truncation is by whole rows, not characters.
+    hide values the agent needs to verify its query.
+
+    The rendered cell is then clipped to ``MAX_CELL_CHARS`` as a backstop against
+    pathological aggregate cells (see that constant). Clipping is the *last* step
+    so the cap counts the actual serialised characters; a clipped JSON cell is no
+    longer valid JSON, so the marker says so explicitly to stop the agent
+    re-parsing/re-running it.
     """
     if isinstance(value, (dict, list)):
-        return json.dumps(value, default=str, separators=(",", ":"), sort_keys=True)
-    return str(value)
+        rendered = json.dumps(value, default=str, separators=(",", ":"), sort_keys=True)
+    else:
+        rendered = str(value)
+    return _cap_cell(rendered)
+
+
+def _cap_cell(rendered: str, max_chars: int = MAX_CELL_CHARS) -> str:
+    """Clip a rendered cell to ``max_chars`` total (marker included), so the cell
+    can never exceed the cap. Returns ``rendered`` unchanged when it fits."""
+    if len(rendered) <= max_chars:
+        return rendered
+    marker = f"…[cell truncated to {max_chars} chars; was {len(rendered)}]"
+    return rendered[: max_chars - len(marker)] + marker
 
 
 def _format_result(result: list, cursor_desc: tuple[Column, ...], max_rows: int = MAX_RESULT_ROWS) -> str:

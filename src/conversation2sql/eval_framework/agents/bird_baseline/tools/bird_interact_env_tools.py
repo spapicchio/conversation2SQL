@@ -36,8 +36,6 @@ import os
 import re
 import subprocess
 
-_pg_type_re = re.compile(r'^[A-Za-z0-9_ ()\[\],]+$')
-_pg_name_re = re.compile(r'^[a-z_][a-z0-9_]*$')
 
 import psycopg2
 import psycopg2.sql as pgsql
@@ -45,10 +43,17 @@ from langchain_core.tools import tool
 from langgraph.prebuilt import ToolRuntime
 from pydantic import BaseModel
 
-from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import CustomAgentState
-from conversation2sql.eval_framework.agents.bird_baseline.tools.tool_specs import ToolSpec
-from conversation2sql.eval_framework.agents.bird_baseline.tools.utils import remove_comments
+from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import (
+    CustomAgentState,
+)
+from conversation2sql.eval_framework.agents.bird_baseline.tools.tool_specs import (
+    ToolSpec,
+)
+from conversation2sql.eval_framework.agents.bird_baseline.tools.utils import (
+    remove_comments,
+)
 from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute import (
+    MAX_CELL_CHARS,
     MAX_RESULT_ROWS,
     _execute_query,
     _format_result,
@@ -63,6 +68,9 @@ from conversation2sql.eval_framework.state import (
     ExternalKnowledgeEntry,
     TaskData,
 )
+
+_pg_type_re = re.compile(r"^[A-Za-z0-9_ ()\[\],]+$")
+_pg_name_re = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 # Single source of truth for each DB tool's cost + prompt summary. The cost is
 # stamped onto the tool's schema description (via stamp_cost_in_descriptions) and
@@ -132,6 +140,7 @@ def _safe_instance_prefix(instance_id: str, max_len: int = 30) -> str:
 
 logger = get_logger(__name__)
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -143,6 +152,7 @@ class ExecuteSQLResponse(BaseModel):
 
 class UDFParameter(BaseModel):
     """One parameter for a Python UDF: a name and its PostgreSQL type."""
+
     name: str
     pg_type: str
 
@@ -185,7 +195,7 @@ def _violates_psql_guardrail(command: str) -> bool:
         if name in ("g", "gx"):
             # Dangerous only with a trailing argument (\g <file> or \g |cmd) on
             # the same line; bare \g just re-runs the buffer.
-            tail = command[match.end():].split("\n", 1)[0].strip()
+            tail = command[match.end() :].split("\n", 1)[0].strip()
             if tail:
                 return True
     return False
@@ -208,26 +218,47 @@ def _is_psql_meta_command(command: str) -> bool:
 # psql's aligned output ends with a "(N rows)" footer; we read N for the note.
 _PSQL_ROWCOUNT_RE = re.compile(r"^\((\d+) rows?\)", re.MULTILINE)
 
+# Total-output char cap for psql SQL results. psql output is a flat aligned-text
+# blob with no per-cell addressability, so it gets a *total* cap rather than the
+# per-cell cap execute_sql uses; it mirrors the same failure mode (few rows, huge
+# cells — e.g. JSON aggregates — that the row cap never catches). Sized as
+# MAX_CELL_CHARS * MAX_RESULT_ROWS so a worst-case row-capped psql result stays in
+# the same ballpark as an execute_sql result whose one big cell is per-cell capped.
+# Only SQL output is capped (callers skip _truncate_psql_output for meta-commands),
+# so schema listings keep every name.
+MAX_PSQL_OUTPUT_CHARS = MAX_CELL_CHARS * MAX_RESULT_ROWS
+
+
+def _cap_psql_output(output: str, max_chars: int = MAX_PSQL_OUTPUT_CHARS) -> str:
+    """Clip psql SQL output to ``max_chars`` total (marker included). Returns
+    ``output`` unchanged when it fits."""
+    if len(output) <= max_chars:
+        return output
+    marker = f"\n…[output truncated to {max_chars} chars; was {len(output)}]"
+    return output[: max_chars - len(marker)] + marker
+
 
 def _truncate_psql_output(output: str, max_rows: int = MAX_RESULT_ROWS) -> str:
-    """Row-truncate psql's aligned SQL output, mirroring ``_format_result``.
+    """Row- and char-truncate psql's aligned SQL output, mirroring
+    ``_format_result`` + the per-cell cap.
 
     Keeps the 2 header lines (column header + ``---+---`` separator) plus the
     first ``max_rows`` data rows, then appends the shared "more rows" note with
-    the true total parsed from psql's ``(N rows)`` footer. Width is left
-    unbounded so this stays comparable with ``execute_sql``. If the footer is
-    absent (an error, EXPLAIN-less output, …) or the result already fits, the
-    output is returned unchanged.
+    the true total parsed from psql's ``(N rows)`` footer. The result is then
+    clipped to ``MAX_PSQL_OUTPUT_CHARS`` so a few rows carrying giant cells can't
+    flood the agent even when the row cap doesn't fire. If the footer is absent
+    (an error, EXPLAIN-less output, …) or the result already fits the row cap,
+    only the char cap is applied.
     """
     match = _PSQL_ROWCOUNT_RE.search(output)
     if match is None:
-        return output
+        return _cap_psql_output(output)
     total = int(match.group(1))
     if total <= max_rows:
-        return output
+        return _cap_psql_output(output)
     lines = output.split("\n")
     kept = lines[: 2 + max_rows]
-    return "\n".join(kept) + _more_rows_note(str(total))
+    return _cap_psql_output("\n".join(kept) + _more_rows_note(str(total)))
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +364,9 @@ def _run_psql(command: str, db_dsn: str) -> str:
 def _filtered_psql_help(db_dsn: str) -> str:
     """Run ``\\?`` and return only its Informational section, prefixed with a
     banner reminding the agent that SQL queries and ``\\h`` are also available."""
-    return PSQL_STRICT_HELP_BANNER + _extract_informational_help(_run_psql("\\?", db_dsn))
+    return PSQL_STRICT_HELP_BANNER + _extract_informational_help(
+        _run_psql("\\?", db_dsn)
+    )
 
 
 def psql_console_impl(command: str, db_dsn: str, strict: bool = False) -> str:
@@ -424,8 +457,8 @@ def cleanup_python_udfs_impl(db_dsn: str, prefix: str) -> None:
 
 
 def apply_column_comments_impl(
-        db_dsn: str,
-        column_meanings: dict[str, "ColumnMeaningEntry"],
+    db_dsn: str,
+    column_meanings: dict[str, "ColumnMeaningEntry"],
 ) -> None:
     """Write COMMENT ON COLUMN for every entry in column_meanings to the DB.
 
@@ -537,7 +570,7 @@ def _parse_ddl(ddl_database_schema: str) -> tuple[dict[str, str], list[str]]:
     if first_alter:
         alters = [
             line.strip()
-            for line in ddl_database_schema[first_alter.start():].splitlines()
+            for line in ddl_database_schema[first_alter.start() :].splitlines()
             if line.strip().upper().startswith("ALTER TABLE")
         ]
 
@@ -572,7 +605,7 @@ def get_table_schema_impl(table_name: str, ddl_database_schema: str) -> dict:
 
 
 def get_all_column_meanings_impl(
-        column_meanings: dict[str, ColumnMeaningEntry],
+    column_meanings: dict[str, ColumnMeaningEntry],
 ) -> dict:
     output = {
         k: v.model_dump_json(exclude_none=True) for k, v in column_meanings.items()
@@ -581,10 +614,10 @@ def get_all_column_meanings_impl(
 
 
 def get_column_meaning_impl(
-        table_name: str,
-        column_name: str,
-        db_name: str,
-        column_meanings: dict[str, ColumnMeaningEntry],
+    table_name: str,
+    column_name: str,
+    db_name: str,
+    column_meanings: dict[str, ColumnMeaningEntry],
 ) -> dict:
     key = f"{db_name}|{table_name.lower()}|{column_name.lower()}"
     meaning = column_meanings.get(key, "Column meaning not found")
@@ -596,14 +629,14 @@ def get_column_meaning_impl(
 
 
 def get_all_external_knowledge_names_impl(
-        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     return {"names": list(masked_agent_kb.keys())}
 
 
 def get_knowledge_definition_impl(
-        knowledge_name: str,
-        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+    knowledge_name: str,
+    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     if knowledge_name in masked_agent_kb:
         kb_entry = masked_agent_kb[knowledge_name].model_dump_json(
@@ -614,7 +647,7 @@ def get_knowledge_definition_impl(
 
 
 def get_all_knowledge_definitions_impl(
-        masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
 ) -> dict:
     dump_kb = []
     for knowledge_name in masked_agent_kb:
@@ -678,7 +711,7 @@ def get_table_names(runtime: ToolRuntime[TaskData, CustomAgentState]) -> str:
 
 @tool
 def get_table_schema(
-        table_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
+    table_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
 ) -> str:
     """Get the schema of a single table: its CREATE TABLE statement, a few
     sample rows, and the foreign-key constraints linking it to other tables
@@ -810,7 +843,7 @@ def get_all_column_meanings(runtime: ToolRuntime[TaskData, CustomAgentState]) ->
 
 @tool
 def get_column_meaning(
-        table_name: str, column_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
+    table_name: str, column_name: str, runtime: ToolRuntime[TaskData, CustomAgentState]
 ) -> str:
     """Get the meaning/description of a specific column in a table.
     Args:
@@ -838,7 +871,7 @@ def get_column_meaning(
 
 @tool
 def get_all_external_knowledge_names(
-        runtime: ToolRuntime[TaskData, CustomAgentState],
+    runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Get the names of all available external knowledge entries for this database.
     Use this to discover what domain knowledge is available.
@@ -846,15 +879,17 @@ def get_all_external_knowledge_names(
         JSON list of knowledge entry names.
     """
     return json.dumps(
-        get_all_external_knowledge_names_impl(masked_agent_kb=runtime.context.masked_agent_kb),
+        get_all_external_knowledge_names_impl(
+            masked_agent_kb=runtime.context.masked_agent_kb
+        ),
         indent=2,
     )
 
 
 @tool
 def get_knowledge_definition(
-        knowledge_name: str,
-        runtime: ToolRuntime[TaskData, CustomAgentState],
+    knowledge_name: str,
+    runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Get the definition/details of a specific external knowledge entry.
     When the KB is linearized, this also returns the entry's transitive
@@ -882,7 +917,7 @@ def get_knowledge_definition(
 
 @tool
 def get_all_knowledge_definitions(
-        runtime: ToolRuntime[TaskData, CustomAgentState],
+    runtime: ToolRuntime[TaskData, CustomAgentState],
 ) -> str:
     """Return all external knowledge with definitions.
     Returns:
