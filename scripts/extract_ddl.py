@@ -725,6 +725,7 @@ def select_examples(
     try:
         cardinality = _distinct_count(conn, schema, table.name, col.name)
     except Exception as exc:
+        conn.rollback()
         logger.warning(
             "cardinality probe failed for %s.%s.%s: %s",
             schema,
@@ -758,6 +759,7 @@ def select_examples(
             # else:
             #     examples = _random_text(conn, schema, table.name, col.name)
     except Exception as exc:
+        conn.rollback()
         logger.warning(
             "example probe failed for %s.%s.%s: %s",
             schema,
@@ -774,6 +776,7 @@ def select_examples(
             if _has_null(conn, schema, table.name, col.name):
                 rendered = ["NULL", *rendered]
         except Exception as exc:
+            conn.rollback()
             logger.warning(
                 "null probe failed for %s.%s.%s: %s",
                 schema,
