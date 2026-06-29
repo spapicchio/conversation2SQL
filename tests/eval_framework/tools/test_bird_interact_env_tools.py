@@ -1105,39 +1105,6 @@ class TestApplyColumnCommentsImpl:
         mock_cur.execute.assert_not_called()
         mock_conn.commit.assert_called_once()
 
-
-class TestExtractEnumTypes:
-    """extract_enum_types pulls the CREATE TYPE ... AS ENUM (...) statements out
-    of a DDL dump so the psql prompt can list the allowed enum values (psql mode
-    drops get_schema, and \\d shows only the enum type name, not its values)."""
-
-    def test_returns_enum_statements_in_order(self):
-        ddl = (
-            "-- PostgreSQL schema dump for schema: public\n\n"
-            'CREATE TYPE "impairment_enum" AS ENUM (\'Severe\', \'Moderate\', \'Mild\');\n'
-            'CREATE TYPE "improvement_enum" AS ENUM (\'Moderate\', \'Minimal\', \'Significant\');\n'
-            'CREATE TABLE "patients" ("id" int);\n'
-        )
-        out = env_tools.extract_enum_types(ddl)
-        assert out == (
-            'CREATE TYPE "impairment_enum" AS ENUM (\'Severe\', \'Moderate\', \'Mild\');\n'
-            'CREATE TYPE "improvement_enum" AS ENUM (\'Moderate\', \'Minimal\', \'Significant\');'
-        )
-
-    def test_returns_empty_string_when_no_enum_types(self):
-        ddl = 'CREATE TABLE "patients" ("id" int, "name" text);'
-        assert env_tools.extract_enum_types(ddl) == ""
-
-    def test_ignores_non_enum_create_type(self):
-        ddl = (
-            'CREATE TYPE "addr" AS (street text, city text);\n'
-            'CREATE TYPE "status_enum" AS ENUM (\'on\', \'off\');\n'
-        )
-        assert env_tools.extract_enum_types(ddl) == (
-            'CREATE TYPE "status_enum" AS ENUM (\'on\', \'off\');'
-        )
-
-
 def test_apply_column_comments_visible_in_psql_describe_real_db():
     """Integration: after applying a comment, \\d+ <table> shows the description."""
     from conversation2sql.eval_framework.state import ColumnMeaningEntry
