@@ -30,9 +30,8 @@ def test_single_leaf_entry_no_edges_block():
                                      description="logged in ≤ 30 days",
                                      definition="days_since_login <= 30")}
     result = linearize_kb(kb)
-    assert "# Dependency edges" not in result
-    assert "# Definitions" in result
-    assert "[AU] Active User" in result
+    assert "prerequisite" not in result.lower()
+    assert "Active User (AU)" in result
     assert "days_since_login <= 30" in result
 
 
@@ -42,11 +41,8 @@ def test_two_entries_prerequisite_produces_edge():
                definition=r"\frac{NP}{REV}", children=[1])
     kb = {"Net Profit (NP)": a, "Net Profit Margin (NPM)": b}
     result = linearize_kb(kb)
-    assert "# Dependency edges" in result
-    assert "(NP, prerequisite_of, NPM)" in result
-    assert "# Definitions" in result
-    def_section = result.split("# Definitions")[1]
-    assert def_section.index("[NP]") < def_section.index("[NPM]")
+    assert '"Net Profit Margin (NPM)" needs "Net Profit (NP)"' in result
+    assert "Net Profit Margin (NPM)" in result
 
 
 def test_shared_prereq_appears_once_in_definitions():
@@ -55,9 +51,8 @@ def test_shared_prereq_appears_once_in_definitions():
     c = _entry(3, "Derived2 (D2)", children=[1])
     kb = {"Base (B)": a, "Derived1 (D1)": b, "Derived2 (D2)": c}
     result = linearize_kb(kb)
-    assert result.count("[B] Base") == 1
-    assert "(B, prerequisite_of, D1)" in result
-    assert "(B, prerequisite_of, D2)" in result
+    assert '"Derived1 (D1)" needs "Base (B)"' in result
+    assert '"Derived2 (D2)" needs "Base (B)"' in result
 
 
 def test_latex_frac_simplified():
@@ -87,9 +82,8 @@ def test_format_entry_line_matches_linearize_kb_line():
                    definition="days <= 30")
     kb = {"Active User (AU)": entry}
     flat = linearize_kb(kb)
-    def_lines = [l for l in flat.splitlines() if l.startswith("[")]
-    assert len(def_lines) == 1
-    assert format_entry_line("Active User (AU)", kb) == def_lines[0]
+    entry_text = format_entry_line("Active User (AU)", kb)
+    assert entry_text in flat
 
 
 def test_format_entry_line_no_subgraph_context():
@@ -97,8 +91,8 @@ def test_format_entry_line_no_subgraph_context():
     b = _entry(2, "Derived (D)", description="uses base", children=[1])
     kb = {"Base (B)": a, "Derived (D)": b}
     line = format_entry_line("Derived (D)", kb)
-    assert "[B]" not in line
-    assert "[D]" in line
+    assert "the base" not in line   # no edge info in single-entry format
+    assert "uses base" in line      # description of the requested entry is present
 
 
 # ---------------------------------------------------------------------------
@@ -116,9 +110,8 @@ def test_linearize_prerequisites_leaf_has_no_edges_block():
                                      description="logged in recently",
                                      definition="days <= 30")}
     result = linearize_prerequisites("Active User (AU)", kb)
-    assert "# Dependency edges" not in result
-    assert "# Definitions" in result
-    assert "[AU] Active User" in result
+    assert "prerequisite" not in result.lower()
+    assert "Active User (AU)" in result
 
 
 def test_linearize_prerequisites_has_no_subgraph_header():
@@ -129,14 +122,14 @@ def test_linearize_prerequisites_has_no_subgraph_header():
 
 
 def test_linearize_prerequisites_includes_transitive_ancestors():
-    """Querying B (where A is prereq of B) pulls in A with the edge, leaves-first."""
+    """Querying B (where A is prereq of B) pulls in A with the edge."""
     a = _entry(1, "Base (A)", definition="x")
     b = _entry(2, "Mid (B)", definition=r"\frac{A}{2}", children=[1])
     kb = {"Base (A)": a, "Mid (B)": b}
     result = linearize_prerequisites("Mid (B)", kb)
-    assert "(A, prerequisite_of, B)" in result
-    def_section = result.split("# Definitions")[1]
-    assert def_section.index("[A]") < def_section.index("[B]")
+    assert '"Mid (B)" needs "Base (A)"' in result
+    assert "Mid (B)" in result
+    assert "Base (A)" in result
 
 
 def test_linearize_prerequisites_excludes_dependents():
@@ -146,11 +139,11 @@ def test_linearize_prerequisites_excludes_dependents():
     c = _entry(3, "Top (C)", children=[2])
     kb = {"Base (A)": a, "Mid (B)": b, "Top (C)": c}
     result = linearize_prerequisites("Mid (B)", kb)
-    assert "[A]" in result
-    assert "[B]" in result
-    assert "[C]" not in result
-    assert "(A, prerequisite_of, B)" in result
-    assert "prerequisite_of, C)" not in result
+    assert "Base (A)" in result
+    assert "Mid (B)" in result
+    assert "Top (C)" not in result
+    assert '"Mid (B)" needs "Base (A)"' in result
+    assert '"Top (C)" needs' not in result
 
 
 def test_linearize_prerequisites_skips_masked_ancestor():
@@ -159,8 +152,8 @@ def test_linearize_prerequisites_skips_masked_ancestor():
     b = _entry(2, "Mid (B)", children=[1])
     kb = {"Mid (B)": b}
     result = linearize_prerequisites("Mid (B)", kb)
-    assert "[B]" in result
-    assert "# Dependency edges" not in result
+    assert "Mid (B)" in result
+    assert "prerequisite" not in result.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -188,7 +181,7 @@ def test_two_disconnected_entries_produce_two_subgraphs():
 
 
 def test_two_components_each_with_edges():
-    """Two separate chains each emit their own edges + definitions blocks."""
+    """Two separate chains each emit their own edges."""
     # Component 1: X → Y
     x = _entry(1, "X (X)", description="base x")
     y = _entry(2, "Y (Y)", description="uses x", children=[1])
@@ -199,12 +192,11 @@ def test_two_components_each_with_edges():
     result = linearize_kb(kb)
     assert "# Subgraph 1" in result
     assert "# Subgraph 2" in result
-    # Each component has its own edge triple
-    assert "(X, prerequisite_of, Y)" in result
-    assert "(P, prerequisite_of, Q)" in result
+    assert '"Y (Y)" needs "X (X)"' in result
+    assert '"Q (Q)" needs "P (P)"' in result
     # Edges from component 1 don't bleed into component 2's section
     sub2 = result.split("# Subgraph 2")[1]
-    assert "(X, prerequisite_of, Y)" not in sub2
+    assert '"Y (Y)" needs "X (X)"' not in sub2
 
 
 def test_subgraph_ordering_by_min_node_id():
@@ -216,4 +208,4 @@ def test_subgraph_ordering_by_min_node_id():
     result = linearize_kb(kb)
     # Subgraph 1 should contain the entry with id=1 (Low)
     sub1 = result.split("# Subgraph 2")[0]
-    assert "[L]" in sub1
+    assert "Low (L)" in sub1

@@ -60,6 +60,21 @@ def test_middleware_flags_add_components(task_data):
     assert SubAgentMiddleware in types
 
 
+def test_split_system_prompt_separates_system_from_conversation():
+    # The system prompt must travel via create_agent's system_prompt= so the FS
+    # middleware's injected system_message stays the single leading turn; only
+    # non-system turns belong in the initial agent state. Two system messages in
+    # the request make vLLM reject with "System message must be at the beginning".
+    messages = [
+        {"role": "system", "content": "SYS"},
+        {"role": "user", "content": "hello"},
+    ]
+    system_prompt, convo = agent_code._split_system_prompt(messages)
+    assert system_prompt == "SYS"
+    assert convo == [{"role": "user", "content": "hello"}]
+    assert all(m["role"] != "system" for m in convo)
+
+
 def test_tools_include_reused_and_ask_user(task_data, make_chat_model):
     tools = agent_code._build_deep_tools(
         _task(task_data),

@@ -199,6 +199,28 @@ class TestUtilsProcessAgentResponse:
         assert out["total_prompt_tokens"] == 0
         assert out["total_completion_tokens"] == 0
 
+    def test_passed_extraction_skips_non_dict_tool_content(self):
+        """deepagents' `task` subagent returns content that JSON-decodes to a
+        *list* of content blocks, not a dict. The passed-lookup must skip it
+        (not raise `'list' object has no attribute 'get'`) and still read
+        `execution_accuracy` from the submit_sql dict that follows."""
+        from langchain_core.messages import ToolMessage
+
+        from conversation2sql.eval_framework.agents.bird_baseline import agent_code
+
+        messages = [
+            ToolMessage(
+                content='[{"type": "text", "text": "sub result"}]',
+                tool_call_id="t1",
+                name="task",
+            ),
+            ToolMessage(
+                content='{"passed": true}', tool_call_id="s1", name="submit_sql"
+            ),
+        ]
+        out = agent_code.utils_process_agent_response({"messages": messages})
+        assert out["execution_accuracy"] is True
+
     def test_truncated_calls_counted_from_finish_reason_length(self):
         """A model call cut off by the max-model-len cap comes back with
         finish_reason='length'. The record must surface how many calls were

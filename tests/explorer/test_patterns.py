@@ -858,6 +858,52 @@ def test_resubmit_unchanged_quiet_on_single_submission():
     assert "resubmit_unchanged" not in _hits(rec)
 
 
+# ── recovered_after_wrong_submit ─────────────────────────────────────────────────
+
+
+def test_recovered_after_wrong_submit_in_catalog():
+    assert "recovered_after_wrong_submit" in PATTERN_NAMES
+
+
+def test_recovered_after_wrong_submit_fires_when_failed_then_passed():
+    rec = _record(
+        _ai(("submit_sql", {"sql": "SELECT x"})),
+        _tool("submit_sql", content={"passed": False, "message": "wrong"}),
+        _ai(("submit_sql", {"sql": "SELECT y"})),
+        _tool("submit_sql", content={"passed": True, "message": "correct"}),
+    )
+    assert "recovered_after_wrong_submit" in _hits(rec)
+
+
+def test_recovered_after_wrong_submit_quiet_when_first_submit_passes():
+    rec = _record(
+        _ai(("submit_sql", {"sql": "SELECT y"})),
+        _tool("submit_sql", content={"passed": True, "message": "correct"}),
+    )
+    assert "recovered_after_wrong_submit" not in _hits(rec)
+
+
+def test_recovered_after_wrong_submit_quiet_when_never_recovers():
+    rec = _record(
+        _ai(("submit_sql", {"sql": "SELECT x"})),
+        _tool("submit_sql", content={"passed": False, "message": "wrong"}),
+        _ai(("submit_sql", {"sql": "SELECT z"})),
+        _tool("submit_sql", content={"passed": False, "message": "still wrong"}),
+    )
+    assert "recovered_after_wrong_submit" not in _hits(rec)
+
+
+def test_recovered_after_wrong_submit_evidence_links_both_submits():
+    rec = _record(
+        _ai(("submit_sql", {"sql": "SELECT x"})),
+        _tool("submit_sql", content={"passed": False, "message": "wrong"}),
+        _ai(("submit_sql", {"sql": "SELECT y"})),
+        _tool("submit_sql", content={"passed": True, "message": "correct"}),
+    )
+    hit = next(h for h in detect_patterns(rec) if h.name == "recovered_after_wrong_submit")
+    assert hit.message_indices == [1, 3]
+
+
 def test_scope_by_accuracy_filters_pass_fail_and_passes_all_through():
     from explorer.patterns import scope_by_accuracy
 

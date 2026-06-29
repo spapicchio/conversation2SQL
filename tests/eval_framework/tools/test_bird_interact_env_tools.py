@@ -218,15 +218,29 @@ class TestFormatResult:
         assert "'" not in cell
         assert json.loads(cell) == [{"station": "Observatory", "aoi": 0.0146324}]
 
-    def test_cells_are_not_truncated(self):
-        """Width is intentionally unbounded so ``execute_sql`` and
-        ``psql_console`` output stay comparable: a long text/JSON cell renders
-        in full rather than being clipped to a per-cell cap."""
+    def test_cell_under_cap_is_not_truncated(self):
+        """A cell comfortably under ``MAX_CELL_CHARS`` renders in full — the cap
+        is a backstop for pathological aggregates, not a clip on normal cells, so
+        full precision/values are preserved for everyday inspection."""
         result = [{"blob": {"k": "y" * 500}}]
         desc = (("blob",),)
         out = utils_db_execute._format_result(result, desc)
         cell = out.split("\n")[2].removeprefix("| ").removesuffix(" |")
         assert cell == '{"k":"' + "y" * 500 + '"}'
+
+    def test_oversized_cell_is_truncated_to_cap(self):
+        """A single huge cell (e.g. ``to_jsonb(ARRAY_AGG(...))`` folding a whole
+        table into one JSON blob) is clipped to ``MAX_CELL_CHARS`` so a 2-row
+        result can't flood the agent's context. The clipped cell never exceeds
+        the cap (marker included) and reports the original length."""
+        cap = utils_db_execute.MAX_CELL_CHARS
+        result = [{"stations": "z" * (cap * 3)}]
+        desc = (("stations",),)
+        out = utils_db_execute._format_result(result, desc)
+        cell = out.split("\n")[2].removeprefix("| ").removesuffix(" |")
+        assert len(cell) <= cap
+        assert "truncated" in cell
+        assert str(cap * 3) in cell  # original length surfaced to the agent
 
     def test_result_over_max_rows_is_row_truncated_with_note(self):
         """Beyond ``MAX_RESULT_ROWS`` the table keeps exactly that many data
@@ -514,8 +528,8 @@ def test_get_knowledge_definition_linearized_returns_prerequisite_section(task_d
     decoded = json.loads(raw)
     assert "knowledge" in decoded
     assert isinstance(decoded["knowledge"], str)
-    assert "# Definitions" in decoded["knowledge"]
-    assert "[active_user]" in decoded["knowledge"]
+    assert "active_user" in decoded["knowledge"]
+    assert "**" in decoded["knowledge"]  # bold markdown formatting present
     # active_user has no prerequisites, so the unrelated entry must not appear.
     assert "revenue" not in decoded["knowledge"].lower()
 
@@ -544,9 +558,9 @@ def test_get_knowledge_definition_linearized_includes_transitive_prerequisites(t
         runtime=_Runtime(ctx),
     )
     knowledge = json.loads(raw)["knowledge"]
-    assert "(BASE, prerequisite_of, DRV)" in knowledge
-    assert "[BASE]" in knowledge
-    assert "[DRV]" in knowledge
+    assert '"derived (DRV)" needs "base (BASE)"' in knowledge
+    assert "base (BASE)" in knowledge
+    assert "derived (DRV)" in knowledge
 
 
 def test_get_knowledge_definition_linearized_missing_returns_sentinel(task_data_linearized):
@@ -569,7 +583,7 @@ def test_get_all_knowledge_definitions_linearized_returns_flat_string(task_data_
     decoded = json.loads(raw)
     assert "knowledge" in decoded
     assert isinstance(decoded["knowledge"], str)
-    assert "# Definitions" in decoded["knowledge"]
+    assert "**" in decoded["knowledge"]  # bold markdown formatting present
     assert "active_user" in decoded["knowledge"]
 
 
@@ -833,6 +847,40 @@ class TestPsqlConsoleImpl:
             out = psql_console_impl("\\dt", db_dsn="dsn")
         assert out == big
         assert "showing first" not in out
+
+    def test_select_output_over_char_cap_is_truncated(self):
+        """SQL output is also bounded by a *total* char cap, mirroring the
+        per-cell cap on ``execute_sql``: a few rows each carrying a giant JSON
+        aggregate (so the ``(N rows)`` footer never triggers row truncation)
+        can't flood the agent. The capped output never exceeds the cap."""
+        cap = env_tools.MAX_PSQL_OUTPUT_CHARS
+        aligned = (
+            " stations \n"
+            "----------\n"
+            " " + "z" * (cap * 3) + " \n"
+            " " + "z" * (cap * 3) + " \n"
+            "(2 rows)\n"
+        )
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=aligned, stderr=""),
+        ):
+            out = psql_console_impl("SELECT 1;", db_dsn="dsn")
+        assert len(out) <= cap
+        assert "truncated" in out
+
+    def test_meta_command_output_over_char_cap_is_not_truncated(self):
+        """The total char cap, like row truncation, applies only to SQL output:
+        a huge schema listing (meta-command) must come through untouched so no
+        table/column names are dropped off the end."""
+        big = "\n".join(f" some_long_table_name_{i} " for i in range(2000)) + "\n"
+        assert len(big) > env_tools.MAX_PSQL_OUTPUT_CHARS
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=big, stderr=""),
+        ):
+            out = psql_console_impl("\\dt", db_dsn="dsn")
+        assert out == big
 
 
 # ---------------------------------------------------------------------------

@@ -123,7 +123,7 @@ def test_edge_present_when_prerequisite_not_masked(tmp_path, make_minimal_task_k
     )
     files = build_db_filesystem(task)
     content = files["/db/knowledge_base/Score (SC).md"]["content"]
-    assert '"SC" needs "BS"' in content
+    assert '"Score (SC)" needs "Base (BS)"' in content
 
 
 def test_empty_kb_seeds_no_knowledge_base_files(tmp_path, make_minimal_task_kwargs):

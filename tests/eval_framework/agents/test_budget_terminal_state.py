@@ -80,3 +80,38 @@ class TestSubmitTerminalSentinel:
         update = _run_submit(passed=False, patience=10.0)
         assert "updated_user_patience" not in update
         assert update["tool_called_patience"]  # cost recorded for the retry
+
+
+class TestCommandReturningTool:
+    """deepagents' state-updating tools (write_todos / task / write_file /
+    edit_file) return a langgraph ``Command`` instead of a ``ToolMessage``. The
+    patience wrapper used to call ``response.model_copy(...)`` unconditionally,
+    which raised ``'Command' object has no attribute 'model_copy'`` the moment the
+    agent invoked one of those tools (the deep_agent todos/subagents/fswrite
+    ablations). The wrapper must instead thread the cost into the Command's own
+    state update, preserving its messages and extra state keys."""
+
+    def _run_command_tool(self, response):
+        request = SimpleNamespace(
+            tool_call={"name": "write_todos", "id": "c1"},
+            runtime=SimpleNamespace(state={"updated_user_patience": 10.0}),
+        )
+        return tool_wrapper_patience_and_submit.wrap_tool_call(
+            request, lambda _req: response
+        )
+
+    def test_command_update_is_preserved_and_cost_recorded(self):
+        from langgraph.types import Command
+
+        tool_msg = ToolMessage(
+            content="updated todos", tool_call_id="c1", name="write_todos"
+        )
+        todos = [{"content": "explore schema", "status": "pending"}]
+        out = self._run_command_tool(Command(update={"messages": [tool_msg], "todos": todos}))
+
+        assert isinstance(out, Command)
+        # The tool's own state update survives untouched …
+        assert out.update["todos"] == todos
+        assert out.update["messages"] == [tool_msg]
+        # … and the cost is threaded in so the budget middleware can deduct it.
+        assert out.update["tool_called_patience"] == [0.0]
