@@ -64,7 +64,11 @@ USER_TOOL_COSTS: dict[str, float] = {
     name: spec.cost for name, spec in USER_TOOL_SPECS.items()
 }
 
-
+# SQL_NOT_CORRECT_MSG = "Your SQL is not correct."
+SQL_NOT_CORRECT_MSG = (
+    "Your SQL executes without errors but returns the wrong result set. "
+    "Re-read the user's request carefully and check your column selection, filters, joins, and aggregations."
+)
 def _extract_group_in_tag_pattern(content: str, pattern_tag: str = "s") -> str | None:
     pattern = re.compile(
         rf"\s*<{pattern_tag}>\s*([\s\S]*?)\s*</{pattern_tag}>\s*",
@@ -220,13 +224,13 @@ def submit_sql_impl(
             passed = True
             message = "Phase 1 correct! Task finished."
         else:
-            message = "Your SQL is not correct."
+            message = SQL_NOT_CORRECT_MSG
     else:
         if set(pred_result) == set(target_result):
             passed = True
             message = "Phase 1 correct! Task finished."
         else:
-            message = "Your SQL is not correct."
+            message = SQL_NOT_CORRECT_MSG
 
     return {"passed": passed, "message": message}
 
