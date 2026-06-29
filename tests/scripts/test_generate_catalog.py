@@ -10,12 +10,13 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
-from extract_ddl import Column, ForeignKey, Table  # noqa: E402
+from extract_ddl import Column, ForeignKey, Table, _render_table_ddl  # noqa: E402
 from generate_catalog import (  # noqa: E402
     _enums_used_by_table,
     fetch_referenced_by,
     generate_catalog_for_db,
     load_column_meanings,
+    render_constraints_markdown,
     render_table_markdown,
 )
 
@@ -172,6 +173,52 @@ def test_render_table_markdown_omits_empty_fk_section():
     assert 'CREATE TABLE "customers" (' in md
 
 
+def _pk_col(name: str, data_type: str) -> Column:
+    return Column(
+        name=name,
+        data_type=data_type,
+        nullable=False,
+        default=None,
+        is_pk=True,
+        is_unique=False,
+    )
+
+
+def test_render_constraints_markdown_lists_pks_and_fks():
+    customers = Table(
+        schema="public",
+        examples_str="",
+        name="customers",
+        columns=[_pk_col("id", "integer"), _col("region_id", "integer")],
+        foreign_keys=[ForeignKey("region_id", "regions", "id", "NO ACTION")],
+        indexes=[],
+        checks=[],
+        composite_pk=[],
+    )
+    order_items = Table(
+        schema="public",
+        examples_str="",
+        name="order_items",
+        columns=[_col("order_id", "integer"), _col("product_id", "integer")],
+        foreign_keys=[
+            ForeignKey("order_id", "orders", "id", "CASCADE"),
+            ForeignKey("product_id", "products", "id", "RESTRICT"),
+        ],
+        indexes=[],
+        checks=[],
+        composite_pk=["order_id", "product_id"],
+    )
+    md = render_constraints_markdown("mydb", [customers, order_items])
+    assert "# constraints: mydb" in md
+    assert "## Primary keys" in md
+    assert "| customers | id |" in md
+    assert "| order_items | order_id, product_id |" in md
+    assert "## Foreign keys" in md
+    assert "| customers | region_id | regions(id) | NO ACTION |" in md
+    assert "| order_items | order_id | orders(id) | CASCADE |" in md
+    assert "| order_items | product_id | products(id) | RESTRICT |" in md
+
+
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="postgres :5432 not reachable")
 def test_generate_catalog_for_db_end_to_end(tmp_path):
     """Exercise the full load_table -> render -> write path against a live DB.
@@ -213,3 +260,18 @@ def test_generate_catalog_for_db_end_to_end(tmp_path):
         with conn.cursor() as cur:
             cur.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         conn.close()
+
+
+def test_render_table_ddl_includes_inline_fk_when_enabled():
+    table = _make_table()
+    ddl = _render_table_ddl(table, None, include_foreign_keys=True)
+    assert 'FOREIGN KEY ("region_id") REFERENCES "regions" ("id")' in ddl
+    # Still a single valid CREATE TABLE statement.
+    assert ddl.count("CREATE TABLE") == 1
+    assert ddl.rstrip().endswith(");")
+
+
+def test_render_table_ddl_omits_fk_by_default():
+    table = _make_table()
+    ddl = _render_table_ddl(table, None)
+    assert "FOREIGN KEY" not in ddl
