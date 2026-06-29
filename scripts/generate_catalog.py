@@ -67,6 +67,7 @@ from extract_ddl import (
     fetch_tables,
     load_table,
     open_readonly,
+    select_examples,
 )
 
 logger = logging.getLogger("generate_catalog")
@@ -123,6 +124,7 @@ def render_table_markdown(
     enums: list[tuple[str, list[str]]],
     column_meanings: dict[str, str],
     referenced_by: list[str],
+    examples_by_col: dict[str, list[str]],
 ) -> str:
     lines: list[str] = []
     lines.append(f"# table: {table.name}")
@@ -139,18 +141,19 @@ def render_table_markdown(
         lines.append("")
     # descriptions=None: column descriptions live in the ## Columns table
     # below, so the DDL block stays a clean CREATE TABLE.
-    lines.append(_render_table_ddl(table, None))
+    lines.append(_render_table_ddl(table, None, include_foreign_keys=True))
     lines.append("```")
     lines.append("")
 
     lines.append("## Columns")
-    lines.append("| column | type | description |")
-    lines.append("| --- | --- | --- |")
+    lines.append("| column | type | description | examples |")
+    lines.append("| --- | --- | --- | --- |")
     for col in table.columns:
         name = _md_cell(col.name)
         data_type = _md_cell(col.data_type)
         desc = _md_cell(column_meanings.get(col.name.lower(), ""))
-        lines.append(f"| {name} | {data_type} | {desc} |")
+        examples = _md_cell(", ".join(examples_by_col.get(col.name, [])))
+        lines.append(f"| {name} | {data_type} | {desc} | {examples} |")
 
     fk_lines = [
         f"- {fk.column} -> {fk.ref_table}({fk.ref_column})" for fk in table.foreign_keys
@@ -260,7 +263,14 @@ def _generate_tables_for_db(dataset_path, database, db_out, conn, schema, only_t
             # meanings are keyed by lowercased table name; Postgres reports
             # unquoted identifiers lowercased, which is the BIRD-Interact norm.
             per_table = meanings.get(name.lower(), {})
-            md = render_table_markdown(table, enums, per_table, referenced_by)
+            fk_by_col = {fk.column: fk for fk in table.foreign_keys}
+            examples_by_col = {
+                col.name: select_examples(conn, schema, table, col, fk_by_col)
+                for col in table.columns
+            }
+            md = render_table_markdown(
+                table, enums, per_table, referenced_by, examples_by_col
+            )
         except Exception:
             # Any per-table failure (DB error, introspection quirk, render
             # bug) skips that table and continues, so one bad table cannot

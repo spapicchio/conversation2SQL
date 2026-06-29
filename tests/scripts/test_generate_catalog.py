@@ -147,6 +147,7 @@ def test_render_table_markdown_full():
         enums=[("account_status", ["active", "closed"])],
         column_meanings={"email": "Login email, unique", "status": "active or closed"},
         referenced_by=["orders(customer_id)"],
+        examples_by_col={"email": ["a@x.com", "b@y.com"], "region_id": ["1", "2"]},
     )
     assert "# table: customers" in md
     assert "## Description" in md
@@ -154,10 +155,11 @@ def test_render_table_markdown_full():
     assert "```sql" in md
     assert "CREATE TYPE \"account_status\" AS ENUM ('active', 'closed');" in md
     assert 'CREATE TABLE "customers" (' in md
+    assert 'FOREIGN KEY ("region_id") REFERENCES "regions" ("id")' in md
     assert "## Columns" in md
-    assert "| column | type | description |" in md
-    assert "| email | text | Login email, unique |" in md
-    assert "| id | integer |  |" in md
+    assert "| column | type | description | examples |" in md
+    assert "| email | text | Login email, unique | a@x.com, b@y.com |" in md
+    assert "| id | integer |  |  |" in md
     assert "## Foreign keys" in md
     assert "- region_id -> regions(id)" in md
     assert "- referenced by: orders(customer_id)" in md
@@ -166,11 +168,13 @@ def test_render_table_markdown_full():
 def test_render_table_markdown_omits_empty_fk_section():
     table = _make_table()
     table.foreign_keys = []
-    md = render_table_markdown(table, enums=[], column_meanings={}, referenced_by=[])
+    md = render_table_markdown(
+        table, enums=[], column_meanings={}, referenced_by=[], examples_by_col={}
+    )
     assert "## Foreign keys" not in md
-    # Enums absent -> no CREATE TYPE, but CREATE TABLE still present.
     assert "CREATE TYPE" not in md
     assert 'CREATE TABLE "customers" (' in md
+    assert "FOREIGN KEY" not in md
 
 
 def _pk_col(name: str, data_type: str) -> Column:
