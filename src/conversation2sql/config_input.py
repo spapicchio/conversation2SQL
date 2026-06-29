@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, computed_field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -19,16 +19,24 @@ class ConfigPipeline(BaseModel):
 # Input Data for DatasetReader
 # ---------------------------------------------------------------------------
 
+# Postgres port per dataset variant (lite -> 5432, full -> 5433); see .claude/CLAUDE.md
+_VARIANT_DB_PORT: dict[str, int] = {"lite": 5432, "full": 5433}
+
+
 class ConfigReader(BaseModel):
-    dataset_name_jsonl: str = 'data/bird_interact/bird-interact-full/bird_interact_data_GT.jsonl'
-    dataset_path: str = 'data/bird_interact/bird-interact-full'
+    # --- the single full/lite switch + static base knobs it derives from ---
+    dataset_variant: Literal["lite", "full"] = "lite"  # one switch: drives all dataset paths, the deep_agent catalog root, and the Postgres port
+    data_root: str = "data/bird_interact"  # base dir holding the bird-interact-* and catalog_bird_interact_* trees
+    db_host: str = "localhost"  # Postgres host; override for SLURM. The port is derived from dataset_variant, not set here.
+    db_user: str = "root"
+    db_password: str = "123123"
+
     filter_query_category: bool = True
-    db_dsn_template: str = 'postgresql://root:123123@localhost:5432/{database}'  # DSN template; {database} is replaced with the per-sample database name
     user_patience_budget: int = 10
     make_data_ambiguous: bool = True
     database_schema_type: Literal['ddl', 'toon'] = 'ddl'  # Whether to use the original complex schema or a simplified version for better model understanding
     read_only_gt_kb: bool = False  # Whether to only include the tables/columns that are actually used in the GT SQL query when providing the schema to the model
-    read_only_gt_tables: bool = False  # Whether to only include the tables that are actually used in the GT SQL query when providing the schema to the model   
+    read_only_gt_tables: bool = False  # Whether to only include the tables that are actually used in the GT SQL query when providing the schema to the model
     is_kb_linearized: bool = False  # Whether to linearize the KB schema into text or provide it in a structured format (e.g., JSON); linearization may be easier for LLMs to understand but less faithful to the original structure
     enable_table_schema_tools: bool = False  # When True the agent additionally gets get_table_names + get_table_schema (granular per-table DDL access, mirroring the KB name/definition tools). Off by default so the baseline keeps only the full-dump get_schema; flip on for ablations.
     enable_psql_console: bool = False  # Ablation: replace the DB tools (execute_sql/get_schema/get_table_*) with a single read-only psql terminal tool (psql_console). Mutually exclusive with enable_table_schema_tools.
@@ -40,7 +48,28 @@ class ConfigReader(BaseModel):
     deep_enable_subagents: bool = False  # add deepagents subagents (task tool) middleware
     deep_enable_summarization: bool = False  # add deepagents/langchain SummarizationMiddleware
     deep_enable_fs_write: bool = False  # expose write_file/edit_file (default: read-only FS)
-    deep_catalog_root: str = ''  # root holding <db>/tables/*.md catalogs for the deep_agent FS (e.g. data/bird_interact/catalog_bird_interact_lite); set per run
+
+    # --- derived, read-only: all four driven by dataset_variant + the base knobs ---
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def dataset_path(self) -> str:
+        return f"{self.data_root}/bird-interact-{self.dataset_variant}"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def dataset_name_jsonl(self) -> str:
+        return f"{self.dataset_path}/bird_interact_data_GT.jsonl"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def deep_catalog_root(self) -> str:
+        return f"{self.data_root}/catalog_bird_interact_{self.dataset_variant}"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def db_dsn_template(self) -> str:
+        port = _VARIANT_DB_PORT[self.dataset_variant]
+        return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{port}/{{database}}"
 
     @model_validator(mode="after")
     def _check_db_tool_ablation_exclusivity(self) -> "ConfigReader":
@@ -50,6 +79,8 @@ class ConfigReader(BaseModel):
                 "exclusive; enable at most one DB-tool ablation."
             )
         return self
+
+    
 # ---------------------------------------------------------------------------
 # Input Data for Predictor
 # ---------------------------------------------------------------------------

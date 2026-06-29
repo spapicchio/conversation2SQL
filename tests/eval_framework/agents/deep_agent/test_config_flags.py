@@ -21,9 +21,9 @@ def test_taskdata_carries_deep_flags(make_minimal_task_kwargs):
     assert task.deep_enable_fs_write is False
 
 
-def test_config_reader_has_deep_catalog_root_default_empty():
+def test_config_reader_deep_catalog_root_default_is_lite_catalog():
     cfg = ConfigReader()
-    assert cfg.deep_catalog_root == ""
+    assert cfg.deep_catalog_root == "data/bird_interact/catalog_bird_interact_lite"
 
 
 def test_taskdata_carries_deep_catalog_root(make_minimal_task_kwargs):
