@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Root-Cause Analysis — BIRD-Interact Eval · Update Meeting 2026-06-22</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2330; --ink:#e6edf3; --muted:#9da7b3;
+    --line:#2d3643; --accent:#58a6ff; --good:#3fb950; --bad:#f85149; --warn:#d29922;
+    --chip:#21262d;
+    --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);font-family:var(--sans)}
+  body{overflow:hidden}
+
+  .deck{height:100vh;width:100vw;position:relative}
+  .slide{
+    position:absolute;inset:0;display:none;flex-direction:column;
+    padding:4.5vh 6vw 8vh;overflow:auto;
+    animation:fade .35s ease;
+  }
+  .slide.active{display:flex}
+  @keyframes fade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+
+  /* ---- chrome ---- */
+  .progress{position:fixed;top:0;left:0;height:4px;background:var(--accent);z-index:50;transition:width .3s}
+  .footer{position:fixed;bottom:0;left:0;right:0;height:5vh;display:flex;align-items:center;
+    justify-content:space-between;padding:0 2vw;font-size:13px;color:var(--muted);
+    border-top:1px solid var(--line);background:var(--bg);z-index:40}
+  .footer .hint{font-family:var(--mono)}
+  kbd{background:var(--chip);border:1px solid var(--line);border-radius:4px;padding:1px 6px;font-family:var(--mono);font-size:12px}
+
+  /* ---- typography ---- */
+  h1{font-size:clamp(28px,4.4vw,56px);line-height:1.08;margin:0 0 18px;font-weight:800;letter-spacing:-.5px}
+  h2{font-size:clamp(22px,3vw,38px);margin:0 0 6px;font-weight:750;letter-spacing:-.3px}
+  h3{font-size:clamp(15px,1.5vw,20px);margin:0;color:var(--muted);font-weight:600}
+  p,li{font-size:clamp(14px,1.45vw,19px);line-height:1.5}
+  .lead{font-size:clamp(16px,1.8vw,23px);color:var(--ink)}
+  .muted{color:var(--muted)}
+  code,.mono{font-family:var(--mono);font-size:.92em}
+  .kw{font-family:var(--mono);background:var(--chip);border:1px solid var(--line);
+    border-radius:5px;padding:1px 6px;color:#a5d6ff;font-size:.86em;white-space:nowrap}
+
+  .eyebrow{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);
+    font-size:13px;letter-spacing:2px;text-transform:uppercase;color:var(--accent);margin-bottom:10px}
+  .eyebrow .dot{width:8px;height:8px;border-radius:50%;background:var(--accent)}
+
+  /* ---- pills / verdict ---- */
+  .verdict{display:inline-flex;align-items:center;gap:8px;border-radius:999px;
+    padding:5px 14px;font-weight:700;font-size:14px;border:1px solid}
+  .v-refuted{color:var(--bad);border-color:var(--bad);background:rgba(248,81,73,.10)}
+  .v-confirmed{color:var(--good);border-color:var(--good);background:rgba(63,185,80,.10)}
+  .v-mixed{color:var(--warn);border-color:var(--warn);background:rgba(210,153,34,.10)}
+  .v-proposed{color:var(--accent);border-color:var(--accent);background:rgba(88,166,255,.10)}
+
+  /* ---- layout cards ---- */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:14px}
+  .cols3{display:grid;grid-template-columns:repeat(3,1fr);gap:18px;margin-top:14px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px}
+  .card h4{margin:0 0 10px;font-size:13px;letter-spacing:1.5px;text-transform:uppercase;color:var(--muted)}
+  .card.problem{border-left:4px solid var(--warn)}
+  .card.analysis{border-left:4px solid var(--accent)}
+  .card.result{border-left:4px solid var(--good)}
+  .card.fix{border-left:4px solid #a371f7;background:var(--panel2)}
+  .card ul{margin:0;padding-left:18px}
+  .card li{margin:6px 0}
+
+  .callout{background:var(--panel2);border:1px solid var(--line);border-radius:12px;
+    padding:16px 20px;margin-top:16px;border-left:4px solid var(--good)}
+  .callout.bad{border-left-color:var(--bad)}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout b{color:var(--ink)}
+
+  /* ---- stat strip ---- */
+  .stats{display:flex;gap:26px;flex-wrap:wrap;margin-top:8px}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 20px;min-width:130px}
+  .stat .n{font-size:clamp(22px,3vw,34px);font-weight:800;font-family:var(--mono)}
+  .stat .l{font-size:12px;color:var(--muted);margin-top:2px}
+  .stat .n.good{color:var(--good)} .stat .n.bad{color:var(--bad)} .stat .n.warn{color:var(--warn)} .stat .n.acc{color:var(--accent)}
+
+  /* ---- overview table ---- */
+  table.ov{width:100%;border-collapse:collapse;margin-top:18px;font-size:clamp(13px,1.3vw,17px)}
+  table.ov th,table.ov td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.ov th{color:var(--muted);font-size:12px;letter-spacing:1px;text-transform:uppercase}
+  table.ov td.id{font-family:var(--mono);color:var(--accent);font-weight:700;white-space:nowrap}
+  table.ov tr:hover{background:var(--panel)}
+
+  .arrow{color:var(--muted);padding:0 6px}
+  .delta-down{color:var(--good)} .delta-up{color:var(--bad)}
+
+  .title-wrap{margin-top:auto;margin-bottom:auto}
+  .meta-row{display:flex;gap:30px;flex-wrap:wrap;margin-top:26px;color:var(--muted);font-size:15px}
+  .meta-row b{color:var(--ink)}
+  .badge-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+  .badge{font-family:var(--mono);font-size:12px;background:var(--chip);border:1px solid var(--line);
+    border-radius:6px;padding:4px 10px;color:var(--muted)}
+
+  .thread{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;margin-top:18px}
+  .thread .card{display:flex;gap:14px;align-items:flex-start}
+  .thread .num{font-family:var(--mono);font-size:28px;font-weight:800;color:var(--accent);line-height:1}
+  .nav-dots{position:fixed;bottom:5vh;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:41;padding:8px}
+  .nav-dots .d{width:8px;height:8px;border-radius:50%;background:var(--line);cursor:pointer;transition:.2s}
+  .nav-dots .d.on{background:var(--accent);transform:scale(1.3)}
+</style>
+</head>
+<body>
+<div class="progress" id="progress"></div>
+<div class="deck" id="deck">
+
+  <!-- 1 · TITLE -->
+  <section class="slide active">
+    <div class="title-wrap">
+      <div class="eyebrow"><span class="dot"></span>Update Meeting · 2026-06-22</div>
+      <h1>Root-Cause Analysis<br/>BIRD-Interact Text-to-SQL Agent</h1>
+      <p class="lead muted" style="max-width:54ch">Five investigations into <b style="color:var(--ink)">why Qwen3.5-9B fails</b> on the interactive benchmark — what we hypothesised, what we found, and what we shipped.</p>
+      <div class="meta-row">
+        <span><b>Model:</b> Qwen3.5-9B</span>
+        <span><b>Setting:</b> tools-only · linearized KB · 9 iters</span>
+        <span><b>Budget:</b> double-context (patience 12)</span>
+      </div>
+      <div class="badge-row">
+        <span class="badge">EXP-001 retry loops</span>
+        <span class="badge">EXP-002 enum catalog</span>
+        <span class="badge">EXP-003 schema grounding</span>
+        <span class="badge">EXP-004 python UDF</span>
+        <span class="badge">EXP-005 terminal-only</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 · THE COMMON THREAD (framing) -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>The through-line</div>
+    <h2>One root cause keeps recurring</h2>
+    <h3>Across all five investigations, failures trace back to the same place</h3>
+    <div class="callout" style="border-left-color:var(--accent)">
+      <p style="margin:0" class="lead">The agent's blockers are <b>grounding &amp; acting on feedback</b> — <u>not</u> a lack of SQL expressive power, and <u>not</u> tool-parsing bugs. The 9B model hallucinates column / enum names and fails to act on explicit DB corrections.</p>
+    </div>
+    <div class="cols3">
+      <div class="card"><h4>What we expected</h4><p>Doubling budget, removing tools, or adding a Python UDF would change the error rate.</p></div>
+      <div class="card"><h4>What we found</h4><p>Mostly the <b>failure mode shifts</b>, not the rate. The dominant blocker is weak schema grounding.</p></div>
+      <div class="card"><h4>What we shipped</h4><p>An <b>enum-catalog injection</b> (EXP-002) — the one fix with a verified, root-cause-linked mechanism.</p></div>
+    </div>
+  </section>
+
+  <!-- 3 · OVERVIEW TABLE -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>At a glance</div>
+    <h2>Five experiments, five verdicts</h2>
+    <table class="ov">
+      <thead><tr><th>#</th><th>Question</th><th>Verdict</th><th>Takeaway</th></tr></thead>
+      <tbody>
+        <tr><td class="id">001</td><td>Did doubling the budget inflate DB / Column errors?</td>
+            <td><span class="verdict v-refuted">Refuted</span></td>
+            <td>Budget actually <b>lowered</b> those errors; real cause = degenerate <span class="kw">execute_sql</span> retry loops.</td></tr>
+        <tr><td class="id">002</td><td>Does <span class="kw">psql_console</span> regress enum-heavy tasks?</td>
+            <td><span class="verdict v-confirmed">Confirmed</span></td>
+            <td>Lost the enum catalog from <span class="kw">get_schema</span>. <b>Fix shipped &amp; tested.</b></td></tr>
+        <tr><td class="id">003</td><td>Why does psql have <i>more</i> un-executable SQL?</td>
+            <td><span class="verdict v-confirmed">Confirmed</span></td>
+            <td>Weaker schema grounding. Two intuitive culprits (truncation, parse bugs) <b>ruled out</b>.</td></tr>
+        <tr><td class="id">004</td><td>Would a <span class="kw">create_python_udf</span> tool help?</td>
+            <td><span class="verdict v-mixed">Mostly no</span></td>
+            <td>Benchmark is SQL-expressible; one scoped win (copy-pasted formulas). Blocked: no <span class="kw">plpython3u</span>.</td></tr>
+        <tr><td class="id">005</td><td>Terminal-only baseline — one shell, no scaffolding?</td>
+            <td><span class="verdict v-proposed">Proposed</span></td>
+            <td>Designed, not yet run. Measures which failure classes self-service shifts.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- 4 · EXP-001 -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>EXP-001</div>
+    <h2>DB / Column errors are budget-exhausted retry loops</h2>
+    <h3>Hypothesis: the doubled context budget lets the agent persist on broken queries longer</h3>
+    <div class="cols">
+      <div class="card problem"><h4>Problem</h4>
+        <ul>
+          <li>Suspected "DB Error" &amp; "Column/Relation Not Found" submit errors rose under <span class="kw">double_ctx_bdg</span>.</li>
+          <li>Worry: more budget = more time to force-submit un-executable SQL.</li>
+        </ul>
+      </div>
+      <div class="card analysis"><h4>Analysis</h4>
+        <ul>
+          <li>Dumped error distribution; traced <span class="kw">news_4</span> end-to-end.</li>
+          <li>Correlated each error class with <span class="kw">execute_sql</span> count &amp; budget exhaustion.</li>
+          <li>Compared against every sibling run in the series.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout bad">
+      <p style="margin:0"><span class="verdict v-refuted">Hypothesis refuted</span> &nbsp; The doubled budget gave this run the <b>lowest</b> Column/Relation (2.7%) &amp; DB Error (1.7%) rates in the series — failures shifted toward "Wrong SQL".</p>
+    </div>
+  </section>
+
+  <!-- 5 · EXP-001 root cause -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>EXP-001 · root cause</div>
+    <h2>A degenerate retry loop — the model ignores correct feedback</h2>
+    <div class="stats">
+      <div class="stat"><div class="n bad">100%</div><div class="l">of these errors end in budget exhaustion</div></div>
+      <div class="stat"><div class="n warn">~21</div><div class="l">mean execute_sql calls before forced submit</div></div>
+      <div class="stat"><div class="n good">4.6</div><div class="l">execute_sql calls for passing records</div></div>
+      <div class="stat"><div class="n bad">27×</div><div class="l">news_4 re-ran the identical broken query</div></div>
+    </div>
+    <div class="callout warn">
+      <p style="margin:0">The schema is correct and Postgres returns the exact fix every time —
+      e.g. <code>column "occubl" does not exist … HINT: "occulbl"</code>.
+      The agent even <b>names the right column in its thinking</b>, then re-emits the typo.
+      <b>This is the 9B model failing to act on explicit corrective feedback — not a schema/data problem.</b></p>
+    </div>
+    <div class="card fix" style="margin-top:16px"><h4>Proposed next step</h4>
+      <p style="margin:0">Add a <b>loop / no-progress guard</b> to <span class="kw">execute_sql</span>: detect N identical errors, then either inject a stronger HINT-quoting nudge or short-circuit to <span class="kw">submit_sql</span> / <span class="kw">ask_user</span> instead of burning budget.</p>
+    </div>
+  </section>
+
+  <!-- 6 · EXP-002 -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>EXP-002</div>
+    <h2>psql_console regresses enum-heavy tasks</h2>
+    <h3>Two runs differ by one flag (<span class="kw">enable_psql_console</span>) — same pass@1 (0.387), but instances flip hard</h3>
+    <div class="cols">
+      <div class="card problem"><h4>Problem</h4>
+        <ul>
+          <li>Identical pass@1, yet instances swing: <span class="kw">fake_7</span> 0/9→6/9, <span class="kw">mental_5</span> 5/9→0/9.</li>
+          <li>The overall rate hides a <b>failure-mode shift</b>.</li>
+        </ul>
+      </div>
+      <div class="card analysis"><h4>Analysis</h4>
+        <ul>
+          <li>Config diff: only <span class="kw">enable_psql_console</span> changes.</li>
+          <li>Per-instance error classes, tool usage, predicted SQL.</li>
+          <li>Inspected <span class="kw">mental_5</span> system prompt + tool calls.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout">
+      <p style="margin:0"><span class="verdict v-confirmed">Confirmed</span> &nbsp; In psql mode <span class="kw">get_schema</span> is gone — and its DDL dump was the <b>only</b> source of <code>CREATE TYPE … AS ENUM (values)</code>. <code>\d</code> shows only the enum <i>type name</i>, not its values.</p>
+    </div>
+  </section>
+
+  <!-- 7 · EXP-002 fix -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>EXP-002 · the fix we shipped</div>
+    <h2>Restore the enum catalog the psql agent lost</h2>
+    <div class="callout warn">
+      <p style="margin:0"><b>The smoking gun —</b> <span class="kw">mental_5</span>: the psql prompt contained <b>0 enum definitions</b> and the agent <b>never ran <code>\dT</code></b>. It guessed literals and failed every iteration:
+      <code>invalid input value for enum functionalimpairment_enum: "Significant"</code> — a value lifted from the confusable <code>functionalimprovement_enum</code>.</p>
+    </div>
+    <div class="cols">
+      <div class="card fix"><h4>Fix applied (Option B)</h4>
+        <ul>
+          <li><span class="kw">extract_enum_types(ddl)</span> pulls every <code>CREATE TYPE … AS ENUM</code> out of the schema.</li>
+          <li><span class="kw">agent_code.py</span> builds the catalog when psql is on and injects it into the system prompt (<span class="kw">prompts.py</span>).</li>
+          <li>Restores the upfront enum catalog the non-psql agent gets for free.</li>
+        </ul>
+      </div>
+      <div class="card result"><h4>Verified &amp; expected impact</h4>
+        <ul>
+          <li>Tests: <span class="kw">TestExtractEnumTypes</span> + enum cases in <span class="kw">test_psql_console_wiring.py</span>.</li>
+          <li>Re-run queued: <span class="kw">…__psql__double_ctx_bdg_enumfix</span>.</li>
+          <li>Expect DB / Column / Syntax errors to drop; <span class="kw">mental_5</span>, <span class="kw">fake_9</span>, <span class="kw">museum_9</span> to recover.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 · EXP-003 -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>EXP-003</div>
+    <h2>Why psql has <i>more</i> un-executable SQL</h2>
+    <h3>Column/Relation 4.6% vs 2.7% · DB Error 3.1% vs 1.7% — and two intuitive guesses were wrong</h3>
+    <div class="cols3">
+      <div class="card result"><h4>✓ Confirmed driver</h4>
+        <p><b>Weaker schema grounding.</b> psql replaces clean DDL (exact names, enums, FKs) with raw <code>\d</code> self-introspection. Column-meaning calls collapse <b>2454 → 653</b>; the model hallucinates names &amp; mis-builds joins.</p>
+      </div>
+      <div class="card problem"><h4>✗ Refuted #1</h4>
+        <p>"<span class="kw">\d</span> output is truncated." — It's untruncated by design. <span class="kw">museum_11</span>'s <code>d.count_adequate</code> was an <b>enum-value hallucination</b>, not truncation.</p>
+      </div>
+      <div class="card problem"><h4>✗ Refuted #2</h4>
+        <p>"psql meta-command calls are mis-parsed." — Only <b>4 of 39,003</b> tool calls (0.01%) malformed. Negligible.</p>
+      </div>
+    </div>
+    <div class="callout warn">
+      <p style="margin:0"><b>Separate knob found:</b> <span class="kw">MAX_RESULT_ROWS = 3</span> caps SELECT rows, so <code>SELECT DISTINCT col</code> value-domain probes see only 3 of N — hurts <i>discovery</i>, but independent of the column-name errors.</p>
+    </div>
+  </section>
+
+  <!-- 9 · EXP-003 next steps -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>EXP-003 · priorities</div>
+    <h2>Where the leverage is</h2>
+    <div class="thread">
+      <div class="card"><div class="num">1</div><div>
+        <b>Schema grounding (highest leverage)</b><br/>
+        <span class="muted">Extend the EXP-002 injection to also push a compact <b>FK / relationship summary</b> (and optionally the full column list) into the psql prompt — restoring what the DDL gave the non-psql agent without removing the console.</span></div></div>
+      <div class="card"><div class="num">2</div><div>
+        <b>Discovery truncation (optional)</b><br/>
+        <span class="muted">Relax <span class="kw">MAX_RESULT_ROWS</span> (or stop truncating single-column results) so value-domain probes aren't cut to 3 rows. Mind the token-budget tradeoff.</span></div></div>
+      <div class="card"><div class="num">3</div><div>
+        <b>Do <u>not</u> harden tool-call parsing</b><br/>
+        <span class="muted">Measured at 0.01% — not a driver. No work warranted here.</span></div></div>
+      <div class="card" style="border-left:4px solid var(--good)"><div class="num" style="color:var(--good)">✓</div><div>
+        <b>Net read</b><br/>
+        <span class="muted">Same root cause as EXP-001/002: grounding, not expressivity or plumbing.</span></div></div>
+    </div>
+  </section>
+
+  <!-- 10 · EXP-004 -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>EXP-004</div>
+    <h2>Would a Python UDF tool help? Mostly no</h2>
+    <h3>The benchmark is formula-heavy — but the formulas are natively SQL-expressible</h3>
+    <div class="stats">
+      <div class="stat"><div class="n acc">89%</div><div class="l">instances carry a calculation_knowledge entry</div></div>
+      <div class="stat"><div class="n">16 / 9 / 9</div><div class="l">GT SQLs using non-trivial math / stats / parsing</div></div>
+      <div class="stat"><div class="n good">native</div><div class="l">all resolve to SQRT / LOG / POWER / PERCENTILE_CONT</div></div>
+    </div>
+    <div class="cols">
+      <div class="card problem"><h4>Why a UDF doesn't move the needle</h4>
+        <ul>
+          <li><span class="kw">archeology_4</span> 0/9: formula written <b>correctly</b>, filtered on the wrong column — a grounding error. A UDF references the same wrong column.</li>
+          <li><span class="kw">virtual_6</span> 0/9: faithful to the stated formula but GT used a different enum-numeric reading — an interpretation gap, not expressivity.</li>
+        </ul>
+      </div>
+      <div class="card result"><h4>One scoped win</h4>
+        <ul>
+          <li><b>Copy-pasted formulas:</b> 10 GT SQLs repeat a math sub-expression ≥2×; the heaviest repeaters all fail 0/9 (archeology cluster).</li>
+          <li>Defining once &amp; calling N× removes the transcription-multiplier.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout bad">
+      <p style="margin:0"><b>Blocked:</b> the BIRD-Interact Postgres images don't ship <span class="kw">plpython3u</span> — every <span class="kw">create_python_udf</span> call errors until <code>postgresql-plpython3-14</code> is installed. The ablation can't even be measured yet.</p>
+    </div>
+  </section>
+
+  <!-- 11 · EXP-005 -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>EXP-005 · proposed</div>
+    <h2>Terminal-only baseline — the opposite extreme</h2>
+    <h3>Give the model <i>only</i> a shell; make it discover the schema, enums &amp; values itself</h3>
+    <div class="cols">
+      <div class="card analysis"><h4>Design</h4>
+        <ul>
+          <li>A single <span class="kw">terminal</span> tool (start psql-only, writes allowed); strip all curated scaffolding — no enum catalog, no <span class="kw">get_column_meaning</span>, no <span class="kw">get_schema</span>.</li>
+          <li>Keep only <span class="kw">submit_sql</span> (+ <span class="kw">ask_user</span> for user cells).</li>
+          <li>New <span class="kw">enable_terminal_only</span> flag, wired like existing ablations.</li>
+        </ul>
+      </div>
+      <div class="card problem"><h4>Open questions</h4>
+        <ul>
+          <li>Read-only or read-write? (write risks mutating the shared eval DB → needs isolation/rollback).</li>
+          <li><span class="kw">MAX_RESULT_ROWS=3</span> almost certainly must relax — self-service leans on <span class="kw">SELECT DISTINCT</span>.</li>
+          <li>Reuse double budget so the comparison isn't starved.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout warn">
+      <p style="margin:0"><b>Hypothesis:</b> a 9B model loses ground when structured grounding is removed (per EXP-001/002/003). Expected pass@1 flat-to-down — the <b>value is measuring which failure classes the terminal shifts</b>, against the read-only-console and structured-tools references.</p>
+    </div>
+  </section>
+
+  <!-- 12 · SUMMARY -->
+  <section class="slide">
+    <div class="eyebrow"><span class="dot"></span>Takeaways</div>
+    <h2>What this round established</h2>
+    <div class="thread">
+      <div class="card" style="border-left:4px solid var(--good)"><div class="num" style="color:var(--good)">→</div><div>
+        <b>Grounding is the bottleneck</b><br/>
+        <span class="muted">Every confirmed root cause is the model failing to use schema info correctly — column/enum hallucination, ignoring DB feedback. Not expressivity, not plumbing.</span></div></div>
+      <div class="card" style="border-left:4px solid #a371f7"><div class="num" style="color:#a371f7">✓</div><div>
+        <b>One fix shipped &amp; tested</b><br/>
+        <span class="muted">Enum-catalog injection for psql mode (EXP-002). Re-run queued to confirm the predicted recovery.</span></div></div>
+      <div class="card" style="border-left:4px solid var(--accent)"><div class="num" style="color:var(--accent)">⊘</div><div>
+        <b>Two non-leverage areas ruled out</b><br/>
+        <span class="muted">Tool-call parsing (0.01%) and — partly — bigger budgets. Don't invest there.</span></div></div>
+      <div class="card" style="border-left:4px solid var(--warn)"><div class="num" style="color:var(--warn)">»</div><div>
+        <b>Next bets</b><br/>
+        <span class="muted">(1) FK/relationship injection · (2) execute_sql loop guard · (3) install plpython3u to even measure UDFs · (4) run terminal-only baseline.</span></div></div>
+    </div>
+    <p class="muted" style="margin-top:22px;font-size:14px">Source: <span class="kw">experiments.md</span> (EXP-001 … EXP-005) · Run series: <span class="kw">tools_only__Qwen3.5-9B__ddl__lin__iter9__double_ctx_bdg</span></p>
+  </section>
+
+</div>
+
+<div class="nav-dots" id="dots"></div>
+<div class="footer">
+  <span>Root-Cause Analysis · BIRD-Interact · 2026-06-22</span>
+  <span class="hint"><kbd>←</kbd> <kbd>→</kbd> navigate · <kbd>F</kbd> fullscreen · <span id="counter">1 / 12</span></span>
+</div>
+
+<script>
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const dotsWrap = document.getElementById('dots');
+  const counter = document.getElementById('counter');
+  const progress = document.getElementById('progress');
+  let i = 0;
+
+  slides.forEach((_, idx) => {
+    const d = document.createElement('div');
+    d.className = 'd' + (idx === 0 ? ' on' : '');
+    d.onclick = () => go(idx);
+    dotsWrap.appendChild(d);
+  });
+  const dots = Array.from(dotsWrap.children);
+
+  function go(n){
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, idx) => s.classList.toggle('active', idx === i));
+    dots.forEach((d, idx) => d.classList.toggle('on', idx === i));
+    counter.textContent = (i + 1) + ' / ' + slides.length;
+    progress.style.width = ((i + 1) / slides.length * 100) + '%';
+  }
+  go(0);
+
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight','PageDown',' '].includes(e.key)){ e.preventDefault(); go(i+1); }
+    else if (['ArrowLeft','PageUp'].includes(e.key)){ e.preventDefault(); go(i-1); }
+    else if (e.key === 'Home'){ go(0); }
+    else if (e.key === 'End'){ go(slides.length-1); }
+    else if (e.key === 'f' || e.key === 'F'){
+      if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+      else document.exitFullscreen();
+    }
+  });
+  // click right/left half to navigate
+  document.getElementById('deck').addEventListener('click', e => {
+    if (e.target.closest('a,button,.d')) return;
+    go(e.clientX > window.innerWidth/2 ? i+1 : i-1);
+  });
+</script>
+</body>
+</html>
