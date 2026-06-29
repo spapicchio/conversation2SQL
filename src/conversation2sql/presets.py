@@ -18,8 +18,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
+
+# NOTE: keep this module free of third-party / intra-package imports so the bash
+# side can run it standalone with the system ``python3`` (no venv/`uv`). Use the
+# stdlib logger here rather than ``conversation2sql.logger`` (which pulls in
+# loguru and requires the package to be importable).
+_logger = logging.getLogger(__name__)
 
 # Fraction of a profile's `max_model_len` reserved for the model's completion.
 # The predictor's `max_new_tokens` (the request's `max_completion_tokens`) is
@@ -27,7 +34,9 @@ import sys
 # knob: vLLM rejects any request whose `max_completion_tokens > max_model_len`.
 #  max_completion_tokens = max_model_len * _COMPLETION_RATIO
 # A profile may override this with its own `completion_ratio`.
-_COMPLETION_RATIO = 0.25 # consider that the promp is the bottleneck and reaches ~24k for long runs
+_COMPLETION_RATIO = (
+    0.25  # consider that the promp is the bottleneck and reaches ~24k for long runs
+)
 
 # --- Model profiles --------------------------------------------------------
 # Sampling params differ by thinking mode for qwen; gemma is identical either way.
@@ -52,7 +61,6 @@ MODEL_PROFILES: dict[str, dict] = {
             # reasoning_content is non-empty, so multi-turn tool calling works in
             # thinking mode. Path is relative to BASE_WORK; resolve_server_args joins it.
             "chat_template": "bash_scripts/utils/tool_chat_template_qwen35.jinja",
-            
             # Tool calling is only wired up for the tool baselines; see
             # _TOOL_BASELINES / resolve_server_args.
             "tool_call_parser": "qwen3_coder",
@@ -76,14 +84,13 @@ MODEL_PROFILES: dict[str, dict] = {
         # https://huggingface.co/google/gemma-4-12B-it
         "predictor_model_name": "google/gemma-4-12B-it",
         "default_thinking": True,
-        "max_model_len": 32000,
+        "max_model_len": 64_000,  # Total context, PROMPT + comp;
         # https://docs.vllm.ai/projects/recipes/en/latest/Google/Gemma4.html
         "server": {
             "reasoning_parser": "gemma4",
             # Path is relative to BASE_WORK; resolve_server_args joins it.
             "chat_template": "bash_scripts/utils/tool_chat_template_gemma4.jinja",
             "limit_mm_per_prompt": {"image": 0, "audio": 0},
-            
             # Tool calling is only wired up for the tool baselines; see
             # _TOOL_BASELINES / resolve_server_args.
             "tool_call_parser": "gemma4",
@@ -107,7 +114,6 @@ MODEL_PROFILES: dict[str, dict] = {
             # Path is relative to BASE_WORK; resolve_server_args joins it.
             "chat_template": "bash_scripts/utils/tool_chat_template_gemma4.jinja",
             "limit_mm_per_prompt": {"image": 0, "audio": 0},
-
             # Tool calling is only wired up for the tool baselines; see
             # _TOOL_BASELINES / resolve_server_args.
             "tool_call_parser": "gemma4",
@@ -217,10 +223,28 @@ def resolve_profile(
     # stay in sync from a single edit to `max_model_len`.
     ratio = prof.get("completion_ratio", _COMPLETION_RATIO)
     max_new_tokens = round(prof["max_model_len"] * ratio)
+    # CHECK WHEN LAUNCHING: `max_new_tokens` only actually bounds generation on
+    # the hosted-provider path (it is sent as `max_completion_tokens`). On the
+    # local vLLM path (`--predictor_vllm_api_base` set, i.e. every `just eval`
+    # run) it is *not* enforced: `utils_create_model` omits it and vLLM lets the
+    # model fill `max_model_len - prompt_tokens`. So the effective completion
+    # budget is dynamic, not this number. See agents/utils.py:create model.
+    _logger.warning(
+        "Profile %r: derived max_new_tokens=%d (= max_model_len %d * ratio %.2f). "
+        "This bounds generation ONLY on hosted providers; on the local vLLM path "
+        "generation is capped dynamically at max_model_len - prompt_tokens.",
+        name,
+        max_new_tokens,
+        prof["max_model_len"],
+        ratio,
+    )
     flags = [
-        "--predictor_model_name", prof["predictor_model_name"],
-        "--predictor_enable_thinking", "true" if think else "false",
-        "--predictor_max_new_tokens", str(max_new_tokens),
+        "--predictor_model_name",
+        prof["predictor_model_name"],
+        "--predictor_enable_thinking",
+        "true" if think else "false",
+        "--predictor_max_new_tokens",
+        str(max_new_tokens),
     ]
     flags.extend(_dict_to_flags(sampling))
     return flags
@@ -247,7 +271,7 @@ def expand_presets(
 # Baselines that exercise the agent's tool calling (everything but `no_tool`).
 # For these the server must be told to parse tool calls (vLLM disables tool
 # calling by default). See justfile's baseline table.
-_TOOL_BASELINES = frozenset({"tools_only", "tools_user", "bird_full"})
+_TOOL_BASELINES = frozenset({"tools_only", "tools_user", "bird_full", "deep_agent"})
 
 
 def baseline_uses_tools(baseline: str) -> bool:
@@ -316,17 +340,23 @@ def resolve_server_args(
     think = resolve_effective_thinking(name, enable_thinking)
 
     args: list[str] = [
-        "--tensor-parallel-size", str(tp),
-        "--data-parallel-size", str(dp),
-        "--reasoning-parser", server["reasoning_parser"],
+        "--tensor-parallel-size",
+        str(tp),
+        "--data-parallel-size",
+        str(dp),
+        "--reasoning-parser",
+        server["reasoning_parser"],
     ]
     if "chat_template" in server:
         args += ["--chat-template", os.path.join(base_work, server["chat_template"])]
 
-    if 'qwen' in name.lower() and not think:
+    if "qwen" in name.lower() and not think:
         # for Qwen profiles, the defualt chat template must be add only when False
-        args += ["--default-chat-template-kwargs", json.dumps({"enable_thinking": think})]
-    
+        args += [
+            "--default-chat-template-kwargs",
+            json.dumps({"enable_thinking": think}),
+        ]
+
     if server.get("language_model_only"):
         args += ["--language-model-only"]
 
@@ -334,8 +364,11 @@ def resolve_server_args(
         args += ["--limit-mm-per-prompt", json.dumps(server["limit_mm_per_prompt"])]
 
     if baseline_uses_tools(baseline) and "tool_call_parser" in server:
-        args += ["--enable-auto-tool-choice", "--tool-call-parser", server["tool_call_parser"]]
-
+        args += [
+            "--enable-auto-tool-choice",
+            "--tool-call-parser",
+            server["tool_call_parser"],
+        ]
 
     return args
 
@@ -437,11 +470,13 @@ def main(argv: list[str] | None = None) -> None:
     )
     sc.add_argument("--model-profile", required=True)
     sc.add_argument(
-        "--baseline", default="no_tool",
+        "--baseline",
+        default="no_tool",
         help="eval baseline; tool baselines add the tool-calling serve flags.",
     )
     sc.add_argument(
-        "--enable-thinking", default="",
+        "--enable-thinking",
+        default="",
         help="true/false; empty uses the profile's default_thinking.",
     )
     sc.add_argument("--tp", type=int, default=1, help="tensor-parallel-size")
@@ -460,7 +495,9 @@ def main(argv: list[str] | None = None) -> None:
         "recover-config",
         help="Emit provider + vllm serve config read from a run's config.yaml snapshot.",
     )
-    rc.add_argument("--run-dir", required=True, help="Run directory containing config.yaml.")
+    rc.add_argument(
+        "--run-dir", required=True, help="Run directory containing config.yaml."
+    )
     rc.add_argument("--tp", type=int, default=1, help="tensor-parallel-size")
     rc.add_argument("--dp", type=int, default=1, help="data-parallel-size")
     rc.add_argument("--base-work", default=os.environ.get("BASE_WORK", ""))

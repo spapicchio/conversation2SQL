@@ -266,8 +266,9 @@ def _render_section(
     # for n in ordered:
     #     lines.append(_format_line(n, token_of[n.id]))
 
+    name_of = {n.id: n.knowledge for n in ordered}
     edges = [
-        (token_of[child_id], token_of[n.id])
+        (name_of[child_id], name_of[n.id])
         for n in ordered
         for child_id in (n.children_knowledge or [])
         if child_id in in_kb
@@ -285,7 +286,7 @@ def _render_section(
         lines.append("The following are the nodes in the knowledge base that represent the prerequisite edges you can refer to:")
         if len(edges) > MAX_DEPTH:
             lines.append(f"Showing only the first {MAX_DEPTH} prerequisite edges.")
-        
+
         lines.extend(f'- "{b}" needs "{a}"\n' for a, b in edges[:MAX_DEPTH])
         lines.append("")
     # for n in ordered:
