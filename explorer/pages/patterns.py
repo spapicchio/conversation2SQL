@@ -15,6 +15,7 @@ from patterns import (
     ACCURACY_SCOPES,
     PATTERN_CATALOG,
     PATTERN_DESCRIPTIONS,
+    RECOVERY_PATTERNS,
     aggregate_patterns,
     clean_fraction,
     first_submit_accuracy_by_quintile,
@@ -462,7 +463,10 @@ if not selected:
 record = flagged[selected[0]]
 hit = next(h for h in record["_pattern_hits"] if h.name == pattern_name)
 st.divider()
-st.warning(f"**{pattern_label}** — {hit.detail}  ·  flagged messages: {hit.message_indices}")
+if pattern_name in RECOVERY_PATTERNS:
+    st.success(f"**{pattern_label}** — {hit.detail}  ·  flagged messages: {hit.message_indices}")
+else:
+    st.warning(f"**{pattern_label}** — {hit.detail}  ·  flagged messages: {hit.message_indices}")
 # Pass *all* of the conversation's hits so the trace shows every pattern it hit
 # (banner + per-turn tags), not just the one selected in the drill-down.
 render_conversation(record, pattern_hits=record["_pattern_hits"])

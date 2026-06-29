@@ -346,6 +346,55 @@ def _detect_resubmit_unchanged(events: list[ToolEvent], record: dict) -> Pattern
     return None
 
 
+def _submit_passed(record: dict, message_index: int) -> bool | None:
+    """Whether the ``submit_sql`` result at ``message_index`` reported ``passed=True``.
+
+    The serialized submit ToolMessage content is the parsed tool output dict
+    (``{"passed": bool, "message": str}`` — see ``utils_process_single_msg``).
+    Returns the boolean verdict, or ``None`` when the content carries no
+    ``passed`` field (so the submit can't be scored from the trace).
+    """
+    messages = record.get("messages") or []
+    if not 0 <= message_index < len(messages):
+        return None
+    content = messages[message_index].get("content")
+    if isinstance(content, dict) and "passed" in content:
+        return bool(content["passed"])
+    return None
+
+
+def _detect_recovered_after_wrong_submit(
+    events: list[ToolEvent], record: dict
+) -> PatternHit | None:
+    """A failed ``submit_sql`` was followed by a passing one — the agent recovered.
+
+    Walks the (non-blocked) ``submit_sql`` calls in order, tracking the first one
+    whose result scored ``passed=False``. If a later submit scores ``passed=True``
+    while an earlier failure was seen, the agent fixed its own wrong answer. Submits
+    whose verdict can't be read from the trace are skipped. Unlike the other entries
+    this is a *positive* recovery signal, not a failure mode.
+    """
+    failed_idx: int | None = None
+    for e in events:
+        if e.tool_name != "submit_sql" or e.blocked:
+            continue
+        passed = _submit_passed(record, e.message_index)
+        if passed is None:
+            continue
+        if passed:
+            if failed_idx is not None:
+                return PatternHit(
+                    "recovered_after_wrong_submit", "Recovered after wrong submit",
+                    "a failed submit_sql was followed by a passing one — the agent "
+                    "fixed its own wrong answer",
+                    [failed_idx, e.message_index],
+                )
+            return None  # first scorable submit already passed; nothing to recover from
+        elif failed_idx is None:
+            failed_idx = e.message_index
+    return None
+
+
 def _detect_truncated_generation(events: list[ToolEvent], record: dict) -> PatternHit | None:
     # An AIMessage with finish_reason == "length" was cut off by the max-model-len
     # cap. No error is raised (we no longer send max_tokens on the local vLLM path),
@@ -381,6 +430,7 @@ ANTI_PATTERNS: list[Detector] = [
     _detect_context_editing,
     _detect_truncated_generation,
     _detect_resubmit_unchanged,
+    _detect_recovered_after_wrong_submit,
 ]
 
 # (name, label) for display + enumeration independent of whether a detector fires.
@@ -397,6 +447,7 @@ PATTERN_CATALOG: list[tuple[str, str]] = [
     ("context_editing", "Context editing"),
     ("truncated_generation", "Truncated generation"),
     ("resubmit_unchanged", "Resubmit unchanged"),
+    ("recovered_after_wrong_submit", "Recovered after wrong submit"),
 ]
 PATTERN_NAMES: list[str] = [name for name, _ in PATTERN_CATALOG]
 
@@ -416,6 +467,7 @@ PATTERN_DESCRIPTIONS: dict[str, str] = {
     "context_editing": "The conversation grew large enough that `ContextEditingMiddleware` cleared old tool outputs to stay under the context limit — a sign of a very long, context-heavy run. **Detected:** a `context_editing` entry in the run's `middleware_events`.",
     "truncated_generation": "A model call was cut off by the server's max-model-len cap rather than finishing on its own — its output (possibly a tool call) is incomplete. No error is raised on truncation, so this is the only signal it happened. **Detected:** an AIMessage with `finish_reason` == `length` in the trace.",
     "resubmit_unchanged": "Agent submits the exact same SQL a second time after a prior submission — it looped back to a rejected answer without any fix. Since the benchmark evaluation is deterministic, resubmitting the same SQL will always produce the same verdict. **Detected:** the same whitespace-normalised SQL appears in two distinct `submit_sql` calls.",
+    "recovered_after_wrong_submit": "Agent submits a *wrong* answer, then later submits a *passing* one — it diagnosed and fixed its own mistake. Unlike the other entries this is a **positive recovery signal**, not a failure mode. **Detected:** a `submit_sql` whose result scored `passed=False` is followed by a later `submit_sql` that scored `passed=True`.",
 }
 
 # Per-pattern "applicable" predicate: the samples on which a pattern *could* fire,
@@ -425,6 +477,11 @@ PATTERN_DESCRIPTIONS: dict[str, str] = {
 PATTERN_APPLICABLE: dict[str, Callable[[dict], bool]] = {
     "kb_blind": _kb_needed,
 }
+
+# Patterns that are positive recovery signals rather than failure modes.
+# They share the same detection and aggregation infrastructure but should be
+# rendered with a distinct green style — a higher rate is desirable, not alarming.
+RECOVERY_PATTERNS: frozenset[str] = frozenset({"recovered_after_wrong_submit"})
 
 
 def _is_applicable(name: str, record: dict) -> bool:

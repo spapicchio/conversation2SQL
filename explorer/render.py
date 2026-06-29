@@ -9,8 +9,10 @@ import streamlit as st
 
 try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
     from colors import stable_color
+    from patterns import RECOVERY_PATTERNS
 except ModuleNotFoundError:
     from explorer.colors import stable_color
+    from explorer.patterns import RECOVERY_PATTERNS
 
 
 def _pattern_badge(label: str) -> str:
@@ -32,6 +34,20 @@ def _pattern_banner_html(hits: list) -> str:
     return (
         "<div style='border-left:4px solid #d62728;padding:6px 12px;margin:8px 0;"
         f"background:#fff5f5;border-radius:4px'>🚩 <b>Anti-patterns flagged "
+        f"({len(hits)})</b>{items}</div>"
+    )
+
+
+def _recovery_banner_html(hits: list) -> str:
+    """A banner listing positive recovery signals, styled green."""
+    items = "".join(
+        f"<div style='margin:3px 0'>{_pattern_badge(h.label)} "
+        f"<span style='color:#666;font-size:0.85em'>{html.escape(h.detail)}</span></div>"
+        for h in hits
+    )
+    return (
+        "<div style='border-left:4px solid #2ca02c;padding:6px 12px;margin:8px 0;"
+        f"background:#f0fff0;border-radius:4px'>🔄 <b>Recovery signals "
         f"({len(hits)})</b>{items}</div>"
     )
 
@@ -72,6 +88,7 @@ def render_conversation(
     patterns (no ``message_indices``) appear in the banner only.
     """
     hits = list(pattern_hits or [])
+    recovery_labels: set[str] = {h.label for h in hits if h.name in RECOVERY_PATTERNS}
     # message index -> labels of the pattern(s) that flagged that exact turn.
     idx_labels: dict[int, list[str]] = {}
     for h in hits:
@@ -84,8 +101,12 @@ def render_conversation(
         f"Conversation: `{record.get('instance_id', '')}` · "
         f"db: `{record.get('selected_database', '')}` · **{badge}**"
     )
-    if hits:
-        st.markdown(_pattern_banner_html(hits), unsafe_allow_html=True)
+    anti_hits = [h for h in hits if h.name not in RECOVERY_PATTERNS]
+    rec_hits = [h for h in hits if h.name in RECOVERY_PATTERNS]
+    if anti_hits:
+        st.markdown(_pattern_banner_html(anti_hits), unsafe_allow_html=True)
+    if rec_hits:
+        st.markdown(_recovery_banner_html(rec_hits), unsafe_allow_html=True)
 
     # Questions
     clean_q = record.get("not_ambiguos_query", "")
@@ -165,10 +186,11 @@ def render_conversation(
         if i in highlight:
             labels = idx_labels.get(i)
             if labels:
-                st.markdown(
-                    "🚩 " + " ".join(_pattern_badge(lbl) for lbl in labels),
-                    unsafe_allow_html=True,
-                )
+                parts = [
+                    ("🔄 " if lbl in recovery_labels else "🚩 ") + _pattern_badge(lbl)
+                    for lbl in labels
+                ]
+                st.markdown(" ".join(parts), unsafe_allow_html=True)
             else:
                 st.markdown("\U0001f6a9 **flagged turn**")
 
