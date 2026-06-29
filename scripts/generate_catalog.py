@@ -11,7 +11,11 @@ a single file listing every primary-key and foreign-key constraint in the db.
 
 Examples
 --------
-All tables of a database on the lite container (:5432)::
+Every benchmark database under ``--dataset-path`` — omit ``--database``::
+
+    uv run python scripts/generate_catalog.py --output-dir catalogs
+
+All tables of a single database on the lite container (:5432)::
 
     uv run python scripts/generate_catalog.py --database alien --output-dir catalogs
 
@@ -202,6 +206,20 @@ def render_constraints_markdown(database: str, tables: list[Table]) -> str:
     return "\n".join(lines)
 
 
+def fetch_databases(dataset_path: Path) -> list[str]:
+    """List benchmark databases under ``dataset_path``, sorted alphabetically.
+
+    A database is a subdirectory holding ``<name>_column_meaning_base.json``
+    (the per-DB marker BIRD-Interact ships); this skips ``.git`` and any stray
+    directories.
+    """
+    return sorted(
+        d.name
+        for d in dataset_path.iterdir()
+        if d.is_dir() and (d / f"{d.name}_column_meaning_base.json").is_file()
+    )
+
+
 def fetch_referenced_by(conn: PgConnection, schema: str, table: str) -> list[str]:
     """Tables/columns that hold a foreign key pointing AT ``table``."""
     with conn.cursor() as cur:
@@ -321,7 +339,11 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description="Generate a per-table Markdown schema catalog for one database."
     )
-    p.add_argument("--database", required=True, help="Postgres database name")
+    p.add_argument(
+        "--database",
+        default=None,
+        help="Postgres database name (default: every database under --dataset-path)",
+    )
     p.add_argument("--output-dir", required=True, type=Path)
     p.add_argument("--table", default=None, help="single table (default: all tables)")
     p.add_argument(
@@ -346,20 +368,32 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    if args.table and not args.database:
+        logger.error("--table requires --database (cannot target one table across all databases)")
+        return 1
     try:
-        generate_catalog_for_db(
-            database=args.database,
-            output_dir=args.output_dir,
-            db_dsn_template=args.db_dsn_template,
-            dataset_path=args.dataset_path,
-            schema=args.schema,
-            only_table=args.table,
+        databases = (
+            [args.database]
+            if args.database
+            else fetch_databases(args.dataset_path)
         )
+        if not args.database:
+            logger.info("no --database given; generating catalog for %d database(s): %s",
+                        len(databases), ", ".join(databases))
+        for database in databases:
+            generate_catalog_for_db(
+                database=database,
+                output_dir=args.output_dir,
+                db_dsn_template=args.db_dsn_template,
+                dataset_path=args.dataset_path,
+                schema=args.schema,
+                only_table=args.table,
+            )
     except (psycopg2.Error, OSError, ValueError) as exc:
         # psycopg2.Error: connection/extraction; OSError: output write/path;
         # ValueError: malformed meaning JSON (json.JSONDecodeError). Report
         # cleanly with a non-zero exit instead of a raw traceback.
-        logger.error("catalog generation failed for %s: %s", args.database, exc)
+        logger.error("catalog generation failed: %s", exc)
         return 1
     return 0
 
