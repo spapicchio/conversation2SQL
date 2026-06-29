@@ -122,7 +122,7 @@ variants:
 [arg("num_iterations", long="num-iterations", help="repeat dataset N times for statistical relevance (default 1); collapses to 1 when predictor temperature=0")]
 [arg("extra", long="extra", help="extra flags forwarded verbatim to `conv2sql run`, quoted (e.g. --extra \"--predictor_top_p 0.8\")")]
 [arg("append_name", long="append-name", help="free-form suffix appended to the results folder slug (e.g. --append-name exp1 → ...__iter1__exp1); leading underscores are optional")]
-eval variant="all_db_all_kb_linearized" model="qwen35" gpus="1" debug="false" provider="hosted_vllm" baseline="no_tool" concurrency="16" num_iterations="1" extra="" append_name="":
+eval variant="all_db_all_kb_linearized" model="qwen35" gpus="1" debug="false" provider="hosted_vllm" baseline="tools_only" concurrency="16" num_iterations="1" extra="" append_name="":
     #!/usr/bin/env bash
     set -Eeuo pipefail
     # Export env vars read by eval_payload.sh and the Python pipeline.

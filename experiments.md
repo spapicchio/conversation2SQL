@@ -323,3 +323,8 @@ config tweak:
   collapsed `get_column_meaning` calls). Use the explorer compare page.
 
 ---
+
+
+Why the text2SQL is not working for coding model? maybe because the model are perfect for coding and not for navigating dabase structure. If we model the problem as a coding problem for software engineer, the model perform better. 
+
+- Q: what happen if the database and knowledge base is huge? we are paying space for performancescla
