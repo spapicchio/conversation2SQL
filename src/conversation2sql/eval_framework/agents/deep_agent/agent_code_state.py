@@ -1,13 +1,15 @@
-"""Merged agent state: deepagents filesystem (`files`) + bird patience fields."""
+"""deep_agent state: bird patience fields (no FS, no captured system prompt)."""
 from __future__ import annotations
-
-from deepagents.middleware.filesystem import FilesystemState
 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import (
     CustomAgentState,
 )
 
 
-class DeepAgentCustomState(FilesystemState, CustomAgentState):
-    """Both bases are TypedDicts extending AgentState; MRO merges their keys:
-    `files` (FilesystemState) + the three patience fields (CustomAgentState)."""
+class DeepAgentCustomState(CustomAgentState):
+    """The three patience fields (from CustomAgentState), nothing more.
+
+    The system prompt now travels as the leading message in the initial state
+    (so it lands in the message history naturally), so there is no
+    `captured_system_prompt` to reconstruct it for logging. There is also no
+    deepagents `files` state — the catalog is on disk, explored via `bash`."""

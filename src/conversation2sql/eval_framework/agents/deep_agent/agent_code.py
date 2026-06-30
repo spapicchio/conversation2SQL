@@ -1,15 +1,16 @@
-"""deep_agent baseline: deepagents FilesystemMiddleware + bird patience budget."""
+"""deep_agent baseline: one read-only bash tool + bird patience budget."""
 from __future__ import annotations
+
+import shutil
+from pathlib import Path
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import (
     ModelRetryMiddleware,
     ToolRetryMiddleware,
-    SummarizationMiddleware,
-    TodoListMiddleware,
 )
 from langchain_core.language_models import BaseChatModel
-from deepagents import FilesystemMiddleware, SubAgentMiddleware
+from deepagents import SubAgentMiddleware
 from deepagents.backends.state import StateBackend
 from deepagents.middleware.subagents import SubAgent
 
@@ -31,9 +32,13 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import (
 from conversation2sql.eval_framework.agents.deep_agent.agent_code_state import (
     DeepAgentCustomState,
 )
-from conversation2sql.eval_framework.agents.deep_agent.filesystem_seed import (
-    build_db_filesystem,
+from conversation2sql.eval_framework.agents.deep_agent.bash_tool import (
+    build_pg_env,
+    return_tool_bash,
+)
+from conversation2sql.eval_framework.agents.deep_agent.catalog_seed import (
     deep_tool_costs,
+    materialize_catalog_dir,
 )
 from conversation2sql.eval_framework.agents.deep_agent.prompts import (
     build_deep_agent_messages,
@@ -43,13 +48,11 @@ from conversation2sql.logger import get_logger
 
 logger = get_logger(__name__)
 
-_FS_READ_TOOLS = ("ls", "read_file", "glob", "grep")
-_FS_WRITE_TOOLS = ("write_file", "edit_file")
 
 # Minimal general-purpose subagent. deepagents' SubAgentMiddleware requires at
-# least one subagent (each needing a model); tuning subagent prompts/tools is
-# out of scope per the spec (subagents are off by default — this only exists so
-# the deep_enable_subagents flag can be toggled).
+# least one subagent (each needing a model); tuning subagent prompts/tools is out
+# of scope (subagents are off by default — this only exists so the
+# deep_enable_subagents flag can be toggled).
 def _general_subagent(model_agent: BaseChatModel) -> SubAgent:
     return {
         "name": "general",
@@ -63,28 +66,15 @@ def _general_subagent(model_agent: BaseChatModel) -> SubAgent:
     }
 
 
-def _build_fs_middleware(*, enable_fs_write: bool) -> FilesystemMiddleware:
-    """State-backed filesystem, restricted to a read-only subset by default.
-
-    The middleware ships ls/read_file/write_file/edit_file/glob/grep/execute; we
-    filter its `.tools` list down to the read subset (plus writes when enabled).
-    `execute` is always dropped — it errors on the non-sandbox StateBackend.
-    """
-    mw = FilesystemMiddleware(backend=StateBackend())
-    allowed = set(_FS_READ_TOOLS)
-    if enable_fs_write:
-        allowed |= set(_FS_WRITE_TOOLS)
-    mw.tools = [t for t in mw.tools if t.name in allowed]
-    return mw
-
-
 def _build_deep_tools(
     single_task: TaskData,
     model_user_parsing: BaseChatModel,
     model_user_generator: BaseChatModel,
+    catalog_dir: Path,
+    pg_env: dict[str, str],
 ) -> list:
     return [
-        execute_sql,
+        return_tool_bash(catalog_dir, pg_env),
         submit_sql,
         return_tool_ask_user(model_user_parsing, model_user_generator),
     ]
@@ -94,13 +84,7 @@ def _build_deep_middleware(single_task: TaskData, model_agent: BaseChatModel) ->
     mws: list = [
         ModelRetryMiddleware(max_delay=60.0, on_failure="error"),
         ToolRetryMiddleware(max_delay=60.0, on_failure="error"),
-        _build_fs_middleware(enable_fs_write=single_task.deep_enable_fs_write),
     ]
-    if single_task.deep_enable_todos:
-        mws.append(TodoListMiddleware())
-    if single_task.deep_enable_summarization:
-        # SummarizationMiddleware requires a model; reuse the agent's model.
-        mws.append(SummarizationMiddleware(model=model_agent))
     if single_task.deep_enable_subagents:
         mws.append(
             SubAgentMiddleware(
@@ -133,30 +117,43 @@ def run_agent_deep_agent(
         params={
             "total_budget": single_task.task_budget,
             "amb_user_query": single_task.task_question,
-            "enable_fs_write": single_task.deep_enable_fs_write,
-            "enable_todos": single_task.deep_enable_todos,
             "enable_subagents": single_task.deep_enable_subagents,
         }
     )
-    agent = create_agent(
-        model_agent,
-        _build_deep_tools(single_task, model_user_parsing, model_user_generator),
-        state_schema=DeepAgentCustomState,
-        context_schema=TaskData,
-        middleware=_build_deep_middleware(single_task, model_agent),  # pyrefly: ignore
-    )
-    agent_state = {
-        "messages": messages,
-        "files": build_db_filesystem(single_task),
-        "initial_user_patience": single_task.task_budget,
-        "updated_user_patience": single_task.task_budget,
-        "tool_called_patience": [],
-    }
-    response = agent.invoke(agent_state, context=single_task)  # pyrefly: ignore
-    predicted_sql = _extract_predicted_sql(response["messages"])
-    output = utils_process_agent_response(
-        response,  # pyrefly: ignore
-        tool_costs=deep_tool_costs(enable_fs_write=single_task.deep_enable_fs_write),
-    )
-    output["predicted_sql"] = predicted_sql
-    return output
+    catalog_dir = materialize_catalog_dir(single_task)
+    try:
+        pg_env = build_pg_env(single_task.db_dsn)
+        agent = create_agent(
+            model_agent,
+            _build_deep_tools(
+                single_task,
+                model_user_parsing,
+                model_user_generator,
+                catalog_dir,
+                pg_env,
+            ),
+            state_schema=DeepAgentCustomState,
+            context_schema=TaskData,
+            middleware=_build_deep_middleware(single_task, model_agent),  # pyrefly: ignore
+        )
+        # The system + user turns travel together in the initial state. The old
+        # FilesystemMiddleware injected its own /db system message (forcing the
+        # prompt through create_agent's system_prompt= to avoid two leading system
+        # messages); with the on-disk catalog there is no such injection, so the
+        # system message can live in the history directly — like bird_baseline.
+        agent_state = {
+            "messages": messages,
+            "initial_user_patience": single_task.task_budget,
+            "updated_user_patience": single_task.task_budget,
+            "tool_called_patience": [],
+        }
+        response = agent.invoke(agent_state, context=single_task)  # pyrefly: ignore
+        predicted_sql = _extract_predicted_sql(response["messages"])
+        output = utils_process_agent_response(
+            response,  # pyrefly: ignore
+            tool_costs=deep_tool_costs(),
+        )
+        output["predicted_sql"] = predicted_sql
+        return output
+    finally:
+        shutil.rmtree(catalog_dir, ignore_errors=True)
