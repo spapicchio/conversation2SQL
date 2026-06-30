@@ -86,7 +86,7 @@ def classify_submit_error(record: dict) -> str:
         return "Syntax Error"
     if re.search(r"column .+ does not exist|does not exist", message_lower):
         return "Column/Relation Not Found"
-    if "your sql is not correct" in message_lower:
+    if "your sql is not correct" in message_lower or "wrong result set" in message_lower:
         return "Wrong SQL"
     if "databaseerror" in message_lower:
         return "DB Error"
