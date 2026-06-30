@@ -75,12 +75,9 @@ class TaskData(BaseModel):
     enable_python_udf: bool = False
     # deep_agent baseline ablations (only meaningful when baseline='deep_agent'),
     # threaded from ConfigReader exactly like the enable_* flags above.
-    deep_enable_todos: bool = False
     deep_enable_subagents: bool = False
-    deep_enable_summarization: bool = False
-    deep_enable_fs_write: bool = False
     # Root dir holding the per-database catalog (<db>/tables/*.md) the deep_agent
-    # mounts as its /db filesystem; '' means unset (build_db_filesystem will raise).
+    # materializes per task; '' means unset (materialize_catalog_dir will raise).
     deep_catalog_root: str = ""
     gt_knowledge_base: dict[str, ExternalKnowledgeEntry] = Field(default_factory=dict)
     #  key = f"{db_name}|{req.table_name.lower()}|{req.column_name.lower()}"

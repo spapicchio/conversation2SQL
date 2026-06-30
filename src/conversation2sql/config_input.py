@@ -44,10 +44,7 @@ class ConfigReader(BaseModel):
     enable_python_udf: bool = False  # Ablation: add create_python_udf tool (plpython3u). Additive — compatible with all other DB-tool variants.
 
     # --- deep_agent baseline ablations (only meaningful when baseline='deep_agent') ---
-    deep_enable_todos: bool = False  # add deepagents planning/write_todos middleware
     deep_enable_subagents: bool = False  # add deepagents subagents (task tool) middleware
-    deep_enable_summarization: bool = False  # add deepagents/langchain SummarizationMiddleware
-    deep_enable_fs_write: bool = False  # expose write_file/edit_file (default: read-only FS)
 
     # --- derived, read-only: all four driven by dataset_variant + the base knobs ---
     @computed_field  # type: ignore[prop-decorator]
@@ -114,4 +111,4 @@ class ConfigUserSimulator(BaseModel):
     user_simulator_vllm_api_base: str | None = None  # If using vLLM API for user simulation, the base URL of the API, e.g., 'http://localhost:8000/v1'
     enable_thinking: bool | None = None  # Whether to enable the "thinking" mode in the chat template, which allows the model to generate intermediate reasoning steps before the final answer
     request_timeout: float | None = 600.0  # Per-request timeout (s) for model calls; a stuck request fails fast instead of hanging a worker thread until the asyncio executor-join watchdog trips
-    num_retries: int = 2  # How many times litellm retries a failed/timed-out request before giving up
+
