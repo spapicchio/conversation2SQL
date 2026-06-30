@@ -73,9 +73,6 @@ class TaskData(BaseModel):
     # When True the agent gets the create_python_udf tool (plpython3u ablation).
     # Additive — compatible with enable_psql_console and enable_table_schema_tools.
     enable_python_udf: bool = False
-    # deep_agent baseline ablations (only meaningful when baseline='deep_agent'),
-    # threaded from ConfigReader exactly like the enable_* flags above.
-    deep_enable_subagents: bool = False
     # Root dir holding the per-database catalog (<db>/tables/*.md) the deep_agent
     # materializes per task; '' means unset (materialize_catalog_dir will raise).
     deep_catalog_root: str = ""

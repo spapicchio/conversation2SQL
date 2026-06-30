@@ -10,9 +10,6 @@ from langchain.agents.middleware import (
     ToolRetryMiddleware,
 )
 from langchain_core.language_models import BaseChatModel
-from deepagents import SubAgentMiddleware
-from deepagents.backends.state import StateBackend
-from deepagents.middleware.subagents import SubAgent
 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_callback import (
     check_budget_limit,
@@ -49,23 +46,6 @@ from conversation2sql.logger import get_logger
 logger = get_logger(__name__)
 
 
-# Minimal general-purpose subagent. deepagents' SubAgentMiddleware requires at
-# least one subagent (each needing a model); tuning subagent prompts/tools is out
-# of scope (subagents are off by default — this only exists so the
-# deep_enable_subagents flag can be toggled).
-def _general_subagent(model_agent: BaseChatModel) -> SubAgent:
-    return {
-        "name": "general",
-        "description": "A general-purpose subagent for an isolated, self-contained sub-task.",
-        "system_prompt": (
-            "You are a focused sub-agent. Complete the assigned sub-task using the "
-            "tools available to you and return a single concise result."
-        ),
-        "model": model_agent,
-        "tools": [execute_sql, submit_sql],
-    }
-
-
 def _build_deep_tools(
     single_task: TaskData,
     model_user_parsing: BaseChatModel,
@@ -80,18 +60,11 @@ def _build_deep_tools(
     ]
 
 
-def _build_deep_middleware(single_task: TaskData, model_agent: BaseChatModel) -> list:
+def _build_deep_middleware() -> list:
     mws: list = [
         ModelRetryMiddleware(max_delay=60.0, on_failure="error"),
         ToolRetryMiddleware(max_delay=60.0, on_failure="error"),
     ]
-    if single_task.deep_enable_subagents:
-        mws.append(
-            SubAgentMiddleware(
-                backend=StateBackend(),
-                subagents=[_general_subagent(model_agent)],
-            )
-        )
     # Patience budget — appended last, same relative order as bird_baseline.
     mws += [
         check_budget_limit,
@@ -117,7 +90,6 @@ def run_agent_deep_agent(
         params={
             "total_budget": single_task.task_budget,
             "amb_user_query": single_task.task_question,
-            "enable_subagents": single_task.deep_enable_subagents,
         }
     )
     catalog_dir = materialize_catalog_dir(single_task)
@@ -134,7 +106,7 @@ def run_agent_deep_agent(
             ),
             state_schema=DeepAgentCustomState,
             context_schema=TaskData,
-            middleware=_build_deep_middleware(single_task, model_agent),  # pyrefly: ignore
+            middleware=_build_deep_middleware(),  # pyrefly: ignore
         )
         # The system + user turns travel together in the initial state. The old
         # FilesystemMiddleware injected its own /db system message (forcing the

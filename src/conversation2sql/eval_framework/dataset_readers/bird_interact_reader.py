@@ -254,7 +254,6 @@ def load_bird_interact_as_tasks(
     enable_table_schema_tools: bool = False,
     enable_psql_console: bool = False,
     enable_psql_strict_inspection: bool = False,
-    deep_enable_subagents: bool = False,
     deep_catalog_root: str = "",
     *args,
     **kwargs,
@@ -429,7 +428,6 @@ def load_bird_interact_as_tasks(
                 enable_table_schema_tools=enable_table_schema_tools,
                 enable_psql_console=enable_psql_console,
                 enable_psql_strict_inspection=enable_psql_strict_inspection,
-                deep_enable_subagents=deep_enable_subagents,
                 deep_catalog_root=deep_catalog_root,
                 **line,
             )

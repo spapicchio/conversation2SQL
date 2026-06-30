@@ -23,8 +23,7 @@ You have ONE shell tool, `bash`, for two purposes:
 You also have:
 - ask_user: ask the user ONE clarifying question when their intent is ambiguous.
 - submit_sql: submit your final SQL for grading (this ends the task).
-{% if enable_subagents %}- task: delegate an isolated sub-task to an ephemeral subagent.
-{% endif %}
+
 Each action costs bird-coins from a fixed budget; be efficient. The interaction
 ends when you submit the correct SQL or the budget runs out.
 

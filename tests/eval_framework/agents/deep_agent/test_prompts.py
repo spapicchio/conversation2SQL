@@ -7,7 +7,6 @@ def _render(**overrides):
     params = {
         "total_budget": 20,
         "amb_user_query": "How many active users?",
-        "enable_subagents": False,
     }
     params.update(overrides)
     return build_deep_agent_messages(params)
@@ -35,6 +34,6 @@ def test_prompt_includes_user_query_and_budget():
     assert "20" in joined
 
 
-def test_subagents_block_only_when_enabled():
+def test_subagent_tool_not_in_prompt():
     assert "delegate an isolated sub-task" not in _render()[0]["content"]
-    assert "delegate an isolated sub-task" in _render(enable_subagents=True)[0]["content"]
+    assert "task:" not in _render()[0]["content"]

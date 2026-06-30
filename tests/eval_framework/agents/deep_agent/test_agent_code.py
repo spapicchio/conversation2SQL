@@ -1,41 +1,19 @@
 from pathlib import Path
 
 from conversation2sql.eval_framework.agents.deep_agent import agent_code
-from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from deepagents import SubAgentMiddleware
 
 
-def _task(task_data, **flags):
-    for k, v in flags.items():
-        setattr(task_data, k, v)
-    return task_data
-
-
-def _fake_model() -> FakeListChatModel:
-    # deepagents introspects the model when compiling a subagent, so the
-    # middleware tests need a real BaseChatModel rather than a MagicMock.
-    return FakeListChatModel(responses=["ok"])
-
-
-def test_middleware_minimal_by_default(task_data):
-    mws = agent_code._build_deep_middleware(_task(task_data), _fake_model())
-    assert not any(isinstance(m, SubAgentMiddleware) for m in mws)
+def test_middleware_includes_patience_budget(task_data):
+    mws = agent_code._build_deep_middleware()
     from conversation2sql.eval_framework.agents.bird_baseline.agent_callback import (
         tool_wrapper_patience_and_submit,
     )
     assert tool_wrapper_patience_and_submit in mws
 
 
-def test_middleware_subagents_flag_adds_component(task_data):
-    mws = agent_code._build_deep_middleware(
-        _task(task_data, deep_enable_subagents=True), _fake_model()
-    )
-    assert any(isinstance(m, SubAgentMiddleware) for m in mws)
-
-
 def test_tools_are_bash_submit_ask_user(task_data, make_chat_model, tmp_path):
     tools = agent_code._build_deep_tools(
-        _task(task_data),
+        task_data,
         model_user_parsing=make_chat_model("<s>x</s>"),
         model_user_generator=make_chat_model("<s>y</s>"),
         catalog_dir=tmp_path,

@@ -43,9 +43,6 @@ class ConfigReader(BaseModel):
     enable_psql_strict_inspection: bool = False  # Ablation (only meaningful with enable_psql_console): restrict psql_console to SQL + \h + the informational \d-family; \? lists only those. Off = legacy denylist behavior (full rollback).
     enable_python_udf: bool = False  # Ablation: add create_python_udf tool (plpython3u). Additive — compatible with all other DB-tool variants.
 
-    # --- deep_agent baseline ablations (only meaningful when baseline='deep_agent') ---
-    deep_enable_subagents: bool = False  # add deepagents subagents (task tool) middleware
-
     # --- derived, read-only: all four driven by dataset_variant + the base knobs ---
     @computed_field  # type: ignore[prop-decorator]
     @property
