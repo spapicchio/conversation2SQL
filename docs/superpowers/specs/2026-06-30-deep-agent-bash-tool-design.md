@@ -21,13 +21,14 @@ Replace the virtual filesystem with **one `bash` tool** that runs read-only shel
 commands via `subprocess.run`, with `cwd` bound to a freshly-materialized,
 per-task catalog directory on disk. The same tool also runs SQL via `psql`,
 absorbing `execute_sql`. The result is a **3-tool agent**: `bash` + `submit_sql` +
-`ask_user` (down from the current 4). The patience budget, `submit_sql`,
-`ask_user`, and the `todos`/`subagents`/`summarization` ablations are unchanged.
+`ask_user` (down from the current 4). The patience budget, `submit_sql`, and
+`ask_user` are unchanged. Of the four deepagents ablations, only `subagents`
+survives; `todos`, `summarization`, and `fs_write` are removed.
 
 ### Non-goals
 
 - No change to `submit_sql`, `ask_user`, the patience-budget middleware, or the
-  three surviving deepagents ablations.
+  surviving `subagents` ablation.
 - No docker / containerization (explicitly rejected — see Decisions).
 - No path-containment guardrail (whitelist + non-advertised cwd is deemed
   sufficient — see Decisions).
@@ -40,9 +41,10 @@ absorbing `execute_sql`. The result is a **3-tool agent**: `bash` + `submit_sql`
 2. **Execution:** direct `subprocess.run` with `cwd` = the per-task dir. **No
    docker** (the eval runs on SLURM where docker-in-docker is often unavailable;
    the files are static Markdown).
-3. **Scope:** replace the FS tools *in place* inside `deep_agent`. Keep
-   `todos`/`subagents`/`summarization`. **Remove `deep_enable_fs_write`** (bash is
-   read-only; a write toggle is meaningless here).
+3. **Scope:** replace the FS tools *in place* inside `deep_agent`. Keep only the
+   `subagents` ablation. **Remove `deep_enable_fs_write`** (bash is read-only),
+   **`deep_enable_todos`**, and **`deep_enable_summarization`** — trimming the
+   agent to the essentials.
 4. **Guardrails:** read-only command **whitelist** (`cat`, `ls`, `find`, `grep`,
    `head`, `tail`, `wc`, `psql`). No separate path-containment check.
 5. **SQL:** `bash` runs `psql` (3 tools total), accepting the loss of
@@ -111,7 +113,10 @@ Behavior:
   `bird_baseline`'s `_violates_psql_guardrail` against the command string and
   refuse host-reaching backslash meta-commands (`\!`, `\copy`, `\i`, `\o`, `\e`,
   `\w`, `\s`, `\g`/`\gx` with a file/pipe) **before** spawning. This closes the
-  host-file-read escape (which could otherwise read the unmasked on-disk catalog).
+  *backslash* host-file-read escape. It does **not** close the
+  `SELECT pg_read_file('…')` server-side escape (the eval role may be superuser);
+  leave a `# TODO(unmasked-kb-leak):` comment in `return_tool_bash` pointing at
+  this — to be solved later (see Risks).
 - **Execution:**
   `subprocess.run(["bash","-lc",command], cwd=catalog_dir, env=pg_env,
   capture_output=True, text=True, timeout=30)`.
@@ -139,10 +144,11 @@ with `psycopg2.extensions.parse_dsn` / `urllib`.
   pg_env)` → `[return_tool_bash(catalog_dir, pg_env), submit_sql,
   return_tool_ask_user(...)]`.
 - `_build_deep_middleware`: delete `_build_fs_middleware` and the
-  `CustomFilesystemMiddleware`/`StateBackend` imports. Keep `ModelRetryMiddleware`,
-  `ToolRetryMiddleware`, the `todos`/`subagents`/`summarization` gates, and the
-  patience stack (`check_budget_limit` → `sanitize_thinking_history` →
-  `_capture_system_message` → `wrap_model_append_tool_message` →
+  `CustomFilesystemMiddleware`/`StateBackend` imports. Drop the `todos` and
+  `summarization` gates (and the `TodoListMiddleware`/`SummarizationMiddleware`
+  imports). Keep `ModelRetryMiddleware`, `ToolRetryMiddleware`, the `subagents`
+  gate, and the patience stack (`check_budget_limit` → `sanitize_thinking_history`
+  → `_capture_system_message` → `wrap_model_append_tool_message` →
   `tool_wrapper_patience_and_submit`).
 - `run_agent_deep_agent`:
   1. `catalog_dir = materialize_catalog_dir(task)`
@@ -159,7 +165,7 @@ with `psycopg2.extensions.parse_dsn` / `urllib`.
 
 `DeepAgentCustomState` no longer mixes in deepagents' `FilesystemState`/`files`.
 It carries the three patience fields (from `CustomAgentState`) +
-`captured_system_prompt`. Middleware-provided state keys (todos, subagents) merge
+`captured_system_prompt`. The `subagents` middleware's state keys merge
 automatically via `create_agent`.
 
 ### 6. Costs (`catalog_seed.py`)
@@ -183,15 +189,16 @@ Rewrite `_DEEP_AGENT_SYSTEM`:
 - Describe running read-only SQL via `psql -c "SELECT …"` through the same `bash`
   tool (no connection details needed; writes rejected).
 - Keep `ask_user` and `submit_sql` guidance.
-- Remove the `enable_fs_write` block. Keep the `enable_todos` / `enable_subagents`
-  conditional lines.
+- Remove the `enable_fs_write` and `enable_todos` blocks. Keep the
+  `enable_subagents` conditional line.
 
-### 8. Ablation flag removal (`deep_enable_fs_write`)
+### 8. Ablation flag removal
 
-Remove the field from `ConfigReader`/`TaskData`, its threading, the prompt block,
-and the `__fswrite` run-dir slug detection in
-`bash_scripts/utils/utils_evaluate.sh`. Leave `todos`/`subagents`/`summarization`
-intact.
+Remove three flags — `deep_enable_fs_write`, `deep_enable_todos`, and
+`deep_enable_summarization` — from `ConfigReader`/`TaskData`, their threading, the
+prompt blocks, the middleware gates, and their run-dir slug detection
+(`__fswrite`, `__todos`, `__summar`) in `bash_scripts/utils/utils_evaluate.sh`.
+Leave `deep_enable_subagents` (and its `__subagents` slug) intact.
 
 ## Testing
 
@@ -207,14 +214,15 @@ Update `tests/eval_framework/agents/deep_agent/test_agent_code.py` and
   `tables/` raises `FileNotFoundError`.
 - Cleanup: the temp dir is removed after `run_agent_deep_agent` (including on
   exception).
-- `deep_enable_fs_write` removed (config no longer accepts it).
+- `deep_enable_fs_write`, `deep_enable_todos`, `deep_enable_summarization` removed
+  (config no longer accepts them); `deep_enable_subagents` still works.
 
 Run `uv run pytest tests/` and `uv run pyrefly check`.
 
 ## Docs to refresh
 
 - `src/conversation2sql/eval_framework/agents/deep_agent/CLAUDE.md` (the whole FS
-  section, tool count, ablation table — drop `deep_enable_fs_write`).
+  section, tool count, ablation table — keep only `deep_enable_subagents`).
 - `src/conversation2sql/eval_framework/agents/CLAUDE.md` (the variants table row
   for `deep_agent`: FS tools → bash).
 - `src/conversation2sql/eval_framework/agents/deep_agent/README.md`.
@@ -228,8 +236,9 @@ Run `uv run pytest tests/` and `uv run pyrefly check`.
   but not server-side file reads. `psql -c "SELECT pg_read_file('…')"` is a
   superuser-gated function, and the eval DB user is `root` (per CLAUDE.md), which
   may be a superuser — so this is a plausible way to read the unmasked on-disk
-  catalog. Accepted for now (whitelist chosen over containment); if it proves a
-  real leak vector, add the deferred path-containment check and/or revoke
-  `pg_read_file` from the eval role.
+  catalog. **Deferred by decision:** flagged in code with a
+  `# TODO(unmasked-kb-leak):` comment in `return_tool_bash`, to be solved later
+  (e.g. path-containment check, revoking `pg_read_file` from the eval role, or
+  blocking `pg_read_file`/`pg_ls_dir`/`COPY … FROM PROGRAM` in the psql guardrail).
 - **Flat `bash` cost** changes the per-action economics vs. the old per-tool
   costs; the patience budget formula is unchanged. `bash=1.0` is a tunable knob.
