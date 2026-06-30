@@ -19,6 +19,10 @@
 # kill vLLM on exit or error
 VLLM_PID=""
 cleanup() {
+    # Idempotent: cleanup may be reached via a signal handler and again via the
+    # EXIT trap — only kill once.
+    [ -n "${_VLLM_CLEANED:-}" ] && return
+    _VLLM_CLEANED=1
     if [ -n "$VLLM_PID" ] && kill -0 "$VLLM_PID" 2>/dev/null; then
         echo "Killing VLLM server (PID $VLLM_PID, PGID ${VLLM_PGID:-$VLLM_PID})..."
         # Kill the entire process group created by setsid so worker subprocesses
@@ -31,7 +35,16 @@ cleanup() {
         wait "$VLLM_PID" 2>/dev/null || true
     fi
 }
+# Run cleanup on normal exit AND on the signals tmux delivers on Ctrl-C / pane
+# close. The EXIT trap alone is not enough: vLLM is launched under `setsid` in its
+# own session, so the Ctrl-C SIGINT sent to the pipeline's process group never
+# reaches it. And bash, when terminated by an *untrapped* SIGINT whose foreground
+# child (`conv2sql`) was killed by that same SIGINT, exits WITHOUT running the EXIT
+# trap — so without these signal traps cleanup never fires and the server lingers.
+# Trapping the signals to `exit` guarantees the EXIT trap (→ cleanup) is reached.
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
 
 
 start_vllm_server() {
@@ -39,6 +52,12 @@ start_vllm_server() {
     local max_model_len="$2"
     shift 2
     # All remaining arguments are forwarded verbatim to `vllm serve`.
+
+    # Match the server's scheduler width to the client's concurrency: the Python
+    # pipeline never has more than CONCURRENCY requests in flight, so any extra
+    # --max-num-seqs slots are unused, and fewer would queue work the GPU could
+    # run in parallel. Override with VLLM_MAX_NUM_SEQS to decouple them.
+    local max_num_seqs="${VLLM_MAX_NUM_SEQS:-${CONCURRENCY:-12}}"
     
     # ---- pick a free ephemeral port ----
     VLLM_SERVER_PORT=$(uv run python -c "
@@ -58,26 +77,30 @@ s.close()
     log_section "Starting VLLM server: ${model_name} on port ${VLLM_SERVER_PORT}" "${MY_SLURM_JOB_ID:-}"
     [ -n "$vllm_log" ] && echo "[vllm_server] vLLM log → ${vllm_log}"
 
-    # Launch in its own process group so the cleanup trap can kill all workers.
+    # Assemble the full launch command once so the logged form and the executed
+    # form can never drift apart.
     # --enable-prefix-caching  if prompts share a system prompt — reduces KV recalculation
+    local -a vllm_cmd=(
+        uv run vllm serve "$model_name"
+        --port "$VLLM_SERVER_PORT"
+        --max-model-len "$max_model_len"
+        --uvicorn-log-level warning
+        --max-num-seqs "$max_num_seqs"
+        --enable-prefix-caching
+        --gpu-memory-utilization 0.9
+        "$@"
+    )
+
+    # Echo the exact command to stdout so it lands in all.log (via the tee in
+    # submit_and_log.sh) — lets you audit the resolved server parameters without
+    # opening vllm.log. %q makes the line copy-paste-runnable.
+    { printf '[vllm_server] command:'; printf ' %q' "${vllm_cmd[@]}"; printf '\n'; }
+
+    # Launch in its own process group so the cleanup trap can kill all workers.
     if [ -n "$vllm_log" ]; then
-        setsid uv run vllm serve "$model_name" \
-            --port "$VLLM_SERVER_PORT" \
-            --max-model-len "$max_model_len" \
-            --uvicorn-log-level warning \
-            --max-num-seqs 64 \
-            --enable-prefix-caching \
-            --gpu-memory-utilization 0.95 \
-            "$@" >> "$vllm_log" 2>&1 &
+        setsid "${vllm_cmd[@]}" >> "$vllm_log" 2>&1 &
     else
-        setsid uv run vllm serve "$model_name" \
-            --port "$VLLM_SERVER_PORT" \
-            --max-model-len "$max_model_len" \
-            --uvicorn-log-level warning \
-            --max-num-seqs 64 \
-            --gpu-memory-utilization 0.95 \
-            --enable-prefix-caching \
-            "$@" &
+        setsid "${vllm_cmd[@]}" &
     fi
 
     VLLM_PID=$!

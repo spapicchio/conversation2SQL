@@ -15,7 +15,7 @@
 # Single SLURM-submittable evaluation payload.
 #
 # Input axes (set via environment variables, all have defaults):
-#   MODEL                    – model profile: qwen35 | gemma4           (default: qwen35)
+#   MODEL                    – model profile: qwen35 | gemma4-12B        (default: qwen35)
 #   VARIANT                  – eval condition key (run 'just variants')  (required)
 #   BASELINE                 – evaluation mode: no_tool | …             (default: no_tool)
 #   PREDICTOR_MODEL_PROVIDER – LiteLLM provider                         (default: hosted_vllm)
@@ -23,7 +23,8 @@
 #   NUM_ITERATIONS           – repeat dataset N times                   (default: 1)
 #   DEBUG                    – debug logging                            (default: false)
 #   ENABLE_THINKING          – true|false; blank uses the profile default
-#   TP / DP                  – vLLM tensor/data-parallel size           (default: 1)
+#   TP                       – vLLM tensor-parallel size                (default: 1)
+#   DP                       – vLLM data-parallel size                  (default: #GPUs in CUDA_VISIBLE_DEVICES)
 #
 # The model NAME, context length, thinking mode and vLLM server flags are
 # resolved by src/conversation2sql/presets.py (the single source of truth).
@@ -48,8 +49,14 @@ CONCURRENCY="${CONCURRENCY:-16}"
 NUM_ITERATIONS="${NUM_ITERATIONS:-1}"
 DEBUG="${DEBUG:-false}"
 ENABLE_THINKING="${ENABLE_THINKING:-}"   # blank → use the profile's default_thinking
+
+# Count the GPUs handed to us via --gpus (CUDA_VISIBLE_DEVICES is a comma-separated
+# device list, e.g. "0,1"). Used as the default data-parallel size below.
+IFS=',' read -ra _GPU_ARR <<< "${CUDA_VISIBLE_DEVICES}"
+_GPU_COUNT="${#_GPU_ARR[@]}"
+
 TP="${TP:-1}"                            # vLLM tensor-parallel-size
-DP="${DP:-1}"                            # vLLM data-parallel-size
+DP="${DP:-${_GPU_COUNT}}"                # vLLM data-parallel-size (defaults to #GPUs)
 
 
 # ---------------------------------------------------------------------------

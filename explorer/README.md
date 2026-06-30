@@ -48,12 +48,12 @@ Error classes are assigned by `classify_submit_error()` in `loader.py`. The func
 |---|---|
 | `Passed` | `execution_accuracy` is truthy |
 | `No Submission` | No `submit_sql*` tool message found |
+| `Target Error` | Message contains `[TARGET ERROR]` (the gold SQL failed — a dataset problem; checked first) |
 | `Empty Query` | Message contains *"empty query"* |
 | `Syntax Error` | Message matches `syntax error` |
 | `Column/Relation Not Found` | Message matches `does not exist` |
 | `Wrong SQL` | Message is *"Your SQL is not correct."* |
 | `DB Error` | Other `DatabaseError` |
-| `[TARGET ERROR]` | Target error executions |
 | `Other` | None of the above |
 
 To add a new class, add a branch in `classify_submit_error()` before the final `return "Other"` line.
@@ -70,3 +70,25 @@ Navigate to **Run Comparison** in the Streamlit sidebar to compare multiple runs
 | **Charts** | Accuracy by database, error distribution, and tool usage — one chart per run, aligned in columns. |
 | **Task table** | One row per `instance_id`, one column per run showing pass count `c/n` (or — when absent). Filter by agreement, and search by question text. |
 | **Conversation viewer** | Click a row to view conversations side by side; an iteration selector appears per pane for multi-iteration runs. With > 2 runs, two dropdowns let you choose which pair to compare. |
+
+## Experiment tracking (`experiments.csv`)
+
+`experiments.csv` at the repo root is a git-tracked index of every run under
+`results/` (which is itself gitignored). One row per run dir, keyed by the path
+relative to `results/`. Dedicated columns are `run_dir`, `date`, `time`, `status`,
+`baseline`, `model`; everything else about the config is collapsed into a single
+`args` flag-string (e.g. `--schema-type ddl --gt-db --gt-kb --num-iterations 9 …`)
+so ablations diff as a single token. Metrics (`accuracy`, `avg_cost`, token counts,
+`reliability`/`aptitude`/`unreliability`, …) are computed by `explorer/loader.py`,
+so the CSV always agrees with the explorer app.
+
+It is maintained by `explorer/index.py`:
+
+- A `status=running` stub row is appended automatically when a run launches (the
+  pipeline calls `append_stub` right after writing its `config.yaml` snapshot).
+- Metrics and the final `status` (`done` / `partial` / `error`) are filled by
+  `reconcile`, which runs after each eval and on demand via **`just index`**
+  (`uv run python -m explorer.index reconcile`).
+- The **`Notes`** column is yours to edit; `reconcile` never overwrites it and
+  preserves rows it can no longer rediscover (e.g. still-running stubs).
+

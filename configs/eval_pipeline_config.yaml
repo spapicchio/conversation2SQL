@@ -9,18 +9,66 @@
 # src/conversation2sql/presets.py.
 
 reader:
-  dataset_name_jsonl: 'data/bird_interact/bird-interact-lite/bird_interact_data_GT.jsonl'
-  dataset_path: 'data/bird_interact/bird-interact-lite'
+  dataset_variant: 'lite'   # 'lite' (Postgres port 5432) or 'full' (5433); drives dataset_path, dataset_name_jsonl, deep_catalog_root, and the DSN port
   filter_query_category: true
-  db_dsn_template: 'postgresql://root:123123@localhost:5432/{database}' # Lite DB
-  # db_dsn_template: 'postgresql://root:123123@localhost:5433/{database}' # Full DB
-  user_patience_budget: 1
+  user_patience_budget: 12
+  # db_host/db_user/db_password default to localhost/root/123123 — override db_host for SLURM
 
-predictor:
-  max_new_tokens: 20000
+# predictor.max_new_tokens is derived from the model profile's max_model_len
+# (src/conversation2sql/presets.py, via _COMPLETION_RATIO) and arrives as a CLI
+# flag, so it is intentionally not declared here.
 
 user_simulator:
   model_name: 'gpt-5.4-mini-2026-03-17'
   model_provider: 'openai'
   temperature: 1.0
   max_new_tokens: 500
+
+
+
+# Example full:
+# pipeline:
+#   debug: false
+#   output_folder: /workspaces/conversation2SQL/results/2026-06-04/06-45-09/tools_only__Qwen3.5-9B__ddl__lin__iter3
+#   baseline: tools_only
+#   concurrency: 16
+#   num_iterations: 3
+#   resume: false
+# reader:
+#   dataset_variant: lite
+#   filter_query_category: true
+#   user_patience_budget: 1
+#   make_data_ambiguous: false
+#   database_schema_type: ddl
+#   read_only_gt_kb: false
+#   read_only_gt_tables: false
+#   is_kb_linearized: true
+# predictor:
+#   model_name: Qwen/Qwen3.5-9B
+#   model_provider: hosted_vllm
+#   temperature: 0.6
+#   top_p: 0.95
+#   top_k: 20
+#   min_p: 0.0
+#   presence_penalty: 0.0
+#   repetition_penalty: 1.0
+#   max_new_tokens: 20000
+#   reasoning_effort: null
+#   predictor_vllm_api_base: http://127.0.0.1:38775/v1
+#   enable_thinking: true
+#   request_timeout: 600.0
+#   num_retries: 2
+# user_simulator:
+#   model_name: gpt-5.4-mini-2026-03-17
+#   model_provider: openai
+#   temperature: 1.0
+#   max_new_tokens: 500
+#   top_p: null
+#   top_k: null
+#   presence_penalty: null
+#   repetition_penalty: null
+#   reasoning_effort: null
+#   user_simulator_vllm_api_base: http://127.0.0.1:38775/v1
+#   enable_thinking: null
+#   request_timeout: 600.0
+#   num_retries: 2

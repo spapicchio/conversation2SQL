@@ -10,11 +10,15 @@ import pandas as pd
 import streamlit as st
 
 from charts import aptitude_unreliability_box
+from charts import conversation_length_box
 from charts import reliability_explainer
+from loader import LENGTH_METRICS
 from loader import RunData
+from loader import conversation_length_split
 from loader import load_run
 from loader import list_runs
 from render import render_conversation
+from run_selector import select_run_sidebar
 
 
 # Reads RESULTS_ROOT env var (exported by evaluate.sh); falls back to ../results
@@ -28,6 +32,7 @@ _GEN_PARAM_KEYS = (
     "min_p",
     "presence_penalty",
     "repetition_penalty",
+    "max_tokens",
     "max_new_tokens",
     "reasoning_effort",
     "enable_thinking",
@@ -54,25 +59,12 @@ def _question(r: dict) -> str:
 st.set_page_config(page_title="Results Explorer", layout="wide")
 st.title("Results Explorer")
 
-# Sidebar: cascading run selector (date → run)
-with st.sidebar:
-    st.header("Select Run")
-    runs_tree = list_runs(RESULTS_ROOT)
-    if not runs_tree:
-        st.error(f"No results found in `{RESULTS_ROOT.resolve()}`")
-        st.stop()
-    def _fmt_run(key: str) -> str:
-        # "16-23-07/no_tool__Qwen3.5-9B__ddl" → "16:23:07  no_tool__Qwen3.5-9B__ddl"
-        # "16_23_07__no_tool__Qwen3.5-9B__ddl" → kept as-is (old layout)
-        if "/" in key:
-            time_part, slug = key.split("/", 1)
-            return f"{time_part.replace('-', ':')}  {slug}"
-        return key
-
-    dates = list(runs_tree.keys())
-    date = st.selectbox("Date", dates)
-    run_names = runs_tree[date]
-    run_key = st.selectbox("Run", run_names, index=0, format_func=_fmt_run)
+# Sidebar: cascading run selector (date → run), persisted across pages.
+runs_tree = list_runs(RESULTS_ROOT)
+if not runs_tree:
+    st.sidebar.error(f"No results found in `{RESULTS_ROOT.resolve()}`")
+    st.stop()
+date, run_key = select_run_sidebar(runs_tree)
 
 run_path = RESULTS_ROOT / date / run_key
 run = _load_run_cached(str(run_path))
@@ -87,6 +79,11 @@ with st.sidebar:
 
 if run.malformed_count:
     st.warning(f"{run.malformed_count} malformed line(s) skipped in {run.source_file}.")
+if run.duplicate_count:
+    st.warning(
+        f"{run.duplicate_count} duplicate (instance, iteration) record(s) dropped "
+        f"in {run.source_file} — likely a resume/recover double-write."
+    )
 
 tab_results, tab_config = st.tabs(["Results", "Config"])
 
@@ -99,13 +96,52 @@ with tab_config:
 with tab_results:
     # Stats panel: five metric cards
     stats = run.stats
-    pct = stats.n_passed / max(stats.n_total, 1) * 100
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Accuracy", f"{stats.n_passed} / {stats.n_total} ({pct:.1f}%)")
-    c2.metric("Avg Input Tokens", f"{stats.avg_input_tokens:,.0f}")
-    c3.metric("Avg Output Tokens", f"{stats.avg_output_tokens:,.0f}")
+    c1, c2, c3, c4, c5, c6 = st.columns(6)
+    c1.metric(
+        "Accuracy (pass@1)",
+        f"{stats.pass_at_1 * 100:.1f}%  ·  n={stats.n_instances}",
+        help=(
+            f"Mean per-instance pass rate over {stats.n_instances} instances "
+            f"({stats.n_total} samples = instances × iterations)."
+        ),
+    )
+    c2.metric(
+        "Avg Input Tokens",
+        f"{stats.avg_total_input_tokens:,.0f}",
+        help=(
+            "Cumulative input tokens per conversation (the full prompt is "
+            "re-sent each turn, so this is the real billed amount). "
+            f"Per-call mean: {stats.avg_input_tokens:,.0f} over "
+            f"{stats.avg_model_calls:.1f} model calls."
+        ),
+    )
+    c3.metric(
+        "Avg Output Tokens",
+        f"{stats.avg_total_output_tokens:,.0f}",
+        help=(
+            "Cumulative output tokens per conversation. "
+            f"Per-call mean: {stats.avg_output_tokens:,.0f}."
+        ),
+    )
     c4.metric("Avg Cost", f"${stats.avg_cost:.5f}")
-    c5.metric("Avg Budget Remaining", f"{stats.avg_budget_remaining:.1f}")
+    c5.metric(
+        "Avg Budget Remaining",
+        f"{stats.avg_budget_remaining:.1f}",
+        help=(
+            "Mean of the last budget the agent saw per conversation (from the "
+            "[SYSTEM NOTE] trace annotations). The raw end-state field is a "
+            "terminal sentinel (-2/-1) and is not used."
+        ),
+    )
+    c6.metric(
+        "Truncated",
+        f"{stats.truncated_fraction * 100:.1f}%  ·  n={stats.n_truncated}",
+        help=(
+            "Share of conversations with at least one model call cut off by the "
+            "max-model-len cap (finish_reason='length'). No error is raised on "
+            "truncation, so this is the only signal the generation was incomplete."
+        ),
+    )
 
     # Reliability metrics (multi-iteration runs only)
     if run.n_iterations >= 2 and stats.reliability is not None:
@@ -127,11 +163,14 @@ with tab_results:
             passk_df = pd.DataFrame(
                 [{"k": k, "pass@k": v} for k, v in sorted(rel.passk.items())]
             )
+            _pk_base = alt.Chart(passk_df).mark_line(point=True).encode(
+                x=alt.X("k:Q", scale=alt.Scale(nice=False)),
+                y=alt.Y("pass@k:Q", scale=alt.Scale(domain=[0, 1])),
+            )
             st.altair_chart(
-                alt.Chart(passk_df).mark_line(point=True).encode(
-                    x=alt.X("k:Q", scale=alt.Scale(nice=False)),
-                    y=alt.Y("pass@k:Q", scale=alt.Scale(domain=[0, 1])),
-                ).properties(height=250, title="pass@k"),
+                (_pk_base + _pk_base.mark_text(align="left", dx=5).encode(
+                    text=alt.Text("pass@k:Q", format=".0%")
+                )).properties(height=250, title="pass@k"),
                 use_container_width=True,
             )
     elif run.n_iterations == 1:
@@ -146,11 +185,14 @@ with tab_results:
         db_df = pd.DataFrame(
             [{"Database": k, "Pass Rate": v} for k, v in stats.accuracy_by_database.items()]
         ).sort_values("Database")
+        _db_base = alt.Chart(db_df).mark_bar().encode(
+            x=alt.X("Database:N", sort=None),
+            y=alt.Y("Pass Rate:Q", scale=alt.Scale(domain=[0, 1])),
+        )
         st.altair_chart(
-            alt.Chart(db_df).mark_bar().encode(
-                x=alt.X("Database:N", sort=None),
-                y=alt.Y("Pass Rate:Q", scale=alt.Scale(domain=[0, 1])),
-            ).properties(height=300),
+            (_db_base + _db_base.mark_text(align="center", baseline="bottom", dy=-2).encode(
+                text=alt.Text("Pass Rate:Q", format=".0%")
+            )).properties(height=300),
             use_container_width=True,
         )
 
@@ -159,11 +201,14 @@ with tab_results:
         err_df = pd.DataFrame(
             [{"Error Class": k, "Count": v} for k, v in stats.error_distribution.items()]
         ).sort_values("Error Class")
+        _err_base = alt.Chart(err_df).mark_bar().encode(
+            x=alt.X("Error Class:N", sort=None),
+            y=alt.Y("Count:Q", scale=alt.Scale(domain=[0, stats.n_total])),
+        )
         st.altair_chart(
-            alt.Chart(err_df).mark_bar().encode(
-                x=alt.X("Error Class:N", sort=None),
-                y=alt.Y("Count:Q", scale=alt.Scale(domain=[0, stats.n_total])),
-            ).properties(height=300),
+            (_err_base + _err_base.mark_text(align="center", baseline="bottom", dy=-2).encode(
+                text=alt.Text("Count:Q")
+            )).properties(height=300),
             use_container_width=True,
         )
 
@@ -172,8 +217,32 @@ with tab_results:
             st.subheader("Tool Usage")
             tool_df = pd.DataFrame(
                 [{"Tool": k, "Calls": v} for k, v in stats.tool_usage.most_common()]
-            ).set_index("Tool")
-            st.bar_chart(tool_df)
+            )
+            _tool_base = alt.Chart(tool_df).mark_bar().encode(
+                x=alt.X("Calls:Q"),
+                y=alt.Y("Tool:N", sort="-x", title=None, axis=alt.Axis(labelLimit=0)),
+            )
+            st.altair_chart(
+                _tool_base + _tool_base.mark_text(align="left", dx=3).encode(
+                    text=alt.Text("Calls:Q")
+                ),
+                use_container_width=True,
+            )
+
+    # Conversation-length distribution: one box over this run's conversations.
+    # The radio switches which length metric the box summarises.
+    st.subheader("Conversation length")
+    length_metric = st.radio(
+        "Metric", LENGTH_METRICS, horizontal=True, key="length_metric_single"
+    )
+    length_series = conversation_length_split(run.records, length_metric)
+    if any(length_series.values()):
+        st.plotly_chart(
+            conversation_length_box(length_series, length_metric, marker_kind="outcome"),
+            use_container_width=True,
+        )
+    else:
+        st.caption(f"No \"{length_metric}\" data for this run.")
 
     st.divider()
 
@@ -288,8 +357,9 @@ with tab_results:
                     "Question": (q[:80] + "…") if len(q) > 80 else q,
                     "error_class": r.get("_error_class", ""),
                     "Accuracy": "✓" if r.get("execution_accuracy") else "✗",
-                    "input_tokens": r.get("mean_prompt_tokens", 0),
-                    "output_tokens": r.get("mean_completion_tokens", 0),
+                    "model_calls": r.get("num_model_calls", 0),
+                    "input_tokens": r.get("total_prompt_tokens", 0),
+                    "output_tokens": r.get("total_completion_tokens", 0),
                     "cost": r.get("total_cost", 0.0),
                 }
             )

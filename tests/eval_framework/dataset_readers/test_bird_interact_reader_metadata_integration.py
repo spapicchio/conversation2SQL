@@ -11,7 +11,9 @@ def _build_dataset(tmp_path, sol_sql):
     db_dir = dataset_path / db_name
     db_dir.mkdir(parents=True)
 
-    (db_dir / f"{db_name}_schema.txt").write_text(
+    # Reader defaults database_schema_type="ddl", so the schema file must be
+    # named {db}_ddl.txt; the content below is DDL (CREATE TABLE …).
+    (db_dir / f"{db_name}_ddl.txt").write_text(
         "CREATE TABLE users (id int, email text);\n"
         "CREATE TABLE orders (id int, user_id int, amount int);\n"
     )

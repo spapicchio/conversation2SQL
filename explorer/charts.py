@@ -22,11 +22,21 @@ marks — whereas Altair's ``mark_boxplot`` recomputes quartiles from raw data w
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Iterable
+
 import plotly.graph_objects as go
-import plotly.express as px
 import streamlit as st
 
-from metrics import ReliabilityStats
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from colors import stable_color
+except ModuleNotFoundError:
+    from explorer.colors import stable_color
+
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from metrics import ReliabilityStats
+except ModuleNotFoundError:
+    from explorer.metrics import ReliabilityStats
 
 
 RELIABILITY_EXPLANATION = """
@@ -48,14 +58,64 @@ the **top whisker = A⁹⁰ (Aptitude)**, the **bottom whisker = A¹⁰**, so th
 is the Unreliability**. The box spans A²⁵–A⁷⁵ and the tick is the median A⁵⁰.
 
 *Caveat:* scores are binary and *N* is small, so per-task percentiles are coarse — read
-these as indicative, not precise.
+these as indicative, not precise. In partial/recovered runs, tasks present in fewer
+iterations contribute zero-spread percentiles, biasing Reliability upward.
 """
+
+
+def disambiguate_run_labels(labels: Iterable[str]) -> dict[str, str]:
+    """Map each full run label (``date / time/slug``) to a short display label.
+
+    Uses the bare slug when it is unique among the given labels; on a collision
+    (same variant slug run on several dates/checkpoints) every colliding label
+    stays fully qualified, so no two runs silently merge into one chart key.
+    """
+    labels = list(labels)
+    slugs = {label: label.rsplit("/", 1)[-1].strip() for label in labels}
+    counts = Counter(slugs.values())
+    return {
+        label: (slug if counts[slug] == 1 else label)
+        for label, slug in slugs.items()
+    }
 
 
 def reliability_explainer() -> None:
     """Render a collapsed explainer for the Aptitude / Unreliability metrics."""
     with st.expander("ℹ️ What do Aptitude & Unreliability mean?"):
         st.markdown(RELIABILITY_EXPLANATION)
+
+
+def conversation_length_box(
+    series: dict[str, list[float]], metric_label: str, marker_kind: str = "run"
+) -> go.Figure:
+    """Box plot of conversation lengths, one box per run.
+
+    Unlike :func:`aptitude_unreliability_box` (which is fed precomputed
+    percentiles because its scores are binary), this is handed the *raw*
+    per-conversation values so Plotly computes standard Tukey quartiles and
+    whiskers — the right summary for continuous counts. Empty series (e.g.
+    budget-spent on a no-tool baseline) are skipped so no run draws a bare axis.
+
+    ``marker_kind`` is forwarded to :func:`~colors.stable_color`; pass
+    ``"outcome"`` when the series keys are "Passed"/"Failed" (or "{label} ✓"/
+    "✗") so the boxes get semantic green/red colours.
+    """
+    fig = go.Figure()
+    for label, values in series.items():
+        if not values:
+            continue
+        fig.add_trace(
+            go.Box(
+                name=label,
+                y=list(values),
+                marker_color=stable_color(label, kind=marker_kind),
+                boxmean=True,
+                width=0.5,
+            )
+        )
+    fig.update_layout(height=360, showlegend=False, margin=dict(t=10, b=10, l=10, r=10))
+    fig.update_yaxes(title_text=metric_label, rangemode="tozero")
+    return fig
 
 
 def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
@@ -65,11 +125,9 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
     tick is the median A⁵⁰. Fed to ``go.Box`` as precomputed quartiles/fences so
     it matches the metric cards exactly (no recomputation from raw data).
     """
-    palette = px.colors.qualitative.Plotly
     fig = go.Figure()
-    for i, (label, rel) in enumerate(
-        (lbl, r) for lbl, r in rels.items() if r.percentiles
-    ):
+    for label, rel in ((lbl, r) for lbl, r in rels.items() if r.percentiles):
+        color = stable_color(label, kind="run")
         p = rel.percentiles
         fig.add_trace(
             go.Box(
@@ -80,7 +138,7 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
                 q3=[p[75]],
                 lowerfence=[p[10]],
                 upperfence=[p[90]],
-                marker_color=palette[i % len(palette)],
+                marker_color=color,
                 width=0.5,
                 hovertext=[
                     f"<b>{label}</b><br>"
@@ -92,11 +150,23 @@ def aptitude_unreliability_box(rels: dict[str, ReliabilityStats]) -> go.Figure:
                 hoverinfo="text",
             )
         )
+        # Annotate the headline values just right of each box so runs are easy to
+        # compare at a glance: A⁹⁰ (Aptitude), A⁵⁰ (median), A¹⁰ (floor).
+        for tag, value in (("A⁹⁰", p[90]), ("A⁵⁰", p[50]), ("A¹⁰", p[10])):
+            fig.add_annotation(
+                x=label,
+                y=value,
+                text=f"{tag} {value:.0%}",
+                showarrow=False,
+                xanchor="left",
+                xshift=22,
+                font=dict(size=11, color=color),
+            )
 
     fig.update_layout(
         height=360,
         showlegend=False,
-        margin=dict(t=10, b=10, l=10, r=10),
+        margin=dict(t=10, b=10, l=10, r=70),  # room for the value labels right of each box
     )
     fig.update_yaxes(
         title_text="Per-task score", range=[0, 1], tickformat=".0%"

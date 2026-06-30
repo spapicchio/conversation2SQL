@@ -14,16 +14,24 @@ from unittest.mock import patch
 import psycopg2
 
 from conversation2sql.eval_framework.agents.bird_baseline.tools import bird_interact_env_tools as env_tools
+from conversation2sql.eval_framework.agents.bird_baseline.tools import utils_db_execute
 from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     KNOWLEDGE_VISIBLE_FIELDS,
     ExecuteSQLResponse,
     execute_sql_impl,
+    psql_console_impl,
     get_all_column_meanings_impl,
     get_all_external_knowledge_names_impl,
     get_all_knowledge_definitions_impl,
     get_column_meaning_impl,
     get_knowledge_definition_impl,
     get_schema_impl,
+    get_table_names_impl,
+    get_table_schema_impl,
+)
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
+    PSQL_GUARDRAIL_REFUSAL,
+    apply_column_comments_impl,
 )
 
 
@@ -162,21 +170,110 @@ class TestExecuteSqlImpl:
         assert response.error is not None
         assert "syntax bad" in response.error
 
-    def test_long_result_is_truncated_to_max_length(self):
-        """Result truncation is enforced so the agent's context cannot be
-        flooded by huge result sets. Exact equality (not <=) catches a
-        regression where truncation accidentally becomes a no-op."""
-        # Pick a length strictly larger than the cap so we can detect a
-        # missing truncation step (it would leave the surplus 100 chars).
-        long_text = "x" * (env_tools.MAX_RESULT_LENGTH + 100)
+    def test_result_is_returned_verbatim_from_format_result(self):
+        """Row-aware truncation now lives entirely inside ``_format_result``;
+        ``execute_sql_impl`` must pass that string through untouched (no extra
+        character-level cut layered on top)."""
+        formatted = "| id |\n| --- |\n| 1 |"
         with (
             patch.object(env_tools, "_execute_query", return_value=("ignored", None)),
-            patch.object(env_tools, "_format_result", return_value=long_text),
+            patch.object(env_tools, "_format_result", return_value=formatted),
         ):
             response = execute_sql_impl("SELECT 1;", db_dsn="dsn")
         assert response.success is True
-        assert len(response.result) == env_tools.MAX_RESULT_LENGTH
+        assert response.result == formatted
 
+
+# ---------------------------------------------------------------------------
+# _format_result / _format_cell
+# ---------------------------------------------------------------------------
+class TestFormatResult:
+    """``_format_result`` renders RealDictRow rows as the GitHub-flavored
+    markdown table the agent reads. These tests pin the structural and clarity
+    properties we rely on: a header + ``| --- |`` separator + pipe-wrapped data
+    rows, and compact full-precision JSON for container cells."""
+
+    def test_markdown_table_header_separator_and_rows(self):
+        """Output is a GFM table: header row, ``| --- |`` separator with one
+        ``---`` per column, then pipe-wrapped data rows."""
+        result = [{"sitekey": "SP9227", "sitelabel": "Solar Plant West"}]
+        desc = (("sitekey",), ("sitelabel",))
+        out = utils_db_execute._format_result(result, desc)
+        lines = out.split("\n")
+        assert lines[0] == "| sitekey | sitelabel |"
+        assert lines[1] == "| --- | --- |"
+        assert lines[2] == "| SP9227 | Solar Plant West |"
+
+    def test_container_cell_is_compact_json_not_python_repr(self):
+        """JSON/array columns come back as dict/list; they must render as
+        compact double-quoted JSON (deterministic key order, full precision),
+        never Python ``repr`` with single quotes or rounded floats."""
+        result = [{"stations": [{"station": "Observatory", "aoi": 0.0146324}]}]
+        desc = (("stations",),)
+        out = utils_db_execute._format_result(result, desc)
+        # Line 0 = header, line 1 = separator, line 2 = first data row.
+        cell = out.split("\n")[2].strip("| ")
+        # Compact separators, sorted keys, no precision loss, valid JSON.
+        assert cell == '[{"aoi":0.0146324,"station":"Observatory"}]'
+        assert "'" not in cell
+        assert json.loads(cell) == [{"station": "Observatory", "aoi": 0.0146324}]
+
+    def test_cell_under_cap_is_not_truncated(self):
+        """A cell comfortably under ``MAX_CELL_CHARS`` renders in full — the cap
+        is a backstop for pathological aggregates, not a clip on normal cells, so
+        full precision/values are preserved for everyday inspection."""
+        result = [{"blob": {"k": "y" * 500}}]
+        desc = (("blob",),)
+        out = utils_db_execute._format_result(result, desc)
+        cell = out.split("\n")[2].removeprefix("| ").removesuffix(" |")
+        assert cell == '{"k":"' + "y" * 500 + '"}'
+
+    def test_oversized_cell_is_truncated_to_cap(self):
+        """A single huge cell (e.g. ``to_jsonb(ARRAY_AGG(...))`` folding a whole
+        table into one JSON blob) is clipped to ``MAX_CELL_CHARS`` so a 2-row
+        result can't flood the agent's context. The clipped cell never exceeds
+        the cap (marker included) and reports the original length."""
+        cap = utils_db_execute.MAX_CELL_CHARS
+        result = [{"stations": "z" * (cap * 3)}]
+        desc = (("stations",),)
+        out = utils_db_execute._format_result(result, desc)
+        cell = out.split("\n")[2].removeprefix("| ").removesuffix(" |")
+        assert len(cell) <= cap
+        assert "truncated" in cell
+        assert str(cap * 3) in cell  # original length surfaced to the agent
+
+    def test_result_over_max_rows_is_row_truncated_with_note(self):
+        """Beyond ``MAX_RESULT_ROWS`` the table keeps exactly that many data
+        rows and appends a note stating the true total, so the agent sees whole
+        rows (not a mid-row character cut) and knows more rows existed."""
+        result = [{"id": i} for i in range(5)]
+        desc = (("id",),)
+        out = utils_db_execute._format_result(result, desc)
+        lines = out.split("\n")
+        # header + separator + MAX_RESULT_ROWS data rows, then the note.
+        assert lines[:2] == ["| id |", "| --- |"]
+        data_rows = [ln for ln in lines if ln.startswith("| ") and "---" not in ln and "id" not in ln]
+        assert len(data_rows) == utils_db_execute.MAX_RESULT_ROWS
+        assert f"showing first {utils_db_execute.MAX_RESULT_ROWS} of 5 rows" in out
+
+    def test_result_at_max_rows_has_no_note(self):
+        """A result at or below the row cap renders verbatim with no note."""
+        result = [{"id": i} for i in range(utils_db_execute.MAX_RESULT_ROWS)]
+        desc = (("id",),)
+        out = utils_db_execute._format_result(result, desc)
+        assert "showing first" not in out
+
+    def test_fetch_limit_total_is_reported_with_plus(self):
+        """When the row count hits the fetch cap the true total is unknown, so
+        the note reports it as ``<limit>+`` rather than an exact (capped) count."""
+        result = [{"id": i} for i in range(utils_db_execute.RESULT_FETCH_LIMIT)]
+        desc = (("id",),)
+        out = utils_db_execute._format_result(result, desc)
+        assert f"of {utils_db_execute.RESULT_FETCH_LIMIT}+ rows" in out
+
+    def test_none_and_empty_results_have_dedicated_messages(self):
+        assert utils_db_execute._format_result(None, ()) == "Query executed successfully."
+        assert utils_db_execute._format_result([], ()) == "Query executed, empty result set."
 
 
 # ---------------------------------------------------------------------------
@@ -368,17 +465,26 @@ def test_get_schema_wrapper_delegates_to_impl(task_data):
     assert json.loads(raw) == {"schema": task_data.ddl_database_schema}
 
 
-def test_execute_sql_wrapper_returns_serialized_response(task_data):
-    """Wiring check: the wrapper must serialise the ``ExecuteSQLResponse``
-    to JSON so it can be embedded in a tool message back to the model."""
-    with patch.object(env_tools, "_execute_query", return_value=([], [])):
+def test_execute_sql_wrapper_returns_table_on_success(task_data):
+    """On success the wrapper returns the bare formatted result (the markdown
+    table), not the serialised ``ExecuteSQLResponse`` envelope."""
+    rows = [{"id": 1}]
+    desc = [("id",)]
+    with patch.object(env_tools, "_execute_query", return_value=(rows, desc)):
         raw = _invoke_tool(
-            env_tools.execute_sql, sql="SELECT 1;", runtime=_Runtime(task_data)
+            env_tools.execute_sql, sql="SELECT id FROM t;", runtime=_Runtime(task_data)
         )
 
-    decoded = json.loads(raw)
-    assert decoded["success"] is True
-    assert decoded["error"] is None
+    assert raw == "| id |\n| --- |\n| 1 |"
+
+
+def test_execute_sql_wrapper_returns_error_message_on_failure(task_data):
+    """On failure the wrapper returns only the error string, no JSON envelope."""
+    raw = _invoke_tool(
+        env_tools.execute_sql, sql="DELETE FROM t;", runtime=_Runtime(task_data)
+    )
+
+    assert raw == "Only SELECT queries allowed in execute_sql"
 
 
 def test_get_column_meaning_wrapper_uses_selected_database(task_data):
@@ -410,9 +516,10 @@ def test_get_knowledge_definition_wrapper_returns_marker_for_missing(task_data):
 # Linearized branch — is_kb_linearized=True
 # ---------------------------------------------------------------------------
 
-def test_get_knowledge_definition_linearized_returns_single_line(task_data_linearized):
-    """With is_kb_linearized=True, the tool returns one formatted line for the entry,
-    not a JSON-dumped ExternalKnowledgeEntry."""
+def test_get_knowledge_definition_linearized_returns_prerequisite_section(task_data_linearized):
+    """With is_kb_linearized=True, the tool returns a linearized section (definitions
+    block) for the entry, not a JSON-dumped ExternalKnowledgeEntry. The conftest entry
+    has no prerequisites, so only its own definition appears."""
     raw = _invoke_tool(
         env_tools.get_knowledge_definition,
         knowledge_name="active_user",
@@ -421,8 +528,39 @@ def test_get_knowledge_definition_linearized_returns_single_line(task_data_linea
     decoded = json.loads(raw)
     assert "knowledge" in decoded
     assert isinstance(decoded["knowledge"], str)
-    assert "[active_user]" in decoded["knowledge"]
+    assert "active_user" in decoded["knowledge"]
+    assert "**" in decoded["knowledge"]  # bold markdown formatting present
+    # active_user has no prerequisites, so the unrelated entry must not appear.
     assert "revenue" not in decoded["knowledge"].lower()
+
+
+def test_get_knowledge_definition_linearized_includes_transitive_prerequisites(task_data):
+    """With is_kb_linearized=True, looking up an entry also surfaces the knowledge it
+    transitively depends on, with the dependency edges between them."""
+    from conversation2sql.eval_framework.state import ExternalKnowledgeEntry
+
+    chained_kb = {
+        "base (BASE)": ExternalKnowledgeEntry(
+            id=10, knowledge="base (BASE)", description="base value",
+            definition="x", type="domain_knowledge", children_knowledge=[-1],
+        ),
+        "derived (DRV)": ExternalKnowledgeEntry(
+            id=11, knowledge="derived (DRV)", description="uses base",
+            definition="BASE * 2", type="domain_knowledge", children_knowledge=[10],
+        ),
+    }
+    ctx = task_data.model_copy(
+        update={"is_kb_linearized": True, "masked_agent_kb": chained_kb}
+    )
+    raw = _invoke_tool(
+        env_tools.get_knowledge_definition,
+        knowledge_name="derived (DRV)",
+        runtime=_Runtime(ctx),
+    )
+    knowledge = json.loads(raw)["knowledge"]
+    assert '"derived (DRV)" needs "base (BASE)"' in knowledge
+    assert "base (BASE)" in knowledge
+    assert "derived (DRV)" in knowledge
 
 
 def test_get_knowledge_definition_linearized_missing_returns_sentinel(task_data_linearized):
@@ -445,7 +583,7 @@ def test_get_all_knowledge_definitions_linearized_returns_flat_string(task_data_
     decoded = json.loads(raw)
     assert "knowledge" in decoded
     assert isinstance(decoded["knowledge"], str)
-    assert "# Definitions" in decoded["knowledge"]
+    assert "**" in decoded["knowledge"]  # bold markdown formatting present
     assert "active_user" in decoded["knowledge"]
 
 
@@ -454,4 +592,558 @@ def test_get_all_external_knowledge_names_same_regardless_of_linearized_flag(tas
     names_false = json.loads(_invoke_tool(env_tools.get_all_external_knowledge_names, runtime=_Runtime(task_data)))
     names_true  = json.loads(_invoke_tool(env_tools.get_all_external_knowledge_names, runtime=_Runtime(task_data_linearized)))
     assert sorted(names_false["names"]) == sorted(names_true["names"])
+
+
+# ---------------------------------------------------------------------------
+# Granular table-schema tools (get_table_names / get_table_schema)
+# ---------------------------------------------------------------------------
+
+# A miniature but faithful DDL blob: two CREATE TABLE blocks each with a
+# "First 3 rows" sample, followed by a trailing ALTER TABLE foreign-key block —
+# exactly the shape of the real {db}_ddl.txt files. "orders" is the FK *child*
+# and "customers" is the referenced *parent* of the single FK.
+SAMPLE_DDL = '''-- PostgreSQL schema dump for schema: public
+
+CREATE TABLE "orders" (
+    "order_id" text NOT NULL PRIMARY KEY,
+    "customer_id" text
+);
+First 3 rows:
+order_id | customer_id
+----------------------
+O1 | C1
+O2 | C2
+...
+
+CREATE TABLE "customers" (
+    "customer_id" text NOT NULL PRIMARY KEY,
+    "name" text
+);
+First 3 rows:
+customer_id | name
+------------------
+C1 | Alice
+...
+
+ALTER TABLE "orders" ADD CONSTRAINT "fk_orders_customer" FOREIGN KEY ("customer_id") REFERENCES "customers" ("customer_id") ON DELETE NO ACTION;
+'''
+
+
+def test_parse_ddl_splits_tables_and_captures_alters():
+    """The parser must split the blob on CREATE TABLE boundaries (preserving
+    each table's sample-rows block) and collect the trailing ALTER statements
+    separately so they can be re-attached per table."""
+    tables, alters = env_tools._parse_ddl(SAMPLE_DDL)
+
+    assert list(tables.keys()) == ["orders", "customers"]
+    # each block keeps its own CREATE TABLE + sample rows, and stops before
+    # the next table / the ALTER block
+    assert 'CREATE TABLE "orders"' in tables["orders"]
+    assert "First 3 rows" in tables["orders"]
+    assert "O1 | C1" in tables["orders"]
+    assert 'CREATE TABLE "customers"' not in tables["orders"]
+    assert "ALTER TABLE" not in tables["orders"]
+    # the FK lives in the alters list, not inside any table block
+    assert len(alters) == 1
+    assert alters[0].startswith("ALTER TABLE")
+
+
+def test_get_table_names_impl_lists_all_in_order():
+    """``get_table_names_impl`` mirrors ``get_all_external_knowledge_names`` —
+    a bare list of names, in DDL order, under a ``"names"`` key."""
+    assert get_table_names_impl(SAMPLE_DDL) == {"names": ["orders", "customers"]}
+
+
+def test_get_table_schema_impl_includes_create_block_and_sample_rows():
+    """A single-table fetch returns the CREATE TABLE block *and* its sample
+    rows — the user wants the rows available without spending execute_sql."""
+    result = get_table_schema_impl("orders", SAMPLE_DDL)
+    schema = result["schema"]
+    assert 'CREATE TABLE "orders"' in schema
+    assert "First 3 rows" in schema
+    assert "O1 | C1" in schema
+    # an unrelated table's definition must not leak in
+    assert 'CREATE TABLE "customers"' not in schema
+
+
+def test_get_table_schema_impl_includes_fk_when_table_is_child():
+    """When the looked-up table is the FK child (the ALTER TABLE target), the
+    FK statement must be attached so the agent sees the parent it can join to."""
+    schema = get_table_schema_impl("orders", SAMPLE_DDL)["schema"]
+    assert 'ALTER TABLE "orders" ADD CONSTRAINT' in schema
+    assert 'REFERENCES "customers"' in schema
+
+
+def test_get_table_schema_impl_includes_fk_when_table_is_parent():
+    """When the looked-up table is the referenced parent, the same FK must be
+    attached so joinability is visible from *both* sides of the relationship."""
+    schema = get_table_schema_impl("customers", SAMPLE_DDL)["schema"]
+    assert 'CREATE TABLE "customers"' in schema
+    assert 'ALTER TABLE "orders" ADD CONSTRAINT' in schema
+
+
+def test_get_table_schema_impl_unknown_table_returns_marker():
+    """Unknown names return the ``"Table not found."`` sentinel, mirroring the
+    KB tool's ``"Knowledge not found."`` contract."""
+    assert get_table_schema_impl("does_not_exist", SAMPLE_DDL) == {
+        "schema": "Table not found."
+    }
+
+
+def test_get_table_names_wrapper_delegates_to_impl(task_data):
+    """Wiring check: the wrapper reads ``ddl_database_schema`` from context."""
+    ctx = task_data.model_copy(update={"ddl_database_schema": SAMPLE_DDL})
+    raw = _invoke_tool(env_tools.get_table_names, runtime=_Runtime(ctx))
+    assert json.loads(raw) == {"names": ["orders", "customers"]}
+
+
+def test_get_table_schema_wrapper_delegates_to_impl(task_data):
+    """Wiring check: the wrapper passes the requested table name and context
+    DDL through to the impl and JSON-encodes the result."""
+    ctx = task_data.model_copy(update={"ddl_database_schema": SAMPLE_DDL})
+    raw = _invoke_tool(
+        env_tools.get_table_schema, table_name="orders", runtime=_Runtime(ctx)
+    )
+    assert json.loads(raw) == get_table_schema_impl("orders", SAMPLE_DDL)
+
+
+# ---------------------------------------------------------------------------
+# psql_console_impl
+# ---------------------------------------------------------------------------
+import subprocess
+from types import SimpleNamespace
+
+
+class TestPsqlGuardrail:
+    """Host-reaching backslash meta-commands must be refused before psql spawns."""
+
+    def test_shell_escape_is_refused_without_spawning(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("\\! echo pwned", db_dsn="dsn")
+        assert out == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_copy_to_file_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("\\copy t TO '/tmp/x.csv'", db_dsn="dsn")
+        assert out == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_output_redirect_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            assert psql_console_impl("\\o /tmp/x", db_dsn="dsn") == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_include_file_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            assert psql_console_impl("\\i /etc/passwd", db_dsn="dsn") == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_g_with_pipe_argument_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            assert psql_console_impl("SELECT 1 \\g | sh", db_dsn="dsn") == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_bare_g_is_allowed(self):
+        # Bare \g just re-runs the buffer — harmless, must reach psql.
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout="ok", stderr=""),
+        ):
+            assert psql_console_impl("SELECT 1 \\g", db_dsn="dsn") == "ok"
+
+    def test_dt_inspection_command_is_allowed(self):
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout="list", stderr=""),
+        ):
+            assert psql_console_impl("\\dt", db_dsn="dsn") == "list"
+
+
+class TestPsqlConsoleImpl:
+    def test_argv_and_readonly_env(self):
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout="rows", stderr=""),
+        ) as run_mock:
+            out = psql_console_impl("SELECT 1;", db_dsn="postgresql://x/y")
+        assert out == "rows"
+        args, kwargs = run_mock.call_args
+        assert args[0] == ["psql", "postgresql://x/y", "-X", "-c", "SELECT 1;"]
+        assert "default_transaction_read_only=on" in kwargs["env"]["PGOPTIONS"]
+        assert "statement_timeout=60s" in kwargs["env"]["PGOPTIONS"]
+        assert kwargs["timeout"] == env_tools.PSQL_TIMEOUT_S
+
+    def test_nonzero_exit_returns_stderr(self):
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=1, stdout="", stderr="ERROR: boom"),
+        ):
+            assert psql_console_impl("SELECT bad;", db_dsn="dsn") == "ERROR: boom"
+
+    def test_timeout_is_translated(self):
+        with patch.object(
+            env_tools.subprocess, "run",
+            side_effect=subprocess.TimeoutExpired(cmd="psql", timeout=60),
+        ):
+            out = psql_console_impl("SELECT pg_sleep(99);", db_dsn="dsn")
+        assert "timed out" in out.lower()
+
+    def test_select_output_over_max_rows_is_row_truncated(self):
+        """Aligned SQL output is truncated by *rows*: the header, separator and
+        first ``MAX_RESULT_ROWS`` data rows are kept (so column names AND real
+        data survive), the rest is dropped, and the ``(N rows)`` footer count is
+        echoed in the note."""
+        aligned = (
+            " id | name \n"
+            "----+------\n"
+            " 1  | a    \n"
+            " 2  | b    \n"
+            " 3  | c    \n"
+            " 4  | d    \n"
+            " 5  | e    \n"
+            "(5 rows)\n"
+        )
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=aligned, stderr=""),
+        ):
+            out = psql_console_impl("SELECT 1;", db_dsn="dsn")
+        lines = out.split("\n")
+        assert lines[0] == " id | name "
+        assert lines[1] == "----+------"
+        kept_data = [ln for ln in lines if ln.startswith(" ") and "|" in ln and "name" not in ln]
+        assert len(kept_data) == env_tools.MAX_RESULT_ROWS
+        assert " 4  | d    " not in out and " 5  | e    " not in out
+        assert f"showing first {env_tools.MAX_RESULT_ROWS} of 5 rows" in out
+
+    def test_select_output_at_or_under_max_rows_is_untouched(self):
+        """A result with no more than ``MAX_RESULT_ROWS`` rows is returned
+        verbatim (footer and all) — no note."""
+        aligned = (
+            " id \n"
+            "----\n"
+            " 1  \n"
+            " 2  \n"
+            "(2 rows)\n"
+        )
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=aligned, stderr=""),
+        ):
+            out = psql_console_impl("SELECT 1;", db_dsn="dsn")
+        assert out == aligned
+        assert "showing first" not in out
+
+    def test_meta_command_output_is_not_truncated(self):
+        # \dt (and other backslash meta-commands) list table/schema *names* —
+        # truncating would drop names off the end of the listing, so the full
+        # output must come through untouched however many rows it lists.
+        big = "\n".join(f" t{i} " for i in range(50)) + "\n(50 rows)\n"
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=big, stderr=""),
+        ):
+            out = psql_console_impl("\\dt", db_dsn="dsn")
+        assert out == big
+        assert "showing first" not in out
+
+    def test_select_output_over_char_cap_is_truncated(self):
+        """SQL output is also bounded by a *total* char cap, mirroring the
+        per-cell cap on ``execute_sql``: a few rows each carrying a giant JSON
+        aggregate (so the ``(N rows)`` footer never triggers row truncation)
+        can't flood the agent. The capped output never exceeds the cap."""
+        cap = env_tools.MAX_PSQL_OUTPUT_CHARS
+        aligned = (
+            " stations \n"
+            "----------\n"
+            " " + "z" * (cap * 3) + " \n"
+            " " + "z" * (cap * 3) + " \n"
+            "(2 rows)\n"
+        )
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=aligned, stderr=""),
+        ):
+            out = psql_console_impl("SELECT 1;", db_dsn="dsn")
+        assert len(out) <= cap
+        assert "truncated" in out
+
+    def test_meta_command_output_over_char_cap_is_not_truncated(self):
+        """The total char cap, like row truncation, applies only to SQL output:
+        a huge schema listing (meta-command) must come through untouched so no
+        table/column names are dropped off the end."""
+        big = "\n".join(f" some_long_table_name_{i} " for i in range(2000)) + "\n"
+        assert len(big) > env_tools.MAX_PSQL_OUTPUT_CHARS
+        with patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=big, stderr=""),
+        ):
+            out = psql_console_impl("\\dt", db_dsn="dsn")
+        assert out == big
+
+
+# ---------------------------------------------------------------------------
+# strict inspection mode (enable_psql_strict_inspection ablation)
+# ---------------------------------------------------------------------------
+_CANNED_PSQL_HELP = (
+    "General\n"
+    "  \\q                     quit psql\n"
+    "  \\watch [SEC]           execute query every SEC seconds\n"
+    "\n"
+    "Informational\n"
+    "  (options: S = show system objects, + = additional detail)\n"
+    "  \\d[S+]                 list tables, views, and sequences\n"
+    "  \\dt[S+] [PATTERN]      list tables\n"
+    "  \\l[+]   [PATTERN]      list databases\n"
+    "  \\sf[+]  FUNCNAME       show a function's definition\n"
+    "\n"
+    "Formatting\n"
+    "  \\x [on|off|auto]       toggle expanded output (currently off)\n"
+    "\n"
+    "Connection\n"
+    "  \\c[onnect] ...         connect to new database\n"
+)
+
+
+class TestExtractInformationalHelp:
+    """_extract_informational_help slices only the 'Informational' section out
+    of psql's full \\? output, so the agent isn't shown commands that are
+    blocked under strict mode."""
+
+    def test_keeps_only_informational_block(self):
+        out = env_tools._extract_informational_help(_CANNED_PSQL_HELP)
+        assert out.startswith("Informational")
+        assert "\\dt[S+] [PATTERN]      list tables" in out
+        assert "\\l[+]   [PATTERN]      list databases" in out
+
+    def test_drops_other_sections(self):
+        out = env_tools._extract_informational_help(_CANNED_PSQL_HELP)
+        assert "Formatting" not in out
+        assert "Connection" not in out
+        assert "quit psql" not in out
+        assert "\\x" not in out
+
+
+class TestPsqlStrictInspection:
+    """Under strict mode psql_console only allows SQL queries, help (\\?, \\h)
+    and the informational \\d-family; everything else is refused."""
+
+    def _run_mock(self, stdout):
+        return patch.object(
+            env_tools.subprocess, "run",
+            return_value=SimpleNamespace(returncode=0, stdout=stdout, stderr=""),
+        )
+
+    def test_informational_dt_is_allowed(self):
+        with self._run_mock("list") as run_mock:
+            out = psql_console_impl("\\dt", db_dsn="dsn", strict=True)
+        assert out == "list"
+        run_mock.assert_called_once()
+
+    def test_informational_d_plus_table_is_allowed(self):
+        with self._run_mock("desc") as run_mock:
+            out = psql_console_impl("\\d+ plants", db_dsn="dsn", strict=True)
+        assert out == "desc"
+        run_mock.assert_called_once()
+
+    def test_list_databases_and_functions_allowed(self):
+        for cmd in ("\\l", "\\df", "\\sf myfunc", "\\dn", "\\z"):
+            with self._run_mock("ok") as run_mock:
+                out = psql_console_impl(cmd, db_dsn="dsn", strict=True)
+            assert out == "ok", cmd
+            run_mock.assert_called_once()
+
+    def test_sql_help_is_allowed(self):
+        with self._run_mock("SELECT syntax") as run_mock:
+            out = psql_console_impl("\\h SELECT", db_dsn="dsn", strict=True)
+        assert out == "SELECT syntax"
+        run_mock.assert_called_once()
+
+    def test_select_query_is_allowed(self):
+        with self._run_mock("rows") as run_mock:
+            out = psql_console_impl("SELECT 1;", db_dsn="dsn", strict=True)
+        assert out == "rows"
+        run_mock.assert_called_once()
+
+    def test_formatting_command_is_refused_without_spawning(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("\\x", db_dsn="dsn", strict=True)
+        assert out == env_tools.PSQL_STRICT_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_connection_and_timing_and_pset_refused(self):
+        for cmd in ("\\c otherdb", "\\timing", "\\pset border 2"):
+            with patch.object(env_tools.subprocess, "run") as run_mock:
+                out = psql_console_impl(cmd, db_dsn="dsn", strict=True)
+            assert out == env_tools.PSQL_STRICT_REFUSAL, cmd
+            run_mock.assert_not_called()
+
+    def test_bare_meta_g_with_pipe_is_refused(self):
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("\\g | sh", db_dsn="dsn", strict=True)
+        assert out == env_tools.PSQL_STRICT_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_sql_with_trailing_host_reaching_still_blocked(self):
+        # A SELECT (SQL path) with a trailing host-reaching \g | sh must still
+        # be caught by the host-reaching guardrail, not slip through strict mode.
+        with patch.object(env_tools.subprocess, "run") as run_mock:
+            out = psql_console_impl("SELECT 1 \\g | sh", db_dsn="dsn", strict=True)
+        assert out == PSQL_GUARDRAIL_REFUSAL
+        run_mock.assert_not_called()
+
+    def test_help_question_mark_returns_filtered_informational_only(self):
+        with self._run_mock(_CANNED_PSQL_HELP):
+            out = psql_console_impl("\\?", db_dsn="dsn", strict=True)
+        assert "Informational" in out
+        assert "\\dt" in out
+        assert "Formatting" not in out
+        assert "Connection" not in out
+        # A short banner reminds the agent SQL queries are the other option.
+        assert "SELECT" in out
+
+    def test_non_strict_mode_leaves_formatting_command_allowed(self):
+        # Rollback safety: with strict off (default), behaviour is unchanged —
+        # \x reaches psql just as before.
+        with self._run_mock("toggled") as run_mock:
+            out = psql_console_impl("\\x", db_dsn="dsn")
+        assert out == "toggled"
+        run_mock.assert_called_once()
+
+
+def test_psql_console_select_real_db():
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    out = psql_console_impl("SELECT sitekey FROM plants LIMIT 1;", db_dsn)
+    assert "sitekey" in out
+
+
+def test_psql_console_dt_real_db():
+    # \dt is a meta-command, so its full table listing is returned untruncated.
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    out = psql_console_impl("\\dt", db_dsn)
+    assert "plants" in out
+
+
+def test_psql_console_write_rejected_by_readonly_real_db():
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    out = psql_console_impl("CREATE TABLE _should_not_exist (id int);", db_dsn)
+    assert "read-only" in out.lower()
+
+
+# ---------------------------------------------------------------------------
+# apply_column_comments_impl
+# ---------------------------------------------------------------------------
+class TestApplyColumnCommentsImpl:
+    """apply_column_comments_impl writes COMMENT ON COLUMN to the DB so that
+    \\d+ shows column descriptions, closing the gap with get_table_schema."""
+
+    def test_issues_comment_on_column_for_each_valid_key(self):
+        """One COMMENT ON COLUMN execute call per valid db|table|column key,
+        wrapped in a savepoint pair, then a single commit."""
+        from conversation2sql.eval_framework.state import ColumnMeaningEntry
+        from unittest.mock import MagicMock, patch
+
+        column_meanings = {
+            "mydb|users|id": ColumnMeaningEntry(column_meaning="primary key"),
+            "mydb|orders|total": ColumnMeaningEntry(column_meaning="order total"),
+        }
+
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(env_tools.psycopg2, "connect", return_value=mock_conn):
+            apply_column_comments_impl("dsn://x", column_meanings)
+
+        # Each column: SAVEPOINT sp + COMMENT ON COLUMN + RELEASE SAVEPOINT = 3 calls.
+        assert mock_cur.execute.call_count == 6
+        # Extract only the parameterised COMMENT calls (those with a tuple second arg).
+        comment_params = [
+            c[0][1] for c in mock_cur.execute.call_args_list if len(c[0]) == 2
+        ]
+        assert ("primary key",) in comment_params
+        assert ("order total",) in comment_params
+        mock_conn.commit.assert_called_once()
+        mock_conn.close.assert_called_once()
+
+    def test_skips_keys_with_wrong_format(self):
+        """Keys that are not in db|table|column form are ignored silently —
+        malformed entries in the JSON must not crash the setup step."""
+        from conversation2sql.eval_framework.state import ColumnMeaningEntry
+        from unittest.mock import MagicMock, patch
+
+        column_meanings = {
+            "not_a_valid_key": ColumnMeaningEntry(column_meaning="ignored"),
+            "only|two": ColumnMeaningEntry(column_meaning="also ignored"),
+        }
+
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(env_tools.psycopg2, "connect", return_value=mock_conn):
+            apply_column_comments_impl("dsn://x", column_meanings)
+
+        mock_cur.execute.assert_not_called()
+        mock_conn.commit.assert_called_once()
+
+    def test_empty_dict_commits_with_no_execute_calls(self):
+        """Empty column_meanings: connect, do nothing, commit, close."""
+        from unittest.mock import MagicMock, patch
+
+        mock_cur = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+        with patch.object(env_tools.psycopg2, "connect", return_value=mock_conn):
+            apply_column_comments_impl("dsn://x", {})
+
+        mock_cur.execute.assert_not_called()
+        mock_conn.commit.assert_called_once()
+
+def test_apply_column_comments_visible_in_psql_describe_real_db():
+    """Integration: after applying a comment, \\d+ <table> shows the description."""
+    from conversation2sql.eval_framework.state import ColumnMeaningEntry
+
+    db_dsn = "postgresql://root:123123@localhost:5433/solar_panel"
+    test_meanings = {
+        "solar_panel|plants|sitekey": ColumnMeaningEntry(
+            column_meaning="unique site identifier"
+        )
+    }
+    apply_column_comments_impl(db_dsn, test_meanings)
+    out = psql_console_impl("\\d+ plants", db_dsn)
+    assert "unique site identifier" in out
+
+
+# ---------------------------------------------------------------------------
+# _safe_instance_prefix
+# ---------------------------------------------------------------------------
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
+    _safe_instance_prefix,
+)
+
+def test_safe_instance_prefix_simple():
+    assert _safe_instance_prefix("solar_panel_m_5") == "solar_panel_m_5"
+
+def test_safe_instance_prefix_hyphens_and_dots():
+    assert _safe_instance_prefix("alien-db.task.1") == "alien_db_task_1"
+
+def test_safe_instance_prefix_uppercase():
+    assert _safe_instance_prefix("SolarPanel_M_5") == "solarpanel_m_5"
+
+def test_safe_instance_prefix_truncation():
+    long_id = "a" * 50
+    result = _safe_instance_prefix(long_id)
+    assert len(result) == 30
+    assert result == "a" * 30
+
+def test_safe_instance_prefix_default_max_len():
+    # default max_len is 30
+    result = _safe_instance_prefix("x" * 31)
+    assert len(result) == 30
 

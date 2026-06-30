@@ -2,9 +2,54 @@
 
 from __future__ import annotations
 
+import html
 import json
 
 import streamlit as st
+
+try:  # pragma: no cover - bare import only when Streamlit runs from explorer/
+    from colors import stable_color
+    from patterns import RECOVERY_PATTERNS
+except ModuleNotFoundError:
+    from explorer.colors import stable_color
+    from explorer.patterns import RECOVERY_PATTERNS
+
+
+def _pattern_badge(label: str) -> str:
+    """Inline colored HTML chip for an anti-pattern label (color pinned in colors.py)."""
+    color = stable_color(label, kind="pattern")
+    return (
+        f"<span style='background:{color};color:white;border-radius:6px;"
+        f"padding:1px 7px;font-size:0.8em;white-space:nowrap'>{html.escape(label)}</span>"
+    )
+
+
+def _pattern_banner_html(hits: list) -> str:
+    """A banner listing every anti-pattern a conversation hit, with its evidence."""
+    items = "".join(
+        f"<div style='margin:3px 0'>{_pattern_badge(h.label)} "
+        f"<span style='color:#666;font-size:0.85em'>{html.escape(h.detail)}</span></div>"
+        for h in hits
+    )
+    return (
+        "<div style='border-left:4px solid #d62728;padding:6px 12px;margin:8px 0;"
+        f"background:#fff5f5;border-radius:4px'>🚩 <b>Anti-patterns flagged "
+        f"({len(hits)})</b>{items}</div>"
+    )
+
+
+def _recovery_banner_html(hits: list) -> str:
+    """A banner listing positive recovery signals, styled green."""
+    items = "".join(
+        f"<div style='margin:3px 0'>{_pattern_badge(h.label)} "
+        f"<span style='color:#666;font-size:0.85em'>{html.escape(h.detail)}</span></div>"
+        for h in hits
+    )
+    return (
+        "<div style='border-left:4px solid #2ca02c;padding:6px 12px;margin:8px 0;"
+        f"background:#f0fff0;border-radius:4px'>🔄 <b>Recovery signals "
+        f"({len(hits)})</b>{items}</div>"
+    )
 
 
 def render_ai_content(content) -> None:
@@ -28,13 +73,40 @@ def render_ai_content(content) -> None:
         st.text(str(content))
 
 
-def render_conversation(record: dict) -> None:
+def render_conversation(
+    record: dict,
+    highlight_indices: set[int] | None = None,
+    pattern_hits: list | None = None,
+) -> None:
+    """Render a conversation trace.
+
+    ``highlight_indices`` flags individual message rows (a generic emphasis).
+    ``pattern_hits`` (a list of ``PatternHit``) additionally renders a banner of
+    every anti-pattern the conversation hit and tags each flagged turn with the
+    label(s) of the pattern(s) that fired there — so a single conversation shows
+    *all* its (non-mutually-exclusive) patterns at once. Conversation-level
+    patterns (no ``message_indices``) appear in the banner only.
+    """
+    hits = list(pattern_hits or [])
+    recovery_labels: set[str] = {h.label for h in hits if h.name in RECOVERY_PATTERNS}
+    # message index -> labels of the pattern(s) that flagged that exact turn.
+    idx_labels: dict[int, list[str]] = {}
+    for h in hits:
+        for mi in getattr(h, "message_indices", None) or []:
+            idx_labels.setdefault(mi, []).append(getattr(h, "label", ""))
+
     acc = record.get("execution_accuracy", False)
     badge = "✓ PASS" if acc else "✗ FAIL"
     st.subheader(
         f"Conversation: `{record.get('instance_id', '')}` · "
         f"db: `{record.get('selected_database', '')}` · **{badge}**"
     )
+    anti_hits = [h for h in hits if h.name not in RECOVERY_PATTERNS]
+    rec_hits = [h for h in hits if h.name in RECOVERY_PATTERNS]
+    if anti_hits:
+        st.markdown(_pattern_banner_html(anti_hits), unsafe_allow_html=True)
+    if rec_hits:
+        st.markdown(_recovery_banner_html(rec_hits), unsafe_allow_html=True)
 
     # Questions
     clean_q = record.get("not_ambiguos_query", "")
@@ -60,9 +132,10 @@ def render_conversation(record: dict) -> None:
     # kb_linearized: dict = record.get("masked_agent_kb_linearized") or {}
     kb_linearized: dict = {}
     kb_raw: dict = record.get("masked_agent_kb") or {}
+    gt_kb: dict = record.get("gt_knowledge_base") or {}
     col_meanings: dict = record.get("column_meanings") or {}
 
-    ctx_cols = st.columns(3)
+    ctx_cols = st.columns(4)
     with ctx_cols[0]:
         with st.expander("Schema (DDL)"):
             with st.container(height=300):
@@ -79,6 +152,13 @@ def render_conversation(record: dict) -> None:
                 else:
                     st.text("(none)")
     with ctx_cols[2]:
+        with st.expander(f"Ground-truth KB ({len(gt_kb)} entries)"):
+            with st.container(height=300):
+                if gt_kb:
+                    st.json(gt_kb)
+                else:
+                    st.text("(none)")
+    with ctx_cols[3]:
         with st.expander(f"Column meanings ({len(col_meanings)} entries)"):
             with st.container(height=300):
                 if col_meanings:
@@ -87,42 +167,98 @@ def render_conversation(record: dict) -> None:
                     st.text("(none)")
 
     st.divider()
+    st.markdown("### Conversation trace")
 
-    for msg in record.get("messages", []):
+    # Render every message in order as a chronological trace (LangSmith style):
+    # the long system prompt stays collapsed; the user question, each assistant
+    # turn (reasoning + text + tool-call chips), and each tool result render as
+    # their own distinctly-styled turn.
+    highlight = (highlight_indices or set()) | set(idx_labels)
+    # Budget the agent saw when it acted. The `[SYSTEM NOTE: Remaining budget: x/y]`
+    # note is attached to a *tool* message but reflects the budget shown to the
+    # model on its *next* call — so the budget an assistant turn had available is
+    # the `remaining_budget` of the preceding tool message, or the full
+    # `task_budget` for the very first turn (nothing deducted yet).
+    total_budget = record.get("task_budget")
+    current_budget = total_budget
+    for i, msg in enumerate(record.get("messages", [])):
         role = msg.get("role")
+        if i in highlight:
+            labels = idx_labels.get(i)
+            if labels:
+                parts = [
+                    ("🔄 " if lbl in recovery_labels else "🚩 ") + _pattern_badge(lbl)
+                    for lbl in labels
+                ]
+                st.markdown(" ".join(parts), unsafe_allow_html=True)
+            else:
+                st.markdown("\U0001f6a9 **flagged turn**")
 
-        if role in ("user", "system"):
-            with st.expander(f"{role.capitalize()} prompt — click to expand"):
+        if role == "system":
+            with st.expander("⚙️ System prompt — click to expand"):
                 st.text(msg.get("content", ""))
+
+        elif role in ("user", "human"):
+            with st.chat_message("user"):
+                st.markdown("**User**")
+                content = msg.get("content", "")
+                st.markdown(content if isinstance(content, str) else f"```\n{content}\n```")
 
         elif role == "ai":
             with st.chat_message("assistant"):
+                st.markdown("**Assistant**")
                 content = msg.get("content", "")
+                thinking = msg.get("thinking", "")
+                if thinking and not isinstance(content, list):
+                    with st.expander("Thinking (Not passed in History!) — click to expand"):
+                        st.text(thinking)
                 if content:
                     render_ai_content(content)
-                st.caption(
-                    f"tokens: {msg.get('prompt_tokens', 0)}↑ {msg.get('completion_tokens', 0)}↓"
-                    f" | cost: ${msg.get('cost_usd', 0):.5f}"
-                    f" | finish: {msg.get('finish_reason', 'unknown')}"
-                )
-                for tc in msg.get("tool_calls", []):
+                tool_calls = msg.get("tool_calls", [])
+                for tc in tool_calls:
                     tool_name = tc.get("tool_name", "unknown")
                     args = tc.get("arguments", {})
                     args_str = json.dumps(args, ensure_ascii=False)
                     label = (
-                        f"🔧 {tool_name}({args_str[:60]}…)"
+                        f"🔧 calls `{tool_name}`({args_str[:60]}…)"
                         if len(args_str) > 60
-                        else f"🔧 {tool_name}({args_str})"
+                        else f"🔧 calls `{tool_name}`({args_str})"
                     )
                     with st.expander(label):
                         st.json(args)
+                budget_note = (
+                    f" | 🪙 budget: {current_budget:g}/{total_budget:g}"
+                    if tool_calls and current_budget is not None and total_budget is not None
+                    else ""
+                )
+                st.caption(
+                    f"tokens: {msg.get('prompt_tokens', 0)}↑ {msg.get('completion_tokens', 0)}↓"
+                    f" | cost: ${msg.get('cost_usd', 0):.5f}"
+                    f" | finish: {msg.get('finish_reason', 'unknown')}"
+                    + (f" | {len(tool_calls)} tool call(s)" if tool_calls else "")
+                    + budget_note
+                )
 
         elif role == "tool":
-            tool_name = msg.get("tool_name", "tool")
+            tool_name = msg.get("tool_name") or "tool"
             status = msg.get("status", "")
-            status_badge = "✓" if status == "success" else "✗"
-            with st.chat_message("user"):
-                st.markdown(f"**{tool_name}** {status_badge}")
+            status_badge = "✓ success" if status == "success" else f"✗ {status or 'error'}"
+            remaining = msg.get("remaining_budget")
+            total = msg.get("total_budget")
+            # This tool message's note is the budget the *next* assistant turn sees.
+            if remaining is not None:
+                current_budget = remaining
+            if total is not None:
+                total_budget = total
+            budget_badge = (
+                f" · 🪙 budget: **{remaining:g}/{total:g}**"
+                if remaining is not None and total is not None
+                else ""
+            )
+            with st.chat_message("tool", avatar="🔧"):
+                st.markdown(
+                    f"**Tool result · `{tool_name}`** — {status_badge}{budget_badge}"
+                )
                 content = msg.get("content", "")
                 with st.expander("Tool output — click to expand"):
                     if isinstance(content, dict):

@@ -39,15 +39,17 @@
     "gpustat":    "uv pip install --system gpustat",
     
     // This installs the verl package in editable mode, so that changes to the code are reflected without needing to reinstall. It is installed at system level so that it is available in the PATH and can be used as a command line tool.
-    "verl_install_if_not_present": "if [ ! -d verl ]; then git clone https://github.com/volcengine/verl; fi",
-    "verl_install": "cd verl && uv pip install --system --no-deps -e .",
+    // "verl_install_if_not_present": "if [ ! -d verl ]; then git clone https://github.com/volcengine/verl; fi",
+    // "verl_install": "cd verl && uv pip install --system --no-deps -e .",
     
     // These are the flashinfer packages, which are needed to optimize inference.
     //  They are installed at system level so that they are available in the PATH.
     // Cubin provides pre-compiled CUDA binaries (cubins) 
     // and (Just-In-Time Cache) jit-cache is used to cache the optimized kernels on disk.
     // run `flashinfer show-config` to match the same 0.6.4 version for both.
-    "flashinfer": "uv pip install --system flashinfer-cubin==0.6.4 flashinfer-jit-cache==0.6.4  --extra-index-url https://flashinfer.ai/whl/cu129",
+    "flashinfer": "uv pip install --system flashinfer-cubin==0.6.12 flashinfer-jit-cache==0.6.12 --extra-index-url https://flashinfer.ai/whl/cu130",
+    // Update transformers to the latest version, which is required for gemma4 and the latest flashinfer.
+    "transformers": "uv pip install --system --upgrade transformers",
     // Installs the PostgreSQL client tools (psql, pg_isready) so they are available
     // directly in the dev container shell without needing docker exec.
     "postgresql_client": "apt-get update; apt-get install -y postgresql-client tmux",

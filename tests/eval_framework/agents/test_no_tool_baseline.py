@@ -66,6 +66,25 @@ class TestExtractSqlFromResponse:
         text = "First try:\nSELECT 0;\nBetter answer:\nSELECT 1;"
         assert extract_sql_from_response(text) == "SELECT 1;"
 
+    def test_raw_sql_multiline_cte_kept_whole(self):
+        # A single multi-line CTE statement (one trailing ';') must not be
+        # truncated to its final SELECT even though the inner lines start with
+        # SQL keywords — "last statement wins" is per ';', not per keyword.
+        text = (
+            "Here goes:\n"
+            "WITH cte AS (\n"
+            "    SELECT id FROM users\n"
+            ")\n"
+            "SELECT * FROM cte;"
+        )
+        assert extract_sql_from_response(text) == (
+            "WITH cte AS (\n    SELECT id FROM users\n)\nSELECT * FROM cte;"
+        )
+
+    def test_raw_sql_trailing_prose_dropped(self):
+        text = "SELECT 1;\nThis returns one row."
+        assert extract_sql_from_response(text) == "SELECT 1;"
+
     def test_raw_sql_no_semicolon(self):
         text = "Reasoning prose\nSELECT * FROM t"
         assert extract_sql_from_response(text) == "SELECT * FROM t"

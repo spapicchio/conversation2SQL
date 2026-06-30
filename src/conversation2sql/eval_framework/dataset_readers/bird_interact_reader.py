@@ -9,6 +9,10 @@ import json
 from functools import cache
 from pathlib import Path
 
+from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
+    apply_column_comments_impl,
+)
+
 import tqdm
 
 from conversation2sql.eval_framework.dataset_readers.sql_usage_extractor import (
@@ -75,6 +79,17 @@ def _get_external_knowledge(
                 entry["children_knowledge"] = []
             kb[entry["knowledge"]] = ExternalKnowledgeEntry(**entry)
     return kb
+
+
+@cache
+def _apply_column_comments_once(dataset_path: Path, db_name: str, db_dsn: str) -> None:
+    """Apply COMMENT ON COLUMN for all column meanings of db_name to the DB.
+
+    Cached so the write runs exactly once per (dataset_path, db_name, db_dsn)
+    combination regardless of how many tasks share the same database.
+    """
+    column_meanings = _get_column_meanings(dataset_path, db_name)
+    apply_column_comments_impl(db_dsn, column_meanings)
 
 
 def _build_table_to_columns(
@@ -236,6 +251,11 @@ def load_bird_interact_as_tasks(
     read_only_gt_kb: bool = False,
     database_schema_type: str = "ddl",
     is_kb_linearized: bool = False,
+    enable_table_schema_tools: bool = False,
+    enable_psql_console: bool = False,
+    enable_psql_strict_inspection: bool = False,
+    deep_enable_subagents: bool = False,
+    deep_catalog_root: str = "",
     *args,
     **kwargs,
 ) -> list[TaskData]:
@@ -246,6 +266,22 @@ def load_bird_interact_as_tasks(
      https://github.com/bird-bench/BIRD-Interact/blob/48805f00ff427983a57d7137650a8a04b8e5ffad/combine_public_with_gt.py#L65
     """
     dataset_path = Path(dataset_path)
+    if enable_psql_console:
+        logger.warning(
+            "PSQL-CONSOLE ABLATION ENABLED: replacing execute_sql/get_schema/"
+            "get_table_* with the single read-only psql_console tool."
+        )
+    if enable_psql_strict_inspection:
+        if not enable_psql_console:
+            logger.warning(
+                "enable_psql_strict_inspection is set but enable_psql_console is "
+                "off; it has no effect (psql_console is not in the tool list)."
+            )
+        else:
+            logger.warning(
+                "PSQL STRICT-INSPECTION ABLATION ENABLED: psql_console restricts "
+                "meta-commands to SQL + \\h + the informational \\d-family."
+            )
     samples = []
     skipped_instance_id = {
         # DB FULL
@@ -267,8 +303,27 @@ def load_bird_interact_as_tasks(
     if not make_data_ambiguous:
         logger.warning(
             "make_data_ambiguous is set to False, the task will be not ambiguous:"
-            " 1. KB will be full not masked; 2. the user query will be not ambiguous"
+            " 1. KB will be full not masked; 2. the user query will be not ambiguous; 3. the user patience budget will be at least 3"
         )
+        if user_patience_budget < 3:
+            logger.warning(
+                "user_patience_budget is increased to 3 to ensure the agentcan make multiple tool calls when make_data_ambiguous=False"
+            )
+            user_patience_budget = 3
+
+    if make_data_ambiguous:
+        logger.info(
+            "task_budget (bird-coins) = 6 + 2*m_amb + 2*user_patience_budget, "
+            "where m_amb = len(critical_ambiguity) + len(knowledge_ambiguity) per task "
+            f"and user_patience_budget={user_patience_budget}.",
+        )
+    else:
+        logger.info(
+            "task_budget (bird-coins) = 6 + 2*user_patience_budget "
+            "(ambiguity not counted because make_data_ambiguous=False), "
+            f"with user_patience_budget={user_patience_budget}.",
+        )
+
     if read_only_gt_tables:
         logger.warning(
             "read_only_gt_tables is set to True, the agent will read from GT tables only (schema linking is performed automatically)"
@@ -320,6 +375,13 @@ def load_bird_interact_as_tasks(
                 )
             )
 
+            if enable_psql_console:
+                _apply_column_comments_once(
+                    dataset_path,
+                    db_name,
+                    db_dsn_template.format(database=db_name),
+                )
+
             kb_full, masked_agent_kb, gt_knowledge_base = _resolve_kb_context(
                 dataset_path,
                 db_name,
@@ -364,6 +426,11 @@ def load_bird_interact_as_tasks(
                 table_in_gt_sql=table_in_gt_sql,
                 table_in_gt_sql_parse_error=table_in_gt_sql_parse_error,
                 is_kb_linearized=is_kb_linearized,
+                enable_table_schema_tools=enable_table_schema_tools,
+                enable_psql_console=enable_psql_console,
+                enable_psql_strict_inspection=enable_psql_strict_inspection,
+                deep_enable_subagents=deep_enable_subagents,
+                deep_catalog_root=deep_catalog_root,
                 **line,
             )
             samples.append(sample)

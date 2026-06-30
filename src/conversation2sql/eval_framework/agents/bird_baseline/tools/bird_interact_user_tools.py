@@ -33,6 +33,10 @@ from langgraph.prebuilt import ToolRuntime
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import (
     CustomAgentState,
 )
+from conversation2sql.eval_framework.agents.bird_baseline.tools.tool_specs import (
+    ToolSpec,
+    stamp_cost_in_descriptions,
+)
 from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_user_prompt import (
     build_llm_as_a_parser_messages,
     build_llm_as_a_generator_messages,
@@ -49,12 +53,22 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute
 )
 from conversation2sql.eval_framework.state import TaskData
 
-USER_TOOL_COSTS: dict[str, float] = {
-    "ask_user": 2.0,
-    "submit_sql": 3.0,
+# Single source of truth for the user-facing tools' cost + prompt summary; see
+# tool_specs.py. USER_TOOL_COSTS is derived for legacy callers.
+USER_TOOL_SPECS: dict[str, ToolSpec] = {
+    "ask_user": ToolSpec("ask_user", 2.0, "ask the user a clarification question"),
+    "submit_sql": ToolSpec("submit_sql", 3.0, "submit the SQL for evaluation"),
 }
 
+USER_TOOL_COSTS: dict[str, float] = {
+    name: spec.cost for name, spec in USER_TOOL_SPECS.items()
+}
 
+# SQL_NOT_CORRECT_MSG = "Your SQL is not correct."
+SQL_NOT_CORRECT_MSG = (
+    "Your SQL executes without errors but returns the wrong result set. "
+    "Re-read the user's request carefully and check your column selection, filters, joins, and aggregations."
+)
 def _extract_group_in_tag_pattern(content: str, pattern_tag: str = "s") -> str | None:
     pattern = re.compile(
         rf"\s*<{pattern_tag}>\s*([\s\S]*?)\s*</{pattern_tag}>\s*",
@@ -208,15 +222,15 @@ def submit_sql_impl(
     if conditions and conditions.get("order", False):
         if pred_result == target_result:
             passed = True
-            message = ("Phase 1 correct!. Task finished.",)
+            message = "Phase 1 correct! Task finished."
         else:
-            message = "Your SQL is not correct."
+            message = SQL_NOT_CORRECT_MSG
     else:
         if set(pred_result) == set(target_result):
             passed = True
-            message = ("Phase 1 correct! Task finished.",)
+            message = "Phase 1 correct! Task finished."
         else:
-            message = "Your SQL is not correct."
+            message = SQL_NOT_CORRECT_MSG
 
     return {"passed": passed, "message": message}
 
@@ -234,7 +248,6 @@ def return_tool_ask_user(
     ) -> str:
         """Ask the user a clarification question about their query.
         Use this when the user's request is ambiguous and you need more information.
-        Cost: 2 bird-coins.
 
         Args:
             clarification_question: The clarification question to ask the user.
@@ -252,6 +265,10 @@ def return_tool_ask_user(
             indent=2,
         )
 
+    # Stamp the cost from the spec onto this freshly built tool's description so
+    # the LLM sees it in the schema, single-sourced (ask_user is created per run,
+    # not a module singleton, so it is stamped here rather than at import).
+    stamp_cost_in_descriptions([ask_user], USER_TOOL_SPECS)
     return ask_user
 
 
@@ -265,7 +282,6 @@ def submit_sql(
 ) -> str:
     """Submit your final SQL query for evaluation.
     This tests your SQL against the ground truth. Only submit when confident.
-    Cost: 3 bird-coins.
 
     Args:
         sql: The final PostgreSQL SQL query to submit.

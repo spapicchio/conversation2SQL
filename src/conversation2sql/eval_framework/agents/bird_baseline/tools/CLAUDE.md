@@ -1,0 +1,49 @@
+# bird_baseline/tools
+
+LangGraph tools exposed to the agent, each with a bird-coin patience cost.
+
+## Tool costs (from `DB_TOOL_COSTS` / `USER_TOOL_COSTS`)
+
+| Tool | Cost | Source |
+|------|------|--------|
+| `execute_sql` | 2.0 | `bird_interact_env_tools.py` |
+| `get_schema` | 1.0 | `bird_interact_env_tools.py` |
+| `get_table_names` | 0.5 | `bird_interact_env_tools.py` |
+| `get_table_schema` | 0.5 | `bird_interact_env_tools.py` |
+| `get_all_column_meanings` | 1.0 | `bird_interact_env_tools.py` |
+| `get_column_meaning` | 0.5 | `bird_interact_env_tools.py` |
+| `get_all_external_knowledge_names` | 0.5 | `bird_interact_env_tools.py` |
+| `get_knowledge_definition` | 0.5 | `bird_interact_env_tools.py` |
+| `get_all_knowledge_definitions` | 1.0 | `bird_interact_env_tools.py` |
+| `psql_console` | 1.0 | `bird_interact_env_tools.py` |
+| `ask_user` | 2.0 | `bird_interact_user_tools.py` |
+| `submit_sql` | 3.0 | `bird_interact_user_tools.py` |
+
+`TOOL_COSTS = {**DB_TOOL_COSTS, **USER_TOOL_COSTS}` is the merged dict used by the middleware.
+
+## Design pattern
+
+Each `@tool` is a thin wrapper that extracts fields from `runtime.context` (a `TaskData`) and delegates to a `*_impl` function. The `*_impl` functions have no LangGraph dependency and are unit-tested directly in `tests/eval_framework/tools/`.
+
+## ask_user two-stage pipeline
+
+`ask_user` runs a two-stage LLM pipeline:
+1. `stage_1_parse_action` — classifies the clarification question as AMB/LOC/UNA via `model_user_parsing`.
+2. `stage_2_generator` — generates the simulated user's response conditioned on the action via `model_user_generator`.
+
+`return_tool_ask_user(model_user_parsing, model_user_generator)` is a factory that closes over both models; call it at agent-construction time.
+
+## submit_sql evaluation
+
+`submit_sql_impl` executes both the predicted SQL and the ground-truth SQL against Postgres, then compares result sets (unordered by default; ordered if `sql_query_conditions["order"] == True`). `ROUND`/`DISTINCT`/comments are stripped before comparison.
+
+## Gotchas
+
+- `execute_sql` only allows `SELECT`/`WITH`/`EXPLAIN` — write queries are rejected immediately.
+- `get_knowledge_definition` returns `"Knowledge not found."` for entries masked by KB ambiguity (by design). When `is_kb_linearized=True` it returns the entry **plus its transitive prerequisites** (via `linearize_prerequisites`) — the dependency-edges + topo-ordered definitions section, scoped to the looked-up entry's ancestors (dependents excluded). The legacy (non-linearized) branch still JSON-dumps the single entry's visible fields.
+- `get_column_meaning` key format: `"{db_name}|{table.lower()}|{column.lower()}"` — case matters for the lookup.
+- Result truncation is **primarily row-based** (`utils_db_execute.py`): `MAX_RESULT_ROWS = 3` whole rows are shown, then `_more_rows_note(...)` appends `... [showing first 3 of N rows; …]`. `_execute_query` fetches up to `RESULT_FETCH_LIMIT = 10_000`; a result at the cap is reported as `10000+`. `execute_sql_impl` does no post-format truncation — `_format_result` owns it. **A per-cell char cap backstops the row cap**: `_format_cell` clips each rendered cell to `MAX_CELL_CHARS = 6000` via `_cap_cell` (marker `…[cell truncated to N chars; was M]`). This catches the "few rows, giant cells" case the row cap misses — e.g. `to_jsonb(ARRAY_AGG(...))` folding a whole table into one JSON blob, so a 2-row `GROUP BY <bool>` result was ~169 KB (regression seen on `alien_7`). 6000 is generous (unlike the old 100-char cut that hid values), so normal cells render in full. A clipped JSON cell is no longer valid JSON — the marker says so. `psql_console` can't address cells (flat text), so it gets a *total* cap instead: `_truncate_psql_output` → `_cap_psql_output` clips SQL output to `MAX_PSQL_OUTPUT_CHARS = MAX_CELL_CHARS * MAX_RESULT_ROWS` (= 18000), keeping the two tools comparable in the same ballpark. Meta-command listings skip both caps (callers skip `_truncate_psql_output` for them) so no schema names are dropped.
+- `get_table_names` / `get_table_schema` parse the static `ddl_database_schema` blob at call time via `_parse_ddl` (no DB query). They mirror the KB granular tools (`get_all_external_knowledge_names` / `get_knowledge_definition`) against `get_schema` (the full dump). `get_table_schema` returns the table's `CREATE TABLE` block + its "First 3 rows" sample + every `ALTER TABLE … FOREIGN KEY` line where the table is the **child or the referenced parent** (both directions, so joinable tables surface either way); unknown names return `"Table not found."`.
+- These two tools are **gated behind the `enable_table_schema_tools` flag** (default `False`). It is a `ConfigReader` field threaded onto `TaskData`; `run_agent_bird_baseline` reads `single_task.enable_table_schema_tools` to decide whether to add them to the tool list and render their lines in the prompt. The baseline keeps only `get_schema`; flip the flag on (e.g. `--extra "--enable_table_schema_tools true"`) for ablations.
+- `psql_console` (ablation, `enable_psql_console`, default off) runs a real `psql -X -c <command>` subprocess under `PGOPTIONS='-c default_transaction_read_only=on -c statement_timeout=60s'` — `SELECT` + read-only meta-commands (`\dt`, `\d`, `\l`, `\df`) work; writes/DDL are rejected by the server. A guardrail (`_violates_psql_guardrail`) refuses host-reaching meta-commands (`\!`, `\o`, `\copy`, `\i`, `\e`, `\w`, `\s`, and `\g`/`\gx` with a file/pipe arg) **before** psql is spawned, returning `PSQL_GUARDRAIL_REFUSAL`. On nonzero exit it returns stderr. SQL output is **row-truncated then char-capped** by `_truncate_psql_output` (header + separator + first `MAX_RESULT_ROWS` data rows + the `_more_rows_note`, with the true total parsed from psql's `(N rows)` footer, then `_cap_psql_output` clips to `MAX_PSQL_OUTPUT_CHARS`); backslash meta-commands (`\dt`, `\d`, `\l`, `\df` …) are detected by `_is_psql_meta_command` and returned untruncated, since truncating would drop table/column names off the end of the listing. When on it **replaces** `execute_sql`/`get_schema`/`get_table_names`/`get_table_schema` and is **mutually exclusive** with `enable_table_schema_tools` (enforced in `ConfigReader` and `run_agent_bird_baseline._select_db_tools`). Drive it via `--extra "--enable_psql_console true"`; the run-dir slug gets a `__psql` suffix.
+- `psql_console` strict-inspection sub-ablation (`enable_psql_strict_inspection`, default off; threaded onto `TaskData`, read by the `psql_console` tool and passed as `strict=` to `psql_console_impl`): flips the guardrail from a denylist to an **allowlist**. When `strict=True`, only a SQL query (`SELECT`/`WITH`/`EXPLAIN`), `\h`, and the informational `\d`-family (`\d*`, `\l`, `\sf`, `\sv`, `\z`) are allowed; any other backslash command is refused with `PSQL_STRICT_REFUSAL` before spawning psql. SQL queries still keep the host-reaching denylist (so a trailing `\g | sh` is caught). `\?` is intercepted and returns only psql's *Informational* section (`_extract_informational_help`) behind `PSQL_STRICT_HELP_BANNER`, so the agent isn't shown disabled commands. Rationale: each call is a fresh `psql -X -c` with no session persistence, so formatting/buffer/variable/conditional commands are inert and connection/OS commands are out of scope. Slug suffix `__strictpsql`. `strict=False` (default) preserves the original denylist behavior exactly.

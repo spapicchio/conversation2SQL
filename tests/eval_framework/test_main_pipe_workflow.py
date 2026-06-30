@@ -59,11 +59,11 @@ def configs(tmp_path):
     )
 
 
-def _fake_task():
+def _fake_task(instance_id="task_1"):
     t = MagicMock()
-    t.instance_id = "task_1"
+    t.instance_id = instance_id
     t.model_dump.return_value = {
-        "instance_id": "task_1",
+        "instance_id": instance_id,
         "selected_database": "db1",
         "amb_user_query": "q?",
         "sol_sql": "SELECT 1",
@@ -157,11 +157,14 @@ class TestConcurrencyConfig:
         assert ConfigPipeline().concurrency == 1
 
     def test_num_iterations_defaults_to_1(self):
-        assert ConfigPipeline().num_iterations == 1
+        assert ConfigPipeline().num_iterations == 3
 
     def test_num_iterations_rejects_zero(self):
         with pytest.raises(ValidationError):
             ConfigPipeline(num_iterations=0)
+
+    def test_resume_defaults_to_false(self):
+        assert ConfigPipeline().resume is False
 
 
 @patch("conversation2sql.eval_framework.main_pipe_workflow.run_agent_bird_baseline")
@@ -255,3 +258,91 @@ class TestIterations:
         out = Path(cp.output_folder)
         assert (out / "results_iter0.jsonl").exists()
         assert not (out / "results_iter1.jsonl").exists()
+
+
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_agent_bird_baseline")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_baseline_no_tool")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.load_bird_interact_as_tasks")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.utils_create_model")
+class TestResume:
+    def test_resume_runs_only_missing_pairs(
+        self, mock_create, mock_load, mock_no_tool, mock_agent, configs, tmp_path
+    ):
+        cp, cr, cpred, cu = configs
+        cp = cp.model_copy(update={"baseline": "no_tool", "resume": True, "debug": False})
+        # cpred.temperature defaults to 0.0 -> a single iteration (0).
+        # Pre-seed task_1 as already complete for iteration 0.
+        (tmp_path / "results_iter0.jsonl").write_text(
+            json.dumps({"instance_id": "task_1", "iteration": 0}) + "\n"
+        )
+        mock_load.return_value = [_fake_task("task_1"), _fake_task("task_2")]
+        mock_no_tool.return_value = _stub_response()
+        mock_create.return_value = MagicMock()
+
+        workflow_evaluation_pipeline(cp, cr, cpred, cu)
+
+        # Only the missing task_2 runs.
+        assert mock_no_tool.call_count == 1
+
+    def test_resume_writes_snapshot_to_separate_file(
+        self, mock_create, mock_load, mock_no_tool, mock_agent, configs, tmp_path
+    ):
+        cp, cr, cpred, cu = configs
+        cp = cp.model_copy(update={"baseline": "no_tool", "resume": True, "debug": False})
+        original = "predictor:\n  model_name: ORIGINAL\n"
+        (tmp_path / "config.yaml").write_text(original)
+        mock_load.return_value = [_fake_task("task_1")]
+        mock_no_tool.return_value = _stub_response()
+        mock_create.return_value = MagicMock()
+
+        workflow_evaluation_pipeline(cp, cr, cpred, cu)
+
+        # Original snapshot is preserved (not clobbered); a resume snapshot is added.
+        assert (tmp_path / "config.yaml").read_text() == original
+        resume_snaps = list(tmp_path.glob("config_resume_*.yaml"))
+        assert len(resume_snaps) == 1
+
+
+def test_load_completed_pairs_reads_all_iterations(tmp_path):
+    from conversation2sql.eval_framework.main_pipe_workflow import _load_completed_pairs
+
+    (tmp_path / "results_iter0.jsonl").write_text(
+        json.dumps({"instance_id": "a", "iteration": 0}) + "\n"
+        + json.dumps({"instance_id": "b", "iteration": 0}) + "\n"
+        + "{ this is a truncated line\n"  # crash can leave a partial trailing line
+    )
+    (tmp_path / "results_iter1.jsonl").write_text(
+        json.dumps({"instance_id": "a", "iteration": 1}) + "\n"
+    )
+
+    pairs = _load_completed_pairs(tmp_path, num_iterations=2)
+    assert pairs == {("a", 0), ("b", 0), ("a", 1)}
+
+
+def test_load_completed_pairs_missing_files_return_empty(tmp_path):
+    from conversation2sql.eval_framework.main_pipe_workflow import _load_completed_pairs
+
+    assert _load_completed_pairs(tmp_path, num_iterations=3) == set()
+
+
+def test_saved_snapshot_roundtrips_through_parser(tmp_path):
+    from conversation2sql.eval_framework.main_pipe_workflow import _save_configs_as_yaml
+    from conversation2sql.cli_parser import PydanticParser
+
+    cp = ConfigPipeline(output_folder=str(tmp_path), baseline="tools_user")
+    cr = ConfigReader()
+    cpred = ConfigPredictor(model_name="some/model")
+    cu = ConfigUserSimulator(model_name="user/model", model_provider="openai")
+    _save_configs_as_yaml(tmp_path, cp, cr, cpred, cu)
+
+    parser = PydanticParser(
+        [ConfigPipeline, ConfigReader, ConfigPredictor, ConfigUserSimulator]
+    )
+    rp, rr, rpred, ruser = parser.parse_args_and_config(
+        ["--config", str(tmp_path / "config.yaml")]
+    )
+    # The user-simulator section must survive the round-trip.
+    assert ruser.model_name == "user/model"
+    assert ruser.model_provider == "openai"
+    assert rpred.model_name == "some/model"
+    assert rp.baseline == "tools_user"

@@ -9,6 +9,40 @@ import psycopg2.extras
 from psycopg2.extensions import Column
 from psycopg2.extras import RealDictRow
 
+# Result truncation is row-based, not character-based: the agent issues many SQL
+# calls per task, so we show only the first few *whole* rows and tell it how many
+# more existed. Width is intentionally left unbounded so execute_sql and
+# psql_console output stay comparable (neither caps cell/row width).
+MAX_RESULT_ROWS = 3
+
+# _execute_query fetches at most this many rows; when a result hits the cap the
+# true total is unknown, so the "more rows" note reports it as "<limit>+".
+RESULT_FETCH_LIMIT = 10_000
+
+# Per-cell character cap. Row-based truncation (MAX_RESULT_ROWS) handles "many
+# narrow rows", but a query can return *few* rows whose cells are enormous —
+# e.g. `to_jsonb(ARRAY_AGG(...))` folding a whole table into one JSON blob, so a
+# 2-row `GROUP BY <bool>` result is hundreds of KB. This caps each rendered cell
+# so no single value can flood the agent's context, while still showing the
+# first MAX_CELL_CHARS so the agent sees the cell's shape. 6000 is generous
+# enough that everyday cells are never touched (unlike the old 100-char cut that
+# hid values), so full-precision inspection is preserved for normal results.
+MAX_CELL_CHARS = 6000
+
+
+def _more_rows_note(total_str: str) -> str:
+    """One-line note appended when a result is truncated to ``MAX_RESULT_ROWS``.
+
+    States that the query *succeeded* (so the agent does not mistake the cut for
+    a failure and waste bird-coins re-running it) and how to see more.
+    ``total_str`` is the caller-formatted total (an exact count, or
+    ``"<limit>+"`` when the fetch cap was hit).
+    """
+    return (
+        f"\n... [showing first {MAX_RESULT_ROWS} of {total_str} rows; "
+        "the query ran successfully — add a LIMIT or select fewer columns to see more]"
+    )
+
 
 def _connect(db_dsn: str) -> psycopg2.extensions.connection:
     conn = psycopg2.connect(db_dsn, cursor_factory=psycopg2.extras.RealDictCursor)
@@ -27,8 +61,8 @@ def _execute_query(query: str, db_dsn: str) -> tuple[list[RealDictRow], tuple[Co
         conn.commit()
         lower_q = query.strip().lower()
         if lower_q.startswith("select") or lower_q.startswith("with"):
-            rows = cursor.fetchmany(10_000 + 1)
-            result = rows[:10_000]
+            rows = cursor.fetchmany(RESULT_FETCH_LIMIT + 1)
+            result = rows[:RESULT_FETCH_LIMIT]
         else:
             try:
                 result = cursor.fetchall()
@@ -106,29 +140,62 @@ def preprocess_results(
     return processed
 
 
-def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters=100) -> str:
+def _format_cell(value: Any) -> str:
+    """Render one cell for the text table.
+
+    Container values (JSON/array/composite columns come back as ``list``/``dict``)
+    are serialised as *compact* JSON rather than Python ``repr`` so the agent sees
+    valid, deterministic, double-quoted JSON (``{"aoi":0.0146324,...}``) instead of
+    single-quoted ``repr`` padding — shorter and parseable. Full numeric precision
+    is preserved on purpose: ``execute_sql`` is an inspection tool, so rounding
+    (which lives in ``preprocess_results`` for the submit-time comparison) would
+    hide values the agent needs to verify its query.
+
+    The rendered cell is then clipped to ``MAX_CELL_CHARS`` as a backstop against
+    pathological aggregate cells (see that constant). Clipping is the *last* step
+    so the cap counts the actual serialised characters; a clipped JSON cell is no
+    longer valid JSON, so the marker says so explicitly to stop the agent
+    re-parsing/re-running it.
     """
+    if isinstance(value, (dict, list)):
+        rendered = json.dumps(value, default=str, separators=(",", ":"), sort_keys=True)
+    else:
+        rendered = str(value)
+    return _cap_cell(rendered)
+
+
+def _cap_cell(rendered: str, max_chars: int = MAX_CELL_CHARS) -> str:
+    """Clip a rendered cell to ``max_chars`` total (marker included), so the cell
+    can never exceed the cap. Returns ``rendered`` unchanged when it fits."""
+    if len(rendered) <= max_chars:
+        return rendered
+    marker = f"…[cell truncated to {max_chars} chars; was {len(rendered)}]"
+    return rendered[: max_chars - len(marker)] + marker
+
+
+def _format_result(result: list, cursor_desc: tuple[Column, ...], max_rows: int = MAX_RESULT_ROWS) -> str:
+    """Render the result set as a GitHub-flavored markdown table.
+
     Output:
 
-    sitekey | sitelabel
-    -------------------
-    SP9227 | Solar Plant West Davidport
-    SP6740 | Solar Plant Dillonmouth
-    SP7738 | Solar Plant North Xavier
-    SP7778 | Solar Plant East Alexandriaborough
-    SP9784 | Solar Plant East Jake
-    SP6230 | Solar Plant Gatesview
-    SP6166 | Solar Plant Jacksonport
-    SP9766 | Solar Plant Evanmouth
-    SP1937 | Solar Plant Brittanybury
-    SP6929 | Solar Plant Lake Kathrynburgh
+    | sitekey | sitelabel |
+    | --- | --- |
+    | SP9227 | Solar Plant West Davidport |
+    | SP6740 | Solar Plant Dillonmouth |
+    | SP7738 | Solar Plant North Xavier |
+    | SP7778 | Solar Plant East Alexandriaborough |
+    | SP9784 | Solar Plant East Jake |
+    | SP6230 | Solar Plant Gatesview |
+    | SP6166 | Solar Plant Jacksonport |
+    | SP9766 | Solar Plant Evanmouth |
+    | SP1937 | Solar Plant Brittanybury |
+    | SP6929 | Solar Plant Lake Kathrynburgh |
 
     result = [RealDictRow({'sitekey': 'SP9227', 'sitelabel': 'Solar Plant West Davidport'})]
 
     cursor_desc = (Column(name='sitekey', type_code=25), Column(name='sitelabel', type_code=25))
     """
 
-    # result = preprocess_results(result, cursor_desc)
     if result is None:
         return "Query executed successfully."
 
@@ -136,13 +203,19 @@ def _format_result(result: list, cursor_desc: tuple[Column, ...], max_characters
         return "Query executed, empty result set."
 
     cols = [desc[0] for desc in cursor_desc]
-    header = " | ".join(cols)
+    header = "| " + " | ".join(cols) + " |"
+    separator = "| " + " | ".join("---" for _ in cols) + " |"
 
-    # take the first 100 rows to avoid overwhelming the output, and truncate each cell to max_characters chars
+    # Keep only the first max_rows whole rows so repeated calls don't flood the
+    # agent's context; a note below states how many rows really matched.
     rows = [
-        " | ".join(str(row[col])[:max_characters] for col in cols)
-        for row in result[:100]
+        "| " + " | ".join(_format_cell(row[col]) for col in cols) + " |"
+        for row in result[:max_rows]
     ]
+    table = "\n".join([header, separator, *rows])
 
-    separator = "-" * min(max(len(header), *(len(r) for r in rows)), 200)
-    return "\n".join([header, separator, *rows])
+    if len(result) > max_rows:
+        total = len(result)
+        total_str = f"{RESULT_FETCH_LIMIT}+" if total >= RESULT_FETCH_LIMIT else str(total)
+        table += _more_rows_note(total_str)
+    return table

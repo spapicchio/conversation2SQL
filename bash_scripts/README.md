@@ -26,16 +26,36 @@ just                              # list recipes
 just variants                     # list the valid variant keys
 just eval all_db_all_kb           # local run: qwen35, GPU 1
 just eval all_db_toon_all_kb 0,1  # local run on GPUs 0,1
-just eval gt_db_gt_kb 1 gemma4    # gemma4 profile instead of qwen35
+just eval gt_db_gt_kb 1 gemma4-12B    # gemma4-12B profile instead of qwen35
 just dry all_db_all_kb            # print the resolved commands, launch nothing
 
 # back-to-back local runs (waits for each tmux session before the next)
 just sequential all_db_all_kb all_db_toon_all_kb
+
+# resume a run that partially failed: re-run only the missing/errored instances,
+# appending into that same run directory (pass the leaf dir holding config.yaml)
+just recover results/2026_06_01/13_55_45__no_tool__Qwen3.5-9B__ddl__iter1__error
 ```
+
+`just recover <run_dir>` replays that run's own `config.yaml` snapshot through
+`bash_scripts/recover_payload.sh` (reusing its model/variant/baseline, and
+relaunching a fresh vLLM server for `hosted_vllm` runs) and adds `--resume`. The
+pipeline then skips every `(instance_id, iteration)` pair already present in
+`<run_dir>/results_iter*.jsonl` and runs only what is missing — covering both
+tasks logged to `results_error.jsonl` and tasks a crash never reached. The
+original `config.yaml` is preserved; the resume run's snapshot is written
+alongside as `config_resume_<HH_MM_SS>.yaml`. When the recover resolves every
+outstanding failure the run directory's `__error` suffix is dropped (see
+[Run-directory naming](#run-directory-naming)); if failures remain it is kept.
 
 `just eval` prints a tmux session id; attach with `tmux attach -t <id>`. Logs are
 tee'd to `results/<date>/<time>/tmux_log/{all,warning,error}.log` and the vLLM
 server log to `tmux_log/vllm.log`.
+
+Every launch is recorded in the git-tracked `experiments.csv` at the repo root (a
+`status=running` row at launch, metrics filled in afterwards). Rebuild it anytime
+with `just index`. See [`explorer/README.md`](../explorer/README.md#experiment-tracking-experimentscsv)
+for the columns and the editable `Notes` field.
 
 ### `eval` arguments
 
@@ -45,7 +65,7 @@ just eval VARIANT [gpus=1] [model=qwen35] [debug=false]
 
 - **VARIANT** — eval condition; one of the keys from `just variants`.
 - **gpus** — value for `CUDA_VISIBLE_DEVICES` (e.g. `1`, `0,1`).
-- **model** — model profile: `qwen35` or `gemma4`.
+- **model** — model profile: `qwen35` or `gemma4-12B`.
 - **debug** — `true` limits the run to a few tasks.
 
 ## The two axes
@@ -63,7 +83,8 @@ server flags:
 | profile  | model                       | max-len | thinking |
 |----------|-----------------------------|---------|----------|
 | `qwen35` | `Qwen/Qwen3.5-9B`           | 50000   | true     |
-| `gemma4` | `google/gemma-4-26B-A4B-it` | 32000   | false    |
+| `gemma4-12B` | `google/gemma-4-12B-it` | 32000   | true     |
+| `gemma4-26B-A4B` | `google/gemma-4-26B-A4B-it` | 32000 | true |
 
 **Variants** set the four `run_suite` condition flags:
 
@@ -77,6 +98,26 @@ server flags:
 | `gt_db_gt_kb_linearized`         | ddl         | true      | true  | true          |
 | `gt_db_gt_kb`                    | ddl         | true      | true  | false         |
 
+## Run-directory naming
+
+`build_run_slug()` (in `utils/utils_evaluate.sh`) names each run directory from
+the baseline, model, and variant flags, e.g.:
+
+```
+results/<date>/<time>__no_tool__Qwen3.5-9B__ddl__lin__gt-db__gt-kb__iter5
+                                                                  └─ __error (only if errors remain)
+```
+
+- **`__iter<N>`** — the requested `NUM_ITERATIONS`, so the pass count is visible
+  from the directory name (confirm with `ls <dir>/results_iter*.jsonl`).
+- **`__error`** — appended when the run finishes with *unresolved* errors: an
+  entry in `results_error.jsonl` that has no matching success line in
+  `results_iter*.jsonl`, or a whole-run failure record (no `instance_id`).
+  `results_error.jsonl` is append-only and is **not** cleared on resume, so the
+  suffix is driven by `has_unresolved_errors()`, not by the file merely existing.
+  A successful `just recover` (which fills in the missing pairs) **drops** the
+  suffix; a recover that still leaves failures keeps it.
+
 ## Directory layout
 
 ```
@@ -87,7 +128,7 @@ bash_scripts/
 ├── submit_and_log.sh      # Dispatcher: tmux locally, or sbatch when given a 2nd (job-name) arg.
 ├── evaluation_scripts/
 │   └── gemma4/
-│       └── tool_chat_template_gemma4.jinja   # referenced by the gemma4 profile
+│       └── tool_chat_template_gemma4.jinja   # referenced by the gemma4-12B profile
 ├── slurm/                 # Standalone multi-GPU / multi-node training scripts (separate workflow).
 └── utils/
     ├── utils.sh                  # log_section, setup_idris, cp_files
@@ -156,8 +197,10 @@ cluster run is the launcher.
 - **New variant** — add an entry to `VARIANTS` in `src/conversation2sql/presets.py`
   (the four reader flags) and list the key in the `variants` recipe.
 - **New model profile** — add an entry to `MODEL_PROFILES` in `presets.py`
-  (sampling params) AND a `case` arm under "Model profile" in `eval_payload.sh`
-  for the `vllm serve` args (`MODEL_NAME`, `MAX_MODEL_LEN`, `SERVER_ARGS`), then
-  run `just eval --variant <v> --model <profile>`.
+  (sampling params, context length, and the `server` block driving the `vllm
+  serve` args). That is the single source of truth — `eval_payload.sh` derives
+  `MODEL_NAME`, `MAX_MODEL_LEN`, and `SERVER_ARGS` from it via the
+  `server-config` CLI, so **no bash edit is needed**. Then run
+  `just eval --variant <v> --model <profile>` (or `just dry …` first).
 - **Check before launching** — `just dry <variant> [model]` prints the exact
   `vllm serve` and `run_suite` commands without starting anything.

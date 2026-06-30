@@ -38,15 +38,28 @@ def _extract_raw_sql(text: str) -> str | None:
     matches = list(_SQL_KEYWORD_RE.finditer(text))
     if not matches:
         return None
-    first = matches[0]
-    after = text[first.start():]
+    after = text[matches[0].start():]
     # Don't cross into a later code fence (e.g. an LLM "let me retry" block).
     fence_pos = after.find("```")
     region = after[:fence_pos] if fence_pos != -1 else after
-    # rfind so CTEs (WITH … SELECT … ;) are captured whole, not just the tail.
-    semi_pos = region.rfind(";")
-    candidate = region[:semi_pos + 1].strip() if semi_pos != -1 else region.strip()
-    return candidate if candidate else None
+
+    # Statements are delimited by ';'. Take the LAST segment that begins with a
+    # SQL keyword so a later "final answer" wins over an earlier draft — while a
+    # single multi-line statement (e.g. a CTE spanning several keyword-leading
+    # lines but ending in one ';') stays whole, and trailing prose is dropped.
+    segments = region.split(";")
+    chosen_idx = next(
+        (i for i in reversed(range(len(segments))) if _SQL_KEYWORD_RE.search(segments[i])),
+        None,
+    )
+    if chosen_idx is None:
+        return None
+    keyword = _SQL_KEYWORD_RE.search(segments[chosen_idx])
+    statement = segments[chosen_idx][keyword.start():].strip()
+    # Any segment before the last was, by construction, terminated by ';'.
+    if chosen_idx < len(segments) - 1:
+        statement += ";"
+    return statement if statement else None
 
 
 def extract_sql_from_response(text: str) -> str | None:

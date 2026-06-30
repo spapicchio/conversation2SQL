@@ -1,10 +1,10 @@
 # agents
 
-Two agent implementations for the BIRD-Interact benchmark.
+Three agent implementations for the BIRD-Interact benchmark.
 
 ## Variants
 
-`ConfigPipeline.baseline` selects one of four ablation cells. Two runner functions cover them:
+`ConfigPipeline.baseline` selects one of five ablation cells. Three runner functions cover them:
 
 | `baseline` enum | Runner | DB tools | `ask_user` | Query |
 |-----------------|--------|----------|-----------|-------|
@@ -12,8 +12,11 @@ Two agent implementations for the BIRD-Interact benchmark.
 | `tools_only`    | `run_agent_bird_baseline(enable_ask_user=False)` | ✅ | — | clean |
 | `tools_user`    | `run_agent_bird_baseline(enable_ask_user=True)`  | ✅ | ✅ | clean |
 | `bird_full`     | `run_agent_bird_baseline(enable_ask_user=True)`  | ✅ | ✅ | ambiguous |
+| `deep_agent`    | `run_agent_deep_agent`                            | bash (catalog + psql) | ✅ ask_user | ambiguous |
 
-`bird_baseline/agent_code.py` is the parameterizable agent — `enable_ask_user` toggles the `ask_user` tool and the corresponding Jinja blocks in `prompts.py`. The middleware stack is identical across the three agentic variants.
+`bird_baseline/agent_code.py` is the parameterizable agent — `enable_ask_user` toggles the `ask_user` tool and the corresponding Jinja blocks in `prompts.py`. The middleware stack is identical across the three `bird_baseline` variants.
+
+`deep_agent/` parallels `bird_full` but replaces the schema tools with a single read-only `bash` tool over an on-disk per-task catalog directory (shell commands: `cat`, `ls`, `find`, `grep`, etc.) and uses `psql` through the same tool for SQL — no separate `execute_sql`. The patience budget, `ask_user`, and `submit_sql` are reused unchanged. See `deep_agent/CLAUDE.md`.
 
 ## utils.py
 
@@ -27,9 +30,11 @@ Shared helpers used by both agents:
 Shared KB linearization helpers used by both agents when `is_kb_linearized=True`.
 
 - `linearize_kb(masked_agent_kb)` — emits one `# Subgraph N` section per connected component of the KB DAG. Each section has a `# Dependency edges` block (if that component has edges) and a `# Definitions` block in topological order (leaves first). Returns `""` for an empty KB.
+- `linearize_prerequisites(name, masked_agent_kb)` — returns one entry plus all of its **transitive prerequisites** (follows `children_knowledge`), as a headerless `# Dependency edges` + `# Definitions` section (topo order, leaves first). Dependents are excluded; masked-out prerequisites are skipped. Returns `"Knowledge not found."` if `name` is absent.
 - `format_entry_line(name, masked_agent_kb)` — formats the single `[TOKEN] name - desc - formula: …` line for one entry. Returns `"Knowledge not found."` if the name is absent.
+- `_render_section(ordered, in_kb, token_of)` — private helper shared by `linearize_kb` and `linearize_prerequisites` that renders the edges + definitions blocks (no `# Subgraph` header).
 
-Used by `bird_baseline/tools/bird_interact_env_tools.py` (KB tools when `is_kb_linearized=True`) and `no_tool_baseline/baseline_model.py` (prompt rendering when `is_kb_linearized=True`).
+Used by `bird_baseline/tools/bird_interact_env_tools.py` (KB tools when `is_kb_linearized=True`: `get_knowledge_definition` → `linearize_prerequisites`, `get_all_knowledge_definitions` → `linearize_kb`) and `no_tool_baseline/baseline_model.py` (prompt rendering when `is_kb_linearized=True`).
 
 ## Adding a new agent
 

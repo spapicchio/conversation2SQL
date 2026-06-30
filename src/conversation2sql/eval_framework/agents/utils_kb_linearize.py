@@ -2,14 +2,17 @@
 
 Public interface
 ----------------
-linearize_kb(masked_agent_kb)           -> str   (one # Subgraph N section per connected component)
-format_entry_line(name, masked_agent_kb) -> str  (one definition line, or not-found sentinel)
+linearize_kb(masked_agent_kb)             -> str  (one # Subgraph N section per connected component)
+linearize_prerequisites(name, masked_kb)  -> str  (entry + its transitive prerequisites, edges + topo defs)
+format_entry_line(name, masked_agent_kb)  -> str  (one definition line, or not-found sentinel)
 """
 from __future__ import annotations
 
 import re
 
 from conversation2sql.eval_framework.state import ExternalKnowledgeEntry
+
+MAX_DEPTH = 10
 
 # ---------------------------------------------------------------------------
 # LaTeX -> code-like notation
@@ -229,10 +232,67 @@ def _format_line(entry: ExternalKnowledgeEntry, token: str) -> str:
     name = _strip_token(entry.knowledge)
     desc = (entry.description or "").strip().rstrip(".")
     formula = simplify_latex(entry.definition or "")
-    suffix = f" - formula: {formula}" if formula else ""
-    prefix = f"[{token}] {name}" if name else f"[{token}]"
-    return f"{prefix} - {desc}{suffix}" if desc else f"{prefix}{suffix}"
+    formula = f"- **definition**: {formula}" if formula else ""
+    # prefix = f"- [{token}] {name}" if name else f"## [{token}]"
+    # return f"{prefix}\n{desc}\n{suffix}" if desc else f"{prefix}\n{suffix}"
+    return f"- **description**: {desc}\n{formula}\n" if desc else f"{formula}\n"
 
+
+def _render_section(
+    ordered: list[ExternalKnowledgeEntry],
+    in_kb: set[int],
+    token_of: dict[int, str],
+) -> list[str]:
+    """Render the dependency-edges + definitions blocks for a set of entries.
+
+    ``ordered`` must already be topologically sorted (leaves first). ``in_kb``
+    bounds which children count as edges; ``token_of`` maps node id -> token.
+    Returns the lines without any '# Subgraph N' header so callers can prepend
+    their own (or none).
+    """
+    # edges = [
+    #     (token_of[child_id], token_of[n.id])
+    #     for n in ordered
+    #     for child_id in (n.children_knowledge or [])
+    #     if child_id in in_kb
+    # ]
+
+    # lines: list[str] = []
+    # if edges:
+    #     lines.append("# Dependency edges (prerequisite -> dependent)")
+    #     lines.extend(f"({a}, prerequisite_of, {b})" for a, b in edges)
+    #     lines.append("")
+    # lines.append("# Definitions (topological order: leaves first)")
+    # for n in ordered:
+    #     lines.append(_format_line(n, token_of[n.id]))
+
+    name_of = {n.id: n.knowledge for n in ordered}
+    edges = [
+        (name_of[child_id], name_of[n.id])
+        for n in ordered
+        for child_id in (n.children_knowledge or [])
+        if child_id in in_kb
+    ]
+
+    lines: list[str] = []
+    # if edges:
+    #     lines.append(f"# Prerequisite edges up to {MAX_DEPTH} (topological order: leaves first)")
+    #     lines.extend(f"({a}, prerequisite_of, {b})\n" for a, b in edges[:MAX_DEPTH])
+    #     lines.append("")
+    lines.append(f"# {ordered[-1].knowledge}")
+    lines.append(_format_line(ordered[-1], token_of[ordered[-1].id]))
+    if edges:
+        edges = edges[::-1]  # reverse
+        lines.append("The following are the nodes in the knowledge base that represent the prerequisite edges you can refer to:")
+        if len(edges) > MAX_DEPTH:
+            lines.append(f"Showing only the first {MAX_DEPTH} prerequisite edges.")
+
+        lines.extend(f'- "{b}" needs "{a}"\n' for a, b in edges[:MAX_DEPTH])
+        lines.append("")
+    # for n in ordered:
+        # lines.append(_format_line(n, token_of[n.id]))
+
+    return lines
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -255,24 +315,43 @@ def linearize_kb(masked_agent_kb: dict[str, ExternalKnowledgeEntry]) -> str:
         in_kb = {n.id for n in ordered}
         token_of = {n.id: _extract_token(n.knowledge) for n in ordered}
 
-        edges = [
-            (token_of[child_id], token_of[n.id])
-            for n in ordered
-            for child_id in (n.children_knowledge or [])
-            if child_id in in_kb
-        ]
-
-        lines: list[str] = [f"# Subgraph {idx}"]
-        if edges:
-            lines.append("# Dependency edges (prerequisite -> dependent)")
-            lines.extend(f"({a}, prerequisite_of, {b})" for a, b in edges)
-            lines.append("")
-        lines.append("# Definitions (topological order: leaves first)")
-        for n in ordered:
-            lines.append(_format_line(n, token_of[n.id]))
+        lines = [f"# Subgraph {idx}", *_render_section(ordered, in_kb, token_of)]
         sections.append("\n".join(lines))
 
     return "\n\n".join(sections)
+
+
+def linearize_prerequisites(
+    name: str,
+    masked_agent_kb: dict[str, ExternalKnowledgeEntry],
+) -> str:
+    """Return `name`'s definition plus all of its transitive prerequisites.
+
+    Follows ``children_knowledge`` (prerequisite) edges from `name` to collect
+    every ancestor it depends on, renders them topologically sorted (leaves
+    first) with the dependency-edges block over that subset. Entries that depend
+    *on* `name` are excluded. Prerequisites masked out of the KB are silently
+    skipped. Returns "Knowledge not found." when `name` is absent.
+    """
+    entry = masked_agent_kb.get(name)
+    if entry is None:
+        return "Knowledge not found."
+
+    by_id = {e.id: e for e in masked_agent_kb.values()}
+    collected: set[int] = set()
+    stack = [entry.id]
+    while stack:
+        current = stack.pop()
+        if current in collected or current not in by_id:
+            continue
+        collected.add(current)
+        stack.extend(by_id[current].children_knowledge or [])
+
+    nodes = [by_id[i] for i in collected]
+    ordered = _topological_sort(nodes)
+    in_kb = {n.id for n in ordered}
+    token_of = {n.id: _extract_token(n.knowledge) for n in ordered}
+    return "\n".join(_render_section(ordered, in_kb, token_of))
 
 
 def format_entry_line(

@@ -2,7 +2,8 @@ version: "3.8"
 
 services:
   devcontainer:
-    image: verlai/verl:vllm017.latest
+    # image: verlai/verl:vllm017.latest
+    image: vllm/vllm-openai:v0.23.0
     network_mode: host
     shm_size: '128g'
     cap_add:
@@ -27,7 +28,7 @@ services:
     depends_on:
       - postgresql
       - postgresql_full
-    command: sleep infinity
+    entrypoint: ["sleep", "infinity"]
 
   postgresql:
     image: shawnxxh/bird-interact-postgresql:latest

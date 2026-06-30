@@ -40,6 +40,20 @@ def _extract_enable_thinking(extra: list[str]) -> bool | None:
     return None
 
 
+def _extract_baseline(extra: list[str]) -> str:
+    """Pull the --baseline value out of passthrough args (default: no_tool).
+
+    Presets need the baseline to decide the default thinking mode (tool
+    baselines default to non-thinking) before PydanticParser runs.
+    """
+    for flag in ("--baseline", "--pipeline_baseline"):
+        if flag in extra:
+            i = extra.index(flag)
+            if i + 1 < len(extra):
+                return extra[i + 1].strip()
+    return "no_tool"
+
+
 @app.command(
     context_settings={
         "allow_extra_args": True,
@@ -51,7 +65,7 @@ def run(
     ctx: typer.Context,
     config: Optional[Path] = typer.Option(None, "--config", help="Path to YAML config file."),
     model_profile: Optional[str] = typer.Option(
-        None, "--model-profile", help="Named model preset (e.g. qwen35, gemma4) — expands to predictor sampling flags."
+        None, "--model-profile", help="Named model preset (e.g. qwen35, gemma4-12B) — expands to predictor sampling flags."
     ),
     variant: Optional[str] = typer.Option(
         None, "--variant", help="Named dataset variant (e.g. all_db_all_kb) — expands to reader schema flags."
@@ -71,7 +85,7 @@ def run(
     # Presets are prepended so explicit passthrough flags (which come later in
     # argv) win — argparse keeps the last occurrence of a repeated flag.
     preset_args = expand_presets(
-        model_profile, variant, _extract_enable_thinking(extra)
+        model_profile, variant, _extract_enable_thinking(extra), _extract_baseline(extra)
     )
     args = (["--config", str(config)] if config else []) + preset_args + extra
     if help and config is not None:

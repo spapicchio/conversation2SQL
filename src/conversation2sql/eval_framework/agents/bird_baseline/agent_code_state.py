@@ -4,7 +4,31 @@ from typing import Annotated
 from langchain.agents import AgentState
 
 
+def _keep_lowest_patience(current: float, incoming: float) -> float:
+    """Reducer for `updated_user_patience`: keep the most-terminal (smallest) value.
+
+    (A 2-arg wrapper rather than the `min` builtin, whose C signature LangGraph
+    can't introspect as an `(a, b) -> c` reducer.)
+    """
+    return min(current, incoming)
+
+
 class CustomAgentState(AgentState):
     initial_user_patience: float
-    updated_user_patience: float
+    # Reducer keeps the smallest write. Patience is monotonically non-increasing
+    # within a run, so this is a no-op for the normal single-write decrement path.
+    # It also lets the channel tolerate >1 write in a single super-step, which
+    # happens when the model emits multiple tool calls in one turn and several hit
+    # the block (-1) / terminal-submit (passed -3, exhausted -2) branches in
+    # `tool_wrapper_patience_and_submit` (the most-terminal/smallest value wins, so
+    # a passing submit beats a forced one). Without a
+    # reducer this raises InvalidUpdateError (INVALID_CONCURRENT_GRAPH_UPDATE).
+    #
+    # The type MUST be `float | None`, not `float`: LangGraph maps a reduced
+    # channel to a BinaryOperatorAggregate whose initial value is `typ()`. For
+    # `float` that is `0.0`, so the seeded budget would be merged as
+    # `min(0.0, task_budget) == 0.0` and the conversation would start already
+    # exhausted. A union type is not instantiable, so the channel initialises to
+    # MISSING and takes the first write (the real budget) verbatim instead.
+    updated_user_patience: Annotated[float | None, _keep_lowest_patience]
     tool_called_patience: Annotated[list[float | int], add]
