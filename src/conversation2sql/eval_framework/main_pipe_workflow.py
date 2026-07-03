@@ -37,15 +37,19 @@ def _resolve_baseline_settings(baseline: str) -> tuple[bool, Callable, bool]:
     tools_only -> clean query, agent without ask_user, no user-sim
     tools_user -> clean query, agent with ask_user, user-sim required
     bird_full  -> ambiguous query, agent with ask_user, user-sim required
+    deep_agent -> clean query, bash catalog agent, no ask_user, no user-sim
     """
     table = {
         "no_tool": (False, run_baseline_no_tool, False),
         "tools_only": (False, run_agent_bird_baseline, False),
         "tools_user": (False, run_agent_bird_baseline, True),
         "bird_full": (True, run_agent_bird_baseline, True),
-        # deep_agent parallels bird_full (ambiguous query + ask_user) but swaps
-        # the schema tools for the deepagents virtual filesystem.
-        "deep_agent": (True, run_agent_deep_agent, True),
+        # deep_agent swaps the schema tools for the on-disk catalog + bash tool.
+        # Default is the clean (non-ambiguous) query with no ask_user / user-sim,
+        # to validate bash + KB reading in isolation; ambiguity + ask_user can be
+        # re-enabled here later (flip to (True, ..., True) and add to the
+        # enable_ask_user set below).
+        "deep_agent": (False, run_agent_deep_agent, False),
     }
     if baseline not in table:
         raise ValueError(
@@ -245,7 +249,7 @@ async def _run_tasks_concurrently(
                         model_agent,
                         model_user_parsing,
                         model_user_generator,
-                        enable_ask_user=(baseline in ("tools_user", "bird_full", "deep_agent")),
+                        enable_ask_user=(baseline in ("tools_user", "bird_full")),
                     )
         except Exception as e:
             # Isolate per-task failures: one wedged/erroring task is logged to
@@ -364,7 +368,7 @@ def _init_models(
         max_tokens=config_user.max_new_tokens,
         api_base=config_user.user_simulator_vllm_api_base,
         request_timeout=config_user.request_timeout,
-        num_retries=config_user.num_retries,
+        # num_retries=config_user.num_retries,
         http_client=http_client,
     )
     model_user_generator = utils_create_model(
@@ -373,7 +377,7 @@ def _init_models(
         temperature=config_user.temperature,
         max_tokens=config_user.max_new_tokens,
         request_timeout=config_user.request_timeout,
-        num_retries=config_user.num_retries,
+        # num_retries=config_user.num_retries,
     )
     return model_agent, (model_user_parsing, model_user_generator)
 

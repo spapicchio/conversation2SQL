@@ -12,11 +12,11 @@ Three agent implementations for the BIRD-Interact benchmark.
 | `tools_only`    | `run_agent_bird_baseline(enable_ask_user=False)` | ✅ | — | clean |
 | `tools_user`    | `run_agent_bird_baseline(enable_ask_user=True)`  | ✅ | ✅ | clean |
 | `bird_full`     | `run_agent_bird_baseline(enable_ask_user=True)`  | ✅ | ✅ | ambiguous |
-| `deep_agent`    | `run_agent_deep_agent`                            | bash (catalog + psql) | ✅ ask_user | ambiguous |
+| `deep_agent`    | `run_agent_deep_agent`                            | bash (catalog + psql) | — (default) | clean (default) |
 
 `bird_baseline/agent_code.py` is the parameterizable agent — `enable_ask_user` toggles the `ask_user` tool and the corresponding Jinja blocks in `prompts.py`. The middleware stack is identical across the three `bird_baseline` variants.
 
-`deep_agent/` parallels `bird_full` but replaces the schema tools with a single read-only `bash` tool over an on-disk per-task catalog directory (shell commands: `cat`, `ls`, `find`, `grep`, etc.) and uses `psql` through the same tool for SQL — no separate `execute_sql`. The patience budget, `ask_user`, and `submit_sql` are reused unchanged. See `deep_agent/CLAUDE.md`.
+`deep_agent/` replaces the schema tools with a single read-only `bash` tool over an on-disk per-task catalog directory (shell commands: `cat`, `ls`, `find`, `grep`, etc.) and uses `psql` through the same tool for SQL — no separate `execute_sql`. The patience budget and `submit_sql` are reused unchanged. **It defaults to the clean (non-ambiguous) query with `ask_user` disabled and no user-sim** (`_resolve_baseline_settings` maps it to `(make_data_ambiguous=False, …, needs_user_sim=False)` and it's excluded from the pipeline's `enable_ask_user` set), to validate bash + KB reading in isolation. `ask_user` + ambiguity are still fully supported via `enable_ask_user=True` (re-enable in `_resolve_baseline_settings` + the `enable_ask_user` set). See `deep_agent/CLAUDE.md`.
 
 ## utils.py
 

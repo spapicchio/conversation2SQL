@@ -42,7 +42,7 @@ from pathlib import Path
 
 import pytest
 
-from conversation2sql.eval_framework.agents.deep_agent import bash_tool
+from conversation2sql.eval_framework.agents.deep_agent.tools import bash_tool
 from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_env_tools import (
     PSQL_GUARDRAIL_REFUSAL,
 )

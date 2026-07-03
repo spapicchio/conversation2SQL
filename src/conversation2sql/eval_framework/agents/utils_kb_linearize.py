@@ -5,6 +5,7 @@ Public interface
 linearize_kb(masked_agent_kb)             -> str  (one # Subgraph N section per connected component)
 linearize_prerequisites(name, masked_kb)  -> str  (entry + its transitive prerequisites, edges + topo defs)
 format_entry_line(name, masked_agent_kb)  -> str  (one definition line, or not-found sentinel)
+build_kb_overview(kb, filenames)          -> str  (flat name -> filename -> description index)
 """
 from __future__ import annotations
 
@@ -366,3 +367,53 @@ def format_entry_line(
     if entry is None:
         return "Knowledge not found."
     return _format_line(entry, _extract_token(entry.knowledge))
+
+
+# ---------------------------------------------------------------------------
+# Filename slugging (KB catalog files on disk must be shell-safe: no spaces,
+# parens, etc. — see deep_agent/catalog_seed.py and scripts/generate_catalog.py)
+# ---------------------------------------------------------------------------
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def slugify_kb_name(name: str) -> str:
+    """ASCII snake_case slug of `name`, safe as a bare (unquoted) filename stem."""
+    slug = _SLUG_RE.sub("_", name.lower()).strip("_")
+    return slug or "kb"
+
+
+def build_kb_filenames(kb: dict[str, ExternalKnowledgeEntry]) -> dict[str, str]:
+    """Map each KB name -> a unique slug filename stem.
+
+    Slugging can collide (two distinct names reducing to the same stem); on
+    collision the later entry's stem is suffixed with its `id` to stay unique.
+    """
+    used: set[str] = set()
+    result: dict[str, str] = {}
+    for name, entry in kb.items():
+        slug = slugify_kb_name(name)
+        if slug in used:
+            slug = f"{slug}_{entry.id}"
+        used.add(slug)
+        result[name] = slug
+    return result
+
+
+def build_kb_overview(
+    kb: dict[str, ExternalKnowledgeEntry],
+    filenames: dict[str, str],
+) -> str:
+    """One-line-per-entry index: name, exact filename, description.
+
+    `filenames` is the `build_kb_filenames(kb)` map already computed by the
+    caller to name the per-entry files — passed in rather than recomputed so
+    the index always points at the exact filenames written to disk. Returns
+    `""` for an empty KB (no section to add).
+    """
+    if not kb:
+        return ""
+    lines = [
+        f"- **{entry.knowledge}** (`knowledge_base/{filenames[name]}.md`): {entry.description}"
+        for name, entry in kb.items()
+    ]
+    return "\n".join(lines)

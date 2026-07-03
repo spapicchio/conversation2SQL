@@ -10,7 +10,7 @@ Template variables use ``{{ jinja2 }}`` delimiters.
 from __future__ import annotations
 
 from conversation2sql.eval_framework.agents.bird_baseline.tools import TOOL_SPECS
-from conversation2sql.eval_framework.agents.bird_baseline.tools.tool_specs import (
+from conversation2sql.eval_framework.agents.tool_specs import (
     format_cost,
 )
 from conversation2sql.eval_framework.agents.utils import utils_build_messages

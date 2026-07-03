@@ -101,15 +101,28 @@ needed — the filename is already known from the overview):
   `database_overview.md`'s Knowledge Base index, then `cat
   knowledge_base/<filename>.md`".
 
+### Addendum (same day): `generate_catalog.py` also renders the index
+
+Follow-up request: the on-disk `database_overview.md` (the one a human opens
+directly, e.g. under `data/bird_interact/catalog_bird_interact_lite/<db>/`)
+should show the KB index too, not just the runtime copy. So
+`render_database_overview_markdown` gained an optional `external_kb` param —
+when given (the full, unmasked KB via `_get_external_knowledge`), it appends
+the same `## Knowledge Base` section using `build_kb_overview` +
+`build_kb_filenames`. `generate_catalog_for_db` now passes it in.
+
+This reintroduces the leak risk flagged as the reason to reject "option B"
+above: the disk file now *does* carry an unmasked KB section.
+`materialize_catalog_dir` handles it by **stripping** that section before
+appending its own masked one, rather than copying-then-appending:
+`base, _, _ = text.partition("\n## Knowledge Base")` keeps everything before
+the marker (table content, present regardless of the split matching), then
+the masked section is appended fresh. No section ever survives from disk —
+either there wasn't one (`partition` finds nothing, `base` is the whole file)
+or there was one and it's discarded outright.
+
 ### Out of scope
 
-- `scripts/generate_catalog.py` is **not** changed. The on-disk
-  `database_overview.md` it writes stays table-only; the merge happens only at
-  runtime in `catalog_seed.py`. Rationale: the on-disk file is DB-level and
-  unmasked, while the KB section must reflect per-task masking — pre-rendering
-  an unmasked KB section on disk and then having runtime code find/replace it
-  would require brittle text-marker parsing for no real benefit, since nothing
-  else reads the on-disk file directly.
 - No dependency-edge / DAG information in the overview (that's what individual
   `knowledge_base/<file>.md` files already show via
   `linearize_prerequisites`); the overview is a flat index only.

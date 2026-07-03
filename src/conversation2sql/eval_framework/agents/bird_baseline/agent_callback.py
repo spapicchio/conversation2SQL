@@ -174,82 +174,99 @@ def wrap_model_append_tool_message(
     )
 
 
-@wrap_tool_call
-def tool_wrapper_patience_and_submit(
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command],
-) -> ToolMessage | Command:
-    tool_name = request.tool_call["name"]
-    cost = TOOL_COSTS.get(tool_name, 0.0)
-    runtime: ToolRuntime[TaskData, CustomAgentState] = request.runtime
-    user_patience = runtime.state["updated_user_patience"]
+def make_tool_wrapper_patience_and_submit(tool_costs: dict[str, float]):
+    """Build the patience/submit tool-wrapper middleware for a given cost table.
 
-    # Block any non-`submit_sql` tool whose cost would exceed the remaining budget.
-    # `submit_sql` is always allowed so the agent can finalize even when out of budget.
-    if user_patience < cost and tool_name != "submit_sql":
-        return Command(
-            update={
-                "messages": [
-                    ToolMessage(
-                        content=f"Budget exhausted ({user_patience:.1f} remaining). "
-                                "You MUST call submit_sql now with your best SQL.",
-                        tool_call_id=request.tool_call["id"],
-                        # Name the message after the blocked tool so downstream
-                        # serialisation/explorer code never sees a None tool name.
-                        name=tool_name,
-                    )
-                ],
-                'updated_user_patience': PATIENCE_BLOCKED
-            },
-        )
+    Each agent has its own tool set (e.g. deep_agent's single ``bash`` tool
+    replaces bird_baseline's ``execute_sql``/``get_schema``/…), so the cost
+    lookup must be parametrized per-agent rather than hardcoded to
+    bird_baseline's ``TOOL_COSTS`` — a tool name absent from that table would
+    silently cost 0.0 and never deduct from the patience budget.
+    """
 
-    response = handler(request)
+    @wrap_tool_call
+    def tool_wrapper_patience_and_submit(
+            request: ToolCallRequest,
+            handler: Callable[[ToolCallRequest], ToolMessage | Command],
+    ) -> ToolMessage | Command:
+        tool_name = request.tool_call["name"]
+        cost = tool_costs.get(tool_name, 0.0)
+        runtime: ToolRuntime[TaskData, CustomAgentState] = request.runtime
+        user_patience = runtime.state["updated_user_patience"]
 
-    if tool_name == "submit_sql":
-        tool_output = json.loads(response.content)
-
-        # Decide whether this submit ends the episode, and *why*. A passing submit
-        # is a clean success; a non-passing submit reached only because the budget
-        # ran out is a forced finalize. The two map to distinct terminal sentinels
-        # so `check_budget_limit` can word the closing message correctly.
-        if tool_output["passed"]:
-            terminal_patience = PATIENCE_SUBMIT_PASSED
-        elif user_patience < 0:
-            terminal_patience = PATIENCE_SUBMIT_EXHAUSTED
-        else:
-            terminal_patience = None  # wrong SQL but budget remains → let the agent retry
-
-        if terminal_patience is not None:
-            # Preserve the FULL tool response (with the `passed` field and the
-            # submit_sql tool name) so downstream metric extraction in
-            # `utils_process_agent_response` can read `execution_accuracy` and the
-            # explorer renders the turn with its tool name. Rewriting the content
-            # to just the message string would drop `passed` and break scoring.
+        # Block any non-`submit_sql` tool whose cost would exceed the remaining budget.
+        # `submit_sql` is always allowed so the agent can finalize even when out of budget.
+        if user_patience < cost and tool_name != "submit_sql":
             return Command(
                 update={
-                    "messages": [response.model_copy(deep=True)],
-                    "updated_user_patience": terminal_patience,
+                    "messages": [
+                        ToolMessage(
+                            content=f"Budget exhausted ({user_patience:.1f} remaining). "
+                                    "You MUST call submit_sql now with your best SQL.",
+                            tool_call_id=request.tool_call["id"],
+                            # Name the message after the blocked tool so downstream
+                            # serialisation/explorer code never sees a None tool name.
+                            name=tool_name,
+                        )
+                    ],
+                    'updated_user_patience': PATIENCE_BLOCKED
                 },
             )
 
-        # SQL did not pass yet → fall through to record the cost and let the agent retry.
+        response = handler(request)
 
-    # deepagents' state-updating tools (write_todos / task / write_file / edit_file)
-    # return a langgraph `Command` rather than a `ToolMessage`. A Command has no
-    # `model_copy`; rewrapping it would also drop the tool's own state update (its
-    # messages plus e.g. `todos` / `files`). Thread the cost into the Command's
-    # existing update instead — `tool_called_patience` uses an additive reducer,
-    # so it accumulates alongside any cost already written this super-step.
-    if isinstance(response, Command) and isinstance(response.update, dict):
-        prior = response.update.get("tool_called_patience", [])
-        merged = {**response.update, "tool_called_patience": [*prior, cost]}
-        return replace(response, update=merged)
+        if tool_name == "submit_sql":
+            tool_output = json.loads(response.content)
 
-    # Default path: persist the tool message and record the cost so that
-    # `wrap_model_append_tool_message` can deduct it from the patience budget.
-    return Command(
-        update={
-            "messages": [response.model_copy(deep=True)],
-            "tool_called_patience": [cost],
-        },
-    )
+            # Decide whether this submit ends the episode, and *why*. A passing submit
+            # is a clean success; a non-passing submit reached only because the budget
+            # ran out is a forced finalize. The two map to distinct terminal sentinels
+            # so `check_budget_limit` can word the closing message correctly.
+            if tool_output["passed"]:
+                terminal_patience = PATIENCE_SUBMIT_PASSED
+            elif user_patience < 0:
+                terminal_patience = PATIENCE_SUBMIT_EXHAUSTED
+            else:
+                terminal_patience = None  # wrong SQL but budget remains → let the agent retry
+
+            if terminal_patience is not None:
+                # Preserve the FULL tool response (with the `passed` field and the
+                # submit_sql tool name) so downstream metric extraction in
+                # `utils_process_agent_response` can read `execution_accuracy` and the
+                # explorer renders the turn with its tool name. Rewriting the content
+                # to just the message string would drop `passed` and break scoring.
+                return Command(
+                    update={
+                        "messages": [response.model_copy(deep=True)],
+                        "updated_user_patience": terminal_patience,
+                    },
+                )
+
+            # SQL did not pass yet → fall through to record the cost and let the agent retry.
+
+        # deepagents' state-updating tools (write_todos / task / write_file / edit_file)
+        # return a langgraph `Command` rather than a `ToolMessage`. A Command has no
+        # `model_copy`; rewrapping it would also drop the tool's own state update (its
+        # messages plus e.g. `todos` / `files`). Thread the cost into the Command's
+        # existing update instead — `tool_called_patience` uses an additive reducer,
+        # so it accumulates alongside any cost already written this super-step.
+        if isinstance(response, Command) and isinstance(response.update, dict):
+            prior = response.update.get("tool_called_patience", [])
+            merged = {**response.update, "tool_called_patience": [*prior, cost]}
+            return replace(response, update=merged)
+
+        # Default path: persist the tool message and record the cost so that
+        # `wrap_model_append_tool_message` can deduct it from the patience budget.
+        return Command(
+            update={
+                "messages": [response.model_copy(deep=True)],
+                "tool_called_patience": [cost],
+            },
+        )
+
+    return tool_wrapper_patience_and_submit
+
+
+# Default instance for bird_baseline (and any caller that doesn't need a
+# custom tool set): costed from bird_baseline's own TOOL_COSTS table.
+tool_wrapper_patience_and_submit = make_tool_wrapper_patience_and_submit(TOOL_COSTS)

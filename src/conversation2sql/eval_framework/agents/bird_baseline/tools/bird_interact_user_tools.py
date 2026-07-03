@@ -33,7 +33,7 @@ from langgraph.prebuilt import ToolRuntime
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state import (
     CustomAgentState,
 )
-from conversation2sql.eval_framework.agents.bird_baseline.tools.tool_specs import (
+from conversation2sql.eval_framework.agents.tool_specs import (
     ToolSpec,
     stamp_cost_in_descriptions,
 )

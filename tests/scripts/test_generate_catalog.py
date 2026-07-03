@@ -13,12 +13,16 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 from extract_ddl import Column, ForeignKey, Table, _render_table_ddl  # noqa: E402
 from generate_catalog import (  # noqa: E402
     _enums_used_by_table,
+    _generate_kb_for_db,
     fetch_referenced_by,
     generate_catalog_for_db,
     load_column_meanings,
     render_constraints_markdown,
+    render_database_overview_markdown,
     render_table_markdown,
 )
+
+from conversation2sql.eval_framework.state import ExternalKnowledgeEntry  # noqa: E402
 
 
 def _col(name: str, data_type: str) -> Column:
@@ -54,6 +58,52 @@ def test_enums_used_by_table_empty_when_none_used():
     columns = [_col("id", "integer")]
     all_enums = [("account_status", ["active", "closed"])]
     assert _enums_used_by_table(columns, all_enums) == []
+
+
+def test_generate_kb_for_db_slugifies_filenames_with_spaces_and_parens(
+    tmp_path, monkeypatch
+):
+    entry = ExternalKnowledgeEntry(
+        id=1,
+        knowledge="Coherent Information Pattern (CIP)",
+        description="",
+        definition="",
+        type="domain_knowledge",
+        children_knowledge=[],
+    )
+    monkeypatch.setattr(
+        "generate_catalog._get_external_knowledge",
+        lambda dataset_path, database: {"Coherent Information Pattern (CIP)": entry},
+    )
+
+    written = _generate_kb_for_db(tmp_path, "mydb", tmp_path)
+
+    assert written == 1
+    assert (tmp_path / "coherent_information_pattern_cip.md").exists()
+    assert not (tmp_path / "Coherent Information Pattern (CIP).md").exists()
+
+
+def test_render_database_overview_without_kb_has_no_kb_section():
+    result = render_database_overview_markdown("mydb", ["users"])
+    assert "## Knowledge Base" not in result
+
+
+def test_render_database_overview_includes_kb_index():
+    kb = {
+        "Active User (AU)": ExternalKnowledgeEntry(
+            id=1,
+            knowledge="Active User (AU)",
+            description="logged in recently",
+            definition="",
+            type="domain_knowledge",
+            children_knowledge=[],
+        ),
+    }
+    result = render_database_overview_markdown("mydb", ["users"], kb)
+    assert "## Knowledge Base" in result
+    assert "Active User (AU)" in result
+    assert "knowledge_base/active_user_au.md" in result
+    assert "logged in recently" in result
 
 
 def _write_meaning_file(tmp_path: Path, db_name: str, payload: dict) -> Path:
@@ -215,12 +265,46 @@ def test_render_constraints_markdown_lists_pks_and_fks():
     md = render_constraints_markdown("mydb", [customers, order_items])
     assert "# constraints: mydb" in md
     assert "## Primary keys" in md
-    assert "| customers | id |" in md
-    assert "| order_items | order_id, product_id |" in md
+    assert (
+        'ALTER TABLE "customers" ADD CONSTRAINT "pk_customers" '
+        'PRIMARY KEY ("id");'
+    ) in md
+    assert (
+        'ALTER TABLE "order_items" ADD CONSTRAINT "pk_order_items" '
+        'PRIMARY KEY ("order_id", "product_id");'
+    ) in md
     assert "## Foreign keys" in md
-    assert "| customers | region_id | regions(id) | NO ACTION |" in md
-    assert "| order_items | order_id | orders(id) | CASCADE |" in md
-    assert "| order_items | product_id | products(id) | RESTRICT |" in md
+    assert (
+        'ALTER TABLE "customers" ADD CONSTRAINT "fk_customers_region_id" '
+        'FOREIGN KEY ("region_id") REFERENCES "regions" ("id");'
+    ) in md
+    assert (
+        'ALTER TABLE "order_items" ADD CONSTRAINT "fk_order_items_order_id" '
+        'FOREIGN KEY ("order_id") REFERENCES "orders" ("id");'
+    ) in md
+    assert (
+        'ALTER TABLE "order_items" ADD CONSTRAINT "fk_order_items_product_id" '
+        'FOREIGN KEY ("product_id") REFERENCES "products" ("id");'
+    ) in md
+    # ON DELETE is intentionally omitted from this file's FK statements.
+    assert "ON DELETE" not in md
+
+
+def test_render_constraints_markdown_skips_tables_without_pk_or_fk():
+    no_key_table = Table(
+        schema="public",
+        examples_str="",
+        name="lookup",
+        columns=[_col("label", "text")],
+        foreign_keys=[],
+        indexes=[],
+        checks=[],
+        composite_pk=[],
+    )
+    md = render_constraints_markdown("mydb", [no_key_table])
+    assert "## Primary keys" in md
+    assert "## Foreign keys" in md
+    assert "ALTER TABLE" not in md
 
 
 @pytest.mark.skipif(not _DB_AVAILABLE, reason="postgres :5432 not reachable")

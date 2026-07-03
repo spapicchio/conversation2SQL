@@ -23,7 +23,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import (
     submit_sql,
     return_tool_ask_user,
 )
-from conversation2sql.eval_framework.agents.bird_baseline.tools.tool_specs import (
+from conversation2sql.eval_framework.agents.tool_specs import (
     ToolSpec,
     format_cost,
     stamp_cost_in_descriptions,

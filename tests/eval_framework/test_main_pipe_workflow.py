@@ -23,6 +23,7 @@ class TestResolveBaselineSettings:
         ("tools_only", False, False),
         ("tools_user", False, True),
         ("bird_full", True, True),
+        ("deep_agent", False, False),
     ])
     def test_resolves(self, baseline, expected_amb, expected_user_sim):
         amb, runner, needs = _resolve_baseline_settings(baseline)

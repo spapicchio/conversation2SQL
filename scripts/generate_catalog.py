@@ -41,6 +41,8 @@ Run with ``--help`` for the full list of options.
 
 from __future__ import annotations
 from conversation2sql.eval_framework.agents.utils_kb_linearize import (
+    build_kb_filenames,
+    build_kb_overview,
     linearize_prerequisites,
 )
 from conversation2sql.eval_framework.dataset_readers.bird_interact_reader import (
@@ -429,38 +431,58 @@ def _primary_key_columns(table: Table) -> list[str]:
 def render_constraints_markdown(database: str, tables: list[Table]) -> str:
     """Render a single Markdown file listing every PK/FK constraint in the db.
 
-    One ``## Primary keys`` table (table -> key columns) followed by one
-    ``## Foreign keys`` table (table.column -> referenced table.column, plus the
-    ON DELETE action). Tables are listed in the order they were loaded.
+    A ``## Primary keys`` fenced SQL block (one ``ALTER TABLE ... ADD
+    CONSTRAINT ... PRIMARY KEY (...);`` statement per table that has a PK)
+    followed by a ``## Foreign keys`` fenced SQL block (one ``ALTER TABLE ...
+    ADD CONSTRAINT ... FOREIGN KEY (...) REFERENCES ...;`` statement per FK,
+    no ``ON DELETE`` clause). Tables are listed in the order they were loaded.
     """
     lines: list[str] = []
     lines.append(f"# constraints: {database}")
     lines.append("")
 
     lines.append("## Primary keys")
-    lines.append("| table | columns |")
-    lines.append("| --- | --- |")
+    lines.append("```sql")
     for table in tables:
         pk_cols = _primary_key_columns(table)
         if not pk_cols:
             continue
-        cols = _md_cell(", ".join(pk_cols))
-        lines.append(f"| {_md_cell(table.name)} | {cols} |")
+        cols = ", ".join(f'"{c}"' for c in pk_cols)
+        lines.append(
+            f'ALTER TABLE "{table.name}" ADD CONSTRAINT "pk_{table.name}" '
+            f"PRIMARY KEY ({cols});"
+        )
+    lines.append("```")
     lines.append("")
 
     lines.append("## Foreign keys")
-    lines.append("| table | column | references |")
-    lines.append("| --- | --- | --- |")
+    lines.append("```sql")
     for table in tables:
         for fk in table.foreign_keys:
-            ref = _md_cell(f"{fk.ref_table}({fk.ref_column})")
-            lines.append(f"| {_md_cell(table.name)} | {_md_cell(fk.column)} | {ref} |")
+            lines.append(
+                f'ALTER TABLE "{table.name}" '
+                f'ADD CONSTRAINT "fk_{table.name}_{fk.column}" '
+                f'FOREIGN KEY ("{fk.column}") '
+                f'REFERENCES "{fk.ref_table}" ("{fk.ref_column}");'
+            )
+    lines.append("```")
     lines.append("")
     return "\n".join(lines)
 
 
-def render_database_overview_markdown(database: str, table_names: list[str]) -> str:
-    """Render ``_overview.md`` for a database: DB description + per-table bullet list."""
+def render_database_overview_markdown(
+    database: str,
+    table_names: list[str],
+    external_kb: dict | None = None,
+) -> str:
+    """Render ``database_overview.md``: DB description + per-table bullet list
+    + (when ``external_kb`` is given) a Knowledge Base index of every entry.
+
+    ``external_kb`` here is the full, unmasked KB (this file is a DB-level,
+    not task-level, artifact) — the deep_agent's per-task catalog dir
+    re-renders this section from the task's masked KB at runtime instead of
+    trusting this disk copy, so no masked entry actually reaches the agent.
+    """
     lines: list[str] = []
     lines.append(f"# database: {database}")
     lines.append("")
@@ -472,6 +494,13 @@ def render_database_overview_markdown(database: str, table_names: list[str]) -> 
     for name in table_names:
         desc = table_descs.get(name.lower(), "")
         lines.append(f"- **{name}**: {desc}")
+    if external_kb:
+        filenames = build_kb_filenames(external_kb)
+        kb_overview = build_kb_overview(external_kb, filenames)
+        if kb_overview:
+            lines.append("")
+            lines.append("## Knowledge Base")
+            lines.append(kb_overview)
     lines.append("")
     return "\n".join(lines)
 
@@ -567,10 +596,10 @@ def _generate_kb_for_db(dataset_path, database, kb_out):
     """
 
     external_kb = _get_external_knowledge(dataset_path, database)
-    # print(external_kb)
+    filenames = build_kb_filenames(external_kb)
     written = 0
     for kb_name in external_kb:
-        kb_file = kb_out / f"{kb_name}.md"
+        kb_file = kb_out / f"{filenames[kb_name]}.md"
         kb_linearize_content = linearize_prerequisites(kb_name, external_kb)
         kb_file.write_text(kb_linearize_content, encoding="utf-8")
         written += 1
@@ -606,9 +635,10 @@ def generate_catalog_for_db(
         written_kb = _generate_kb_for_db(dataset_path, database, kb_out)
         if only_table is None:
             table_names = fetch_tables(conn, schema)
-            overview_md = render_database_overview_markdown(database, table_names)
+            external_kb = _get_external_knowledge(dataset_path, database)
+            overview_md = render_database_overview_markdown(database, table_names, external_kb)
             (output_dir / database / "database_overview.md").write_text(overview_md, encoding="utf-8")
-            logger.info("wrote overview file %s", output_dir / database / "_overview.md")
+            logger.info("wrote overview file %s", output_dir / database / "database_overview.md")
         logger.info(
             f"catalog generation for {database} complete: {written_tbl} table(s), {written_kb} knowledge base(s)",
         )

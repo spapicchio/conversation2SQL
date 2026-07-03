@@ -24,17 +24,18 @@ creates a fresh temp dir per task run, populated from
 
 | Path | Source | Rendering |
 |------|--------|-----------|
-| `<tmp>/database_overview.md` | `<catalog>/<db>/database_overview.md` on disk | copied if present; silently skipped if absent |
+| `<tmp>/database_overview.md` | `<catalog>/<db>/database_overview.md` on disk | copied if present (silently skipped if absent); any `## Knowledge Base` section already on disk (rendered by `generate_catalog.py` from the full, unmasked KB) is stripped and replaced with one rendered fresh per task from `masked_agent_kb` — name → exact `knowledge_base/<file>.md` → description |
 | `<tmp>/tables/<table>.md` | `<catalog>/<db>/tables/*.md` on disk | read verbatim (DDL + columns w/ descriptions + FKs) |
 | `<tmp>/tables/_foreign_key_constraints.md` | disk | all PK/FK constraints in the db |
 | `<tmp>/knowledge_base/<node>.md` | `masked_agent_kb` | one file per surviving node, re-rendered via `linearize_prerequisites` (node name used as-is, unsanitized); masked prerequisites never appear |
 
-The KB is re-rendered per task from `masked_agent_kb` (not read from the catalog's
-on-disk `knowledge_base/`), so per-sample masking is faithful: a masked prerequisite is
-never collected and its dangling edge never renders. `deep_catalog_root` is set per run
-(e.g. `data/bird_interact/catalog_bird_interact_lite`); a missing `<db>/tables/`
-directory raises `FileNotFoundError`. The temp dir is cleaned up in a `finally` block
-after each task run.
+The KB (both the individual files and the index in `database_overview.md`) is
+re-rendered per task from `masked_agent_kb` (never trusted from the on-disk file), so
+per-sample masking is faithful: a masked entry is never collected and its dangling
+edge/index line never renders. `deep_catalog_root` is set per run (e.g.
+`data/bird_interact/catalog_bird_interact_lite`); a missing `<db>/tables/` directory
+raises `FileNotFoundError`. The temp dir is cleaned up in a `finally` block after each
+task run.
 
 **Tools (3)** — `bash` (read-only shell + psql), `ask_user`, and `submit_sql`. The
 `bash` tool validates commands against a whitelist (`cat`, `ls`, `find`, `grep`, `head`,

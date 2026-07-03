@@ -2,7 +2,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute
     _execute_query,
 )
 
-from conversation2sql.eval_framework.agents.bird_baseline.tools.tool_specs import (
+from conversation2sql.eval_framework.agents.tool_specs import (
     ToolSpec,
     format_cost,
     stamp_cost_in_descriptions,

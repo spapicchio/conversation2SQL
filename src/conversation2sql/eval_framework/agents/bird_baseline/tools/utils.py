@@ -44,6 +44,11 @@ def _segment_sql_and_parse_in_str(sql, dialect: str = "postgres"):
     return "\n\n".join(f"{clause}:\n{text}" for clause, text in segs)
 
 
+_NUMERIC_CAST_RE = re.compile(
+    r"::\s*numeric(?:\s*\(\s*\d+(?:\s*,\s*\d+)?\s*\))?", re.IGNORECASE
+)
+
+
 def remove_round(sql_string: str) -> str:
     def find_matching_paren(text, start):
         depth = 0
@@ -81,6 +86,12 @@ def remove_round(sql_string: str) -> str:
         if close_p == -1:
             break
         first_arg = result[open_p + 1 : first_end].strip()
+        # Postgres's two-arg ROUND(numeric, int) requires a numeric input, so a
+        # ::numeric cast inside the stripped argument is a rounding artifact
+        # (forced by ROUND itself), not an independent semantic choice — strip
+        # it along with ROUND(...) so the comparison uses the same arithmetic
+        # path as the (uncast) gold query. Casts outside this argument are untouched.
+        first_arg = _NUMERIC_CAST_RE.sub("", first_arg).strip()
         result = result[:start] + first_arg + result[close_p + 1 :]
     return result
 

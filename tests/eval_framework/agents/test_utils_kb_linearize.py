@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from conversation2sql.eval_framework.agents.utils_kb_linearize import (
+    build_kb_filenames,
+    build_kb_overview,
     format_entry_line,
     linearize_kb,
     linearize_prerequisites,
+    slugify_kb_name,
 )
 from conversation2sql.eval_framework.state import ExternalKnowledgeEntry
 
@@ -209,3 +212,73 @@ def test_subgraph_ordering_by_min_node_id():
     # Subgraph 1 should contain the entry with id=1 (Low)
     sub1 = result.split("# Subgraph 2")[0]
     assert "Low (L)" in sub1
+
+
+def test_slugify_kb_name_replaces_spaces_and_parens():
+    assert slugify_kb_name("Coherent Information Pattern (CIP)") == "coherent_information_pattern_cip"
+
+
+def test_slugify_kb_name_collapses_repeated_separators():
+    assert slugify_kb_name("Net  Profit -- Margin!!") == "net_profit_margin"
+
+
+def test_slugify_kb_name_strips_leading_trailing_separators():
+    assert slugify_kb_name("  (Total)  ") == "total"
+
+
+def test_build_kb_filenames_slugifies_each_name():
+    kb = {
+        "Active User (AU)": _entry(1, "Active User (AU)"),
+        "Net Profit (NP)": _entry(2, "Net Profit (NP)"),
+    }
+    filenames = build_kb_filenames(kb)
+    assert filenames == {
+        "Active User (AU)": "active_user_au",
+        "Net Profit (NP)": "net_profit_np",
+    }
+
+
+def test_build_kb_filenames_disambiguates_collision_with_entry_id():
+    # Two distinct names that slugify to the same stem; id (not insertion
+    # order) disambiguates, so use a non-sequential id to prove that.
+    kb = {
+        "CIP!": _entry(1, "CIP!"),
+        "CIP?": _entry(42, "CIP?"),
+    }
+    filenames = build_kb_filenames(kb)
+    assert filenames["CIP!"] == "cip"
+    assert filenames["CIP?"] == "cip_42"
+
+
+# ---------------------------------------------------------------------------
+# build_kb_overview — flat name -> filename -> description index
+# ---------------------------------------------------------------------------
+
+def test_build_kb_overview_empty_kb_returns_empty_string():
+    assert build_kb_overview({}, {}) == ""
+
+
+def test_build_kb_overview_one_line_per_entry():
+    kb = {
+        "Active User (AU)": _entry(1, "Active User (AU)", description="logged in recently"),
+        "Net Profit (NP)": _entry(2, "Net Profit (NP)", description="revenue minus costs"),
+    }
+    filenames = build_kb_filenames(kb)
+    result = build_kb_overview(kb, filenames)
+    lines = result.splitlines()
+    assert len(lines) == 2
+    assert "Active User (AU)" in lines[0]
+    assert "knowledge_base/active_user_au.md" in lines[0]
+    assert "logged in recently" in lines[0]
+    assert "Net Profit (NP)" in lines[1]
+    assert "knowledge_base/net_profit_np.md" in lines[1]
+    assert "revenue minus costs" in lines[1]
+
+
+def test_build_kb_overview_omits_masked_out_entries():
+    """Only names present in the (masked) kb dict are indexed."""
+    kb = {"Active User (AU)": _entry(1, "Active User (AU)", description="logged in recently")}
+    filenames = build_kb_filenames(kb)
+    result = build_kb_overview(kb, filenames)
+    assert "Active User (AU)" in result
+    assert "Net Profit" not in result

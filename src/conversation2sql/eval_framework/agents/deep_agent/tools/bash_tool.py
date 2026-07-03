@@ -25,9 +25,12 @@ ALLOWED_COMMANDS: frozenset[str] = frozenset(
     {"cat", "ls", "find", "grep", "head", "tail", "wc", "psql"}
 )
 # Shell control constructs we never allow (a first-token whitelist alone does not
-# stop `;`/`&&`/command-substitution). Conservative by design: a quoted
-# occurrence is also refused — an acceptable false-positive for read-only use.
-_FORBIDDEN_METACHARS: tuple[str, ...] = (";", "&", "||", ">", "<", "`", "$(", "${", "\n")
+# stop `;`/`&&`/command-substitution) when they appear *outside* quotes, where
+# the shell actually interprets them. `;`/`&`/`||`/`>`/`<`/newline are literal
+# text once quoted (single or double), so e.g. `psql -c "SELECT 1;"` — the form
+# our own docstring tells the model to use — is fine. Backtick and `$(`/`${`
+# stay dangerous even inside double quotes, since bash still expands them
+# there; only single quotes neutralize them.
 
 _TIMEOUT_S = 65
 _STDOUT_CAP = 8000
@@ -88,11 +91,68 @@ def _segments(tokens: list[str]) -> list[list[str]]:
     return segments
 
 
+_STDERR_TO_DEVNULL = "2>/dev/null"
+
+
+def _is_stderr_devnull_at(command: str, i: int) -> bool:
+    """True if `command[i:]` starts with a standalone `2>/dev/null` token —
+    the one redirect we allow unquoted, since it only discards a whitelisted
+    command's stderr and can't write anywhere or leak data (unlike a general
+    `>`/`<` redirect)."""
+    end = i + len(_STDERR_TO_DEVNULL)
+    return (
+        command[i:end] == _STDERR_TO_DEVNULL
+        and (i == 0 or command[i - 1].isspace())
+        and (end == len(command) or command[end].isspace())
+    )
+
+
+def _has_unquoted_forbidden_metachar(command: str) -> bool:
+    """True if `command` contains a shell metacharacter the way the shell would
+    actually interpret it: `;`/`&`/`||`/`>`/`<`/newline only count when
+    unquoted; backtick and `$(`/`${` count even inside double quotes (bash
+    still expands them there). Unbalanced quotes are left for `shlex.split` to
+    reject with the whitelist message. The lone exception is a standalone
+    unquoted `2>/dev/null` (see `_is_stderr_devnull_at`)."""
+    state: str | None = None  # None, "'", or '"'
+    i, n = 0, len(command)
+    while i < n:
+        c = command[i]
+        if state == "'":
+            if c == "'":
+                state = None
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            i += 2
+            continue
+        if c == "'" and state is None:
+            state = "'"
+            i += 1
+            continue
+        if c == '"':
+            state = None if state == '"' else '"'
+            i += 1
+            continue
+        if c == "`" or (c == "$" and i + 1 < n and command[i + 1] in "({"):
+            return True
+        if state is None:
+            if c == "2" and _is_stderr_devnull_at(command, i):
+                i += len(_STDERR_TO_DEVNULL)
+                continue
+            if c in (";", "&", ">", "<", "\n"):
+                return True
+            if c == "|" and i + 1 < n and command[i + 1] == "|":
+                return True
+        i += 1
+    return False
+
+
 def _refusal(command: str) -> str | None:
     """Return a refusal message if `command` is not an allowed read-only shell
     line, else None. Order: metachars → tokenizing → per-segment whitelist →
     psql host-command guardrail."""
-    if any(m in command for m in _FORBIDDEN_METACHARS):
+    if _has_unquoted_forbidden_metachar(command):
         return METACHAR_REFUSAL
     try:
         tokens = shlex.split(command)
@@ -128,7 +188,9 @@ def return_tool_bash(catalog_dir: Path, pg_env: dict[str, str]):
         No connection flags are needed — credentials are pre-injected as env vars.
         Informational meta-commands such as \\dt, \\d <table>, \\l, \\df are allowed;
         host-reaching ones (\\!, \\o, \\copy, \\i) are blocked.
-        Shell control characters (; & > < ` newline) are never allowed."""
+        Shell control characters (; & > < ` newline) are never allowed outside of
+        quotes — a `;` terminating your quoted SQL is fine. A trailing
+        `2>/dev/null` to silence stderr is also allowed."""
         refusal = _refusal(command)
         if refusal is not None:
             return refusal

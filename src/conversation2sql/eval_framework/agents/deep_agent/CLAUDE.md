@@ -1,10 +1,17 @@
 # deep_agent
 
-A BIRD-Interact evaluation baseline. It parallels `bird_full` (ambiguous query +
-`ask_user`, under the bird-coin patience budget) but **replaces the `get_schema`-style
-DB tools with a single read-only `bash` tool**: the agent explores the database by
-reading per-task catalog files on disk via shell commands (`cat`, `ls`, `find`, `grep`,
-etc.), and runs read-only SQL through `psql` — the same tool, no separate `execute_sql`.
+A BIRD-Interact evaluation baseline (under the bird-coin patience budget) that
+**replaces the `get_schema`-style DB tools with a single read-only `bash` tool**: the
+agent explores the database by reading per-task catalog files on disk via shell commands
+(`cat`, `ls`, `find`, `grep`, etc.), and runs read-only SQL through `psql` — the same
+tool, no separate `execute_sql`.
+
+**Default: clean (non-ambiguous) query, `ask_user` disabled, no user-sim** — chosen so
+bash + KB reading can be validated in isolation. `enable_ask_user` (threaded into both
+`build_deep_agent_messages` and `_build_deep_tools`) gates the `ask_user` tool *and* its
+prompt blocks together; flipping it on restores the `bird_full`-style ambiguous +
+`ask_user` behavior. It defaults to `False`; the pipeline sets it per baseline in
+`main_pipe_workflow._run_tasks_concurrently`.
 
 ## Why `create_agent` + middleware, not `create_deep_agent`
 
@@ -45,7 +52,7 @@ per task run, populated from `<TaskData.deep_catalog_root>/<selected_database>/`
 
 | Path | Source | Notes |
 |------|--------|-------|
-| `<tmp>/database_overview.md` | `<catalog>/<db>/database_overview.md` on disk | copied if present; silently skipped if absent |
+| `<tmp>/database_overview.md` | `<catalog>/<db>/database_overview.md` on disk | copied if present (silently skipped if absent). `generate_catalog.py` writes its own `## Knowledge Base` section from the *full, unmasked* KB (DB-level artifact, for humans browsing the catalog on disk); `materialize_catalog_dir` strips that section (`str.partition("\n## Knowledge Base")`) and replaces it with one rendered fresh per task via `utils_kb_linearize.build_kb_overview(task.masked_agent_kb, filenames)` — never trusts the disk copy, so a masked entry never leaks through it |
 | `<tmp>/tables/<table>.md` | `<catalog>/<db>/tables/*.md` on disk | read verbatim (DDL + columns w/ descriptions + FKs) |
 | `<tmp>/tables/_foreign_key_constraints.md` | disk | all PK/FK constraints in the db |
 | `<tmp>/knowledge_base/<node>.md` | `TaskData.masked_agent_kb` | one file per surviving node, re-rendered via `linearize_prerequisites`; masked prerequisites never appear (no leak) |
@@ -55,18 +62,25 @@ The on-disk catalog path is never advertised to the model. A missing
 is set per run (e.g. `data/bird_interact/catalog_bird_interact_lite`). The temp dir is
 cleaned up in a `finally` block in `run_agent_deep_agent`.
 
-## Tools (3)
+## Tools (2, +1 when `enable_ask_user`)
 
 - `bash` — read-only shell + psql, cwd = per-task catalog dir
 - `submit_sql` — terminal graded action (reused from `bird_baseline`)
-- `ask_user` — one clarifying question per call (reused from `bird_baseline`)
+- `ask_user` — one clarifying question per call (reused from `bird_baseline`); only
+  bound when `enable_ask_user=True` (off by default). `_build_deep_tools` asserts the
+  user-sim models are non-`None` before binding it.
 
-## Patience budget (reused unchanged)
+## Patience budget (reused, costed from `deep_tool_costs()`)
 
 The same middleware stack as `bird_baseline`, appended last in the same relative order:
 `check_budget_limit` → `sanitize_thinking_history` →
 `wrap_model_append_tool_message` → `tool_wrapper_patience_and_submit`. Do not
-reimplement it — it is imported from `bird_baseline/agent_callback.py`.
+reimplement it — it is built from `bird_baseline/agent_callback.py`'s
+`make_tool_wrapper_patience_and_submit(tool_costs)` factory.
+`_build_deep_middleware` calls it with `deep_tool_costs()` (not
+bird_baseline's `TOOL_COSTS`) — `"bash"` isn't a bird_baseline tool name, so
+reusing that table unparametrized would silently charge 0.0 for every bash
+call and never deduct from the budget (the bug this factory split fixed).
 
 ## Ablation flags (all default `False` = minimal agent)
 

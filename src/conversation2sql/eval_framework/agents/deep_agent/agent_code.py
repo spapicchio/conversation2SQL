@@ -1,4 +1,5 @@
 """deep_agent baseline: one read-only bash tool + bird patience budget."""
+
 from __future__ import annotations
 
 import shutil
@@ -13,8 +14,8 @@ from langchain_core.language_models import BaseChatModel
 
 from conversation2sql.eval_framework.agents.bird_baseline.agent_callback import (
     check_budget_limit,
+    make_tool_wrapper_patience_and_submit,
     sanitize_thinking_history,
-    tool_wrapper_patience_and_submit,
     wrap_model_append_tool_message,
 )
 from conversation2sql.eval_framework.agents.bird_baseline.agent_code import (
@@ -29,7 +30,7 @@ from conversation2sql.eval_framework.agents.bird_baseline.tools import (
 from conversation2sql.eval_framework.agents.deep_agent.agent_code_state import (
     DeepAgentCustomState,
 )
-from conversation2sql.eval_framework.agents.deep_agent.bash_tool import (
+from conversation2sql.eval_framework.agents.deep_agent.tools.bash_tool import (
     build_pg_env,
     return_tool_bash,
 )
@@ -48,16 +49,25 @@ logger = get_logger(__name__)
 
 def _build_deep_tools(
     single_task: TaskData,
-    model_user_parsing: BaseChatModel,
-    model_user_generator: BaseChatModel,
+    model_user_parsing: BaseChatModel | None,
+    model_user_generator: BaseChatModel | None,
     catalog_dir: Path,
     pg_env: dict[str, str],
+    *,
+    enable_ask_user: bool,
 ) -> list:
-    return [
+    tools: list = [
         return_tool_bash(catalog_dir, pg_env),
         submit_sql,
-        return_tool_ask_user(model_user_parsing, model_user_generator),
     ]
+    # Only surface ask_user when it's enabled — binding it without also
+    # describing it in the prompt hides the tool from the model.
+    if enable_ask_user:
+        assert model_user_parsing is not None and model_user_generator is not None, (
+            "enable_ask_user=True requires the user-sim models"
+        )
+        tools.append(return_tool_ask_user(model_user_parsing, model_user_generator))
+    return tools
 
 
 def _build_deep_middleware() -> list:
@@ -66,11 +76,14 @@ def _build_deep_middleware() -> list:
         ToolRetryMiddleware(max_delay=60.0, on_failure="error"),
     ]
     # Patience budget — appended last, same relative order as bird_baseline.
+    # Costed from deep_tool_costs() (bash + submit_sql/ask_user), not
+    # bird_baseline's TOOL_COSTS — "bash" isn't in that table, so reusing it
+    # unparametrized would silently charge 0.0 for every bash call.
     mws += [
         check_budget_limit,
         sanitize_thinking_history,
         wrap_model_append_tool_message,
-        tool_wrapper_patience_and_submit,
+        make_tool_wrapper_patience_and_submit(deep_tool_costs()),
     ]
     return mws
 
@@ -78,18 +91,16 @@ def _build_deep_middleware() -> list:
 def run_agent_deep_agent(
     single_task: TaskData,
     model_agent: BaseChatModel,
-    model_user_parsing: BaseChatModel,
-    model_user_generator: BaseChatModel,
+    model_user_parsing: BaseChatModel | None,
+    model_user_generator: BaseChatModel | None,
     *,
-    enable_ask_user: bool = True,
+    enable_ask_user: bool = False,
 ) -> dict:
-    assert model_user_parsing is not None and model_user_generator is not None, (
-        "deep_agent always uses ask_user; user-sim models must not be None"
-    )
     messages = build_deep_agent_messages(
         params={
             "total_budget": single_task.task_budget,
             "amb_user_query": single_task.task_question,
+            "enable_ask_user": enable_ask_user,
         }
     )
     catalog_dir = materialize_catalog_dir(single_task)
@@ -103,6 +114,7 @@ def run_agent_deep_agent(
                 model_user_generator,
                 catalog_dir,
                 pg_env,
+                enable_ask_user=enable_ask_user,
             ),
             state_schema=DeepAgentCustomState,
             context_schema=TaskData,
