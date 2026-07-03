@@ -4,7 +4,6 @@ submit. `bash` is reused unchanged from deep_agent.tools.bash_tool.
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 
 import psycopg2
@@ -18,6 +17,9 @@ from conversation2sql.eval_framework.agents.bird_baseline.agent_code_state impor
 from conversation2sql.eval_framework.agents.bird_baseline.tools import USER_TOOL_COSTS
 from conversation2sql.eval_framework.agents.bird_baseline.tools.bird_interact_user_tools import (
     ask_user_impl,
+)
+from conversation2sql.eval_framework.agents.bird_baseline.tools.utils import (
+    remove_comments,
 )
 from conversation2sql.eval_framework.agents.bird_baseline.tools.utils_db_execute import (
     _execute_query,
@@ -47,12 +49,6 @@ MAINTENANCE_TOOL_SPECS: dict[str, ToolSpec] = {
         "submit your work for review; ends the episode with no pass/fail feedback",
     ),
 }
-
-
-def _strip_sql_comments(text: str) -> str:
-    text = re.sub(r"--.*", "", text)
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +83,7 @@ def return_tool_write_query(catalog_dir: Path):
 # ---------------------------------------------------------------------------
 def run_tests_impl(query_path: Path, db_dsn: str) -> dict:
     content = query_path.read_text(encoding="utf-8")
-    stripped = _strip_sql_comments(content)
+    stripped = remove_comments(content)
     if not stripped:
         return {
             "passed": False,
