@@ -19,6 +19,7 @@ from conversation2sql.config_input import (
 from conversation2sql.eval_framework.agents import (
     run_agent_bird_baseline,
     run_agent_deep_agent,
+    run_agent_maintenance,
     run_baseline_no_tool,
 )
 from conversation2sql.eval_framework.agents.utils import utils_create_model
@@ -33,11 +34,14 @@ logger = get_logger(__name__)
 def _resolve_baseline_settings(baseline: str) -> tuple[bool, Callable, bool]:
     """Map ConfigPipeline.baseline → (make_data_ambiguous, runner, needs_user_sim).
 
-    no_tool    -> clean query, no agent loop, no user-sim
-    tools_only -> clean query, agent without ask_user, no user-sim
-    tools_user -> clean query, agent with ask_user, user-sim required
-    bird_full  -> ambiguous query, agent with ask_user, user-sim required
-    deep_agent -> clean query, bash catalog agent, no ask_user, no user-sim
+    no_tool             -> clean query, no agent loop, no user-sim
+    tools_only          -> clean query, agent without ask_user, no user-sim
+    tools_user          -> clean query, agent with ask_user, user-sim required
+    bird_full           -> ambiguous query, agent with ask_user, user-sim required
+    deep_agent          -> clean query, bash catalog agent, no ask_user, no user-sim
+    maintenance_agent   -> ambiguous query, bash+write_query+run_tests+comment_on_issue
+                            agent, user-sim required (ambiguity resolution via the
+                            on-disk issue thread is the point of this baseline)
     """
     table = {
         "no_tool": (False, run_baseline_no_tool, False),
@@ -50,6 +54,11 @@ def _resolve_baseline_settings(baseline: str) -> tuple[bool, Callable, bool]:
         # re-enabled here later (flip to (True, ..., True) and add to the
         # enable_ask_user set below).
         "deep_agent": (False, run_agent_deep_agent, False),
+        # maintenance_agent evolves deep_agent into the software-maintenance
+        # framing (see docs/superpowers/specs/2026-07-03-maintenance-agent-baseline-design.md).
+        # Ambiguity resolution through the on-disk issue thread is the core
+        # measured skill, so — unlike deep_agent — it defaults ambiguous + on.
+        "maintenance_agent": (True, run_agent_maintenance, True),
     }
     if baseline not in table:
         raise ValueError(
@@ -249,7 +258,9 @@ async def _run_tasks_concurrently(
                         model_agent,
                         model_user_parsing,
                         model_user_generator,
-                        enable_ask_user=(baseline in ("tools_user", "bird_full")),
+                        enable_ask_user=(
+                            baseline in ("tools_user", "bird_full", "maintenance_agent")
+                        ),
                     )
         except Exception as e:
             # Isolate per-task failures: one wedged/erroring task is logged to

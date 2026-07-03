@@ -24,6 +24,7 @@ class TestResolveBaselineSettings:
         ("tools_user", False, True),
         ("bird_full", True, True),
         ("deep_agent", False, False),
+        ("maintenance_agent", True, True),
     ])
     def test_resolves(self, baseline, expected_amb, expected_user_sim):
         amb, runner, needs = _resolve_baseline_settings(baseline)
@@ -347,3 +348,27 @@ def test_saved_snapshot_roundtrips_through_parser(tmp_path):
     assert ruser.model_provider == "openai"
     assert rpred.model_name == "some/model"
     assert rp.baseline == "tools_user"
+
+
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_agent_maintenance")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_agent_bird_baseline")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.run_baseline_no_tool")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.load_bird_interact_as_tasks")
+@patch("conversation2sql.eval_framework.main_pipe_workflow.utils_create_model")
+class TestMaintenanceAgentDispatch:
+    def test_maintenance_agent_dispatches_with_ask_user_true(
+        self, mock_create, mock_load, mock_no_tool, mock_agent, mock_maintenance, configs,
+    ):
+        cp, cr, cpred, cu = configs
+        cp.baseline = "maintenance_agent"
+        mock_load.return_value = [_fake_task()]
+        mock_maintenance.return_value = _stub_response()
+        mock_create.return_value = MagicMock()
+
+        workflow_evaluation_pipeline(cp, cr, cpred, cu)
+
+        mock_maintenance.assert_called_once()
+        assert mock_maintenance.call_args.kwargs["enable_ask_user"] is True
+        mock_agent.assert_not_called()
+        mock_no_tool.assert_not_called()
+        assert mock_load.call_args.kwargs["make_data_ambiguous"] is True

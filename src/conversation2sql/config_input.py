@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, computed_field, model_validator
 class ConfigPipeline(BaseModel):
     debug: bool = True
     output_folder: str = "results"
-    baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full', 'deep_agent'] = 'bird_full'
+    baseline: Literal['no_tool', 'tools_only', 'tools_user', 'bird_full', 'deep_agent', 'maintenance_agent'] = 'bird_full'
     concurrency: int = 1
     num_iterations: int = Field(default=3, ge=1)  # repeat the dataset N times for statistical relevance
     resume: bool = False  # skip (instance_id, iteration) pairs already in output_folder/results_iter*.jsonl and run only the missing ones

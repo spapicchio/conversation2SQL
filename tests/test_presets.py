@@ -148,6 +148,7 @@ def test_baseline_uses_tools():
     assert baseline_uses_tools("tools_user") is True
     assert baseline_uses_tools("bird_full") is True
     assert baseline_uses_tools("deep_agent") is True
+    assert baseline_uses_tools("maintenance_agent") is True
 
 
 def test_resolve_server_args_qwen_tool_baseline_adds_tool_calling_flags():

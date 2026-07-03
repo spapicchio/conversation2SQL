@@ -271,7 +271,9 @@ def expand_presets(
 # Baselines that exercise the agent's tool calling (everything but `no_tool`).
 # For these the server must be told to parse tool calls (vLLM disables tool
 # calling by default). See justfile's baseline table.
-_TOOL_BASELINES = frozenset({"tools_only", "tools_user", "bird_full", "deep_agent"})
+_TOOL_BASELINES = frozenset(
+    {"tools_only", "tools_user", "bird_full", "deep_agent", "maintenance_agent"}
+)
 
 
 def baseline_uses_tools(baseline: str) -> bool:
