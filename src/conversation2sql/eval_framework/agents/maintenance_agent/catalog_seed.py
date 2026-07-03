@@ -18,10 +18,10 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from conversation2sql.eval_framework.agents.bird_baseline.tools import USER_TOOL_COSTS
 from conversation2sql.eval_framework.agents.deep_agent.catalog_seed import (
     materialize_catalog_dir,
 )
+from conversation2sql.eval_framework.agents.maintenance_agent.tools import MA_TOOL_COSTS
 from conversation2sql.eval_framework.state import TaskData
 
 STUB_QUERY_CONTENT = "-- TODO: replace this stub with your SQL query.\n"
@@ -85,11 +85,9 @@ def materialize_maintenance_workspace(task: TaskData) -> Path:
 
 
 def maintenance_tool_costs() -> dict[str, float]:
-    """Bird-coin cost map the patience middleware consults for maintenance_agent."""
-    return {
-        "bash": 1.0,
-        "write_query": 1.0,
-        "comment_on_issue": USER_TOOL_COSTS["ask_user"],
-        "run_tests": 1.0,
-        "submit": USER_TOOL_COSTS["submit_sql"],
-    }
+    """Bird-coin cost map the patience middleware consults for maintenance_agent.
+
+    Derived from MA_TOOL_COSTS (tools/__init__.py), the single source of truth
+    for per-tool costs, so this stays in sync with the prompt the agent reads.
+    """
+    return dict(MA_TOOL_COSTS)

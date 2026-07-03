@@ -43,9 +43,6 @@ from conversation2sql.eval_framework.agents.maintenance_agent.tools.maintenance_
     submit,
 )
 from conversation2sql.eval_framework.state import TaskData
-from conversation2sql.logger import get_logger
-
-logger = get_logger(__name__)
 
 
 def _build_maintenance_tools(
