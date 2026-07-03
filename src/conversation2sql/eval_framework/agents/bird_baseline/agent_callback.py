@@ -253,3 +253,82 @@ def tool_wrapper_patience_and_submit(
             "tool_called_patience": [cost],
         },
     )
+
+
+def make_tool_wrapper_patience_and_submit_silent(
+    tool_costs: dict[str, float], submit_tool_name: str = "submit"
+):
+    """Build a patience/submit tool-wrapper middleware for a *silent* submit tool.
+
+    Unlike ``make_tool_wrapper_patience_and_submit`` (bird_baseline's
+    ``submit_sql``, which reports ``passed`` and lets a failing submit retry),
+    ``submit_tool_name`` here carries no pass/fail signal at all: calling it
+    always ends the episode. This is maintenance_agent's silent-submit design
+    (see docs/superpowers/specs/2026-07-03-maintenance-agent-baseline-design.md)
+    — the agent never learns whether its SQL was graded correct, so there is
+    no retry-on-failed-submit branch to preserve.
+    """
+
+    @wrap_tool_call
+    def tool_wrapper_patience_and_submit_silent(
+            request: ToolCallRequest,
+            handler: Callable[[ToolCallRequest], ToolMessage | Command],
+    ) -> ToolMessage | Command:
+        tool_name = request.tool_call["name"]
+        cost = tool_costs.get(tool_name, 0.0)
+        runtime: ToolRuntime[TaskData, CustomAgentState] = request.runtime
+        user_patience = runtime.state["updated_user_patience"]
+
+        # Block any non-submit tool whose cost would exceed the remaining
+        # budget. The submit tool is always allowed so the agent can finalize
+        # even when out of budget.
+        if user_patience < cost and tool_name != submit_tool_name:
+            return Command(
+                update={
+                    "messages": [
+                        ToolMessage(
+                            content=f"Budget exhausted ({user_patience:.1f} remaining). "
+                                    f"You MUST call {submit_tool_name} now.",
+                            tool_call_id=request.tool_call["id"],
+                            name=tool_name,
+                        )
+                    ],
+                    'updated_user_patience': PATIENCE_BLOCKED
+                },
+            )
+
+        response = handler(request)
+
+        if tool_name == submit_tool_name:
+            # No passed/failed signal exists for a silent submit — calling it
+            # is always terminal. Only the *reason* differs: a voluntary
+            # submit with budget left is a clean finish; a submit reached
+            # only after being blocked is a forced finalize. Reusing the two
+            # bird_baseline sentinels keeps check_budget_limit's message
+            # wording and downstream turn-classification code working
+            # unmodified — no correctness signal is attached to either
+            # sentinel here, unlike in bird_baseline where PASSED specifically
+            # means "SQL was graded correct."
+            terminal_patience = (
+                PATIENCE_SUBMIT_EXHAUSTED if user_patience < 0 else PATIENCE_SUBMIT_PASSED
+            )
+            return Command(
+                update={
+                    "messages": [response.model_copy(deep=True)],
+                    "updated_user_patience": terminal_patience,
+                },
+            )
+
+        if isinstance(response, Command) and isinstance(response.update, dict):
+            prior = response.update.get("tool_called_patience", [])
+            merged = {**response.update, "tool_called_patience": [*prior, cost]}
+            return replace(response, update=merged)
+
+        return Command(
+            update={
+                "messages": [response.model_copy(deep=True)],
+                "tool_called_patience": [cost],
+            },
+        )
+
+    return tool_wrapper_patience_and_submit_silent
